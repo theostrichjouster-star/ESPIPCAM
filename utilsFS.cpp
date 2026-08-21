@@ -75,10 +75,6 @@ static bool prepSD_MMC() {
 #endif
   
   res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
-#if defined(CAMERA_MODEL_AI_THINKER)
-  pinMode(4, OUTPUT);
-  digitalWrite(4, 0); // set lamp pin fully off as sd_mmc library still initialises pin 4 in 1 line mode
-#endif 
   if (res) {
     STORAGE.mkdir(DATA_DIR);
     infoSD();

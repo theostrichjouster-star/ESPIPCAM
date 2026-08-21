@@ -841,31 +841,10 @@ void OTAprereq() {
   delay(100);
 }
 
-#ifdef CAMERA_MODEL_DFRobot_FireBeetle2_ESP32S3
-// This board has a configurable power supply
-// Need to instal following library
-#include "DFRobot_AXP313A.h" // https://github.com/cdjq/DFRobot_AXP313A
-DFRobot_AXP313A axp;
-
 static bool camPower() {
-  int pwrRetry = 5;
-  while (pwrRetry--) {
-    if (axp.begin() == 0) {
-      axp.enableCameraPower(axp.eOV2640);
-      return true;
-    } else delay(1000);
-  }
-  LOG_ERR("Failed to power up camera");
-  return false;
-}
-
-#else
-
-static bool camPower() {
-  // dummy
+  // dummy - power management not required for XIAO ESP32S3 Sense
   return true;
 }
-#endif
 
 static esp_err_t changeXCLK(camera_config_t config) {
   //since the original setup doesnt create over 20MHz clock, we do it forcefully
@@ -965,11 +944,6 @@ bool prepCam() {
   config.fb_count = FB_CNT;
   config.sccb_i2c_port = 0;// using I2C 0. to be sure what port we are using.
 
-#if defined(CAMERA_MODEL_ESP_EYE)
-  pinMode(13, INPUT_PULLUP);
-  pinMode(14, INPUT_PULLUP);
-#endif
-
   // camera init
   esp_err_t err = ESP_FAIL;
   uint8_t retries = 2;
@@ -1036,14 +1010,6 @@ bool prepCam() {
         s->set_saturation(s, -2);//lower the saturation
       }
 
-#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
-      s->set_vflip(s, 1);
-      s->set_hmirror(s, 1);
-#endif
-
-#if defined(CAMERA_MODEL_ESP32S3_EYE)
-      s->set_vflip(s, 1);
-#endif
       res = true;
     }
   }
