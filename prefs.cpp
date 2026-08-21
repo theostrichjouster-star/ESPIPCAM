@@ -37,6 +37,15 @@ static char variable[FILE_NAME_LEN] = {0};
 static char value[IN_FILE_NAME_LEN] = {0};
 time_t currEpoch = 0;
 
+static bool isSensitiveKey(const std::string& key) {
+  // config keys whose values must never be written to storage or shown to the
+  // browser in plaintext - the "_Pass" suffixed keys plus any other secret tokens
+  if (key.length() >= 5 && key.compare(key.length() - 5, 5, "_Pass") == 0) return true;
+  if (key == "tgramToken") return true;
+  if (key == "external_heartbeat_token") return true;
+  return false;
+}
+
 /********************* generic Config functions ****************************/
 
 static bool getNextKeyVal() {
@@ -141,8 +150,8 @@ static void saveConfigVect() {
     configs.erase(unique(configs.begin(), configs.end()), configs.end()); // remove any dups
     for (const auto& row: configs) {
       // recreate config file with updated content
-      if ((row[0].length() >= 5 && row[0].compare(row[0].length() - 5, 5, "_Pass") == 0))
-        // replace passwords with asterisks
+      if (isSensitiveKey(row[0]))
+        // replace passwords / secret tokens with asterisks
         snprintf(configLine, FILE_NAME_LEN + 100, "%s%c%.*s%c%s%c%s%c%s\n", row[0].c_str(), DELIM, (int)row[1].length(), FILLSTAR, DELIM, row[2].c_str(), DELIM, row[3].c_str(), DELIM, row[4].c_str());
       else snprintf(configLine, FILE_NAME_LEN + 100, "%s%c%s%c%s%c%s%c%s\n", row[0].c_str(), DELIM, row[1].c_str(), DELIM, row[2].c_str(), DELIM, row[3].c_str(), DELIM, row[4].c_str());
       file.write((uint8_t*)configLine, strlen(configLine));
@@ -420,8 +429,11 @@ void buildJsonString(uint8_t filter) {
     p += sprintf(p, "\"wifi_rssi\":\"%i dBm\",", netRSSI() );  
     if (!filter) {
       // populate first part of json string from config vect
-      for (const auto& row : configs) 
-        p += sprintf(p, "\"%s\":\"%s\",", row[0].c_str(), row[1].c_str());
+      for (const auto& row : configs) {
+        if (isSensitiveKey(row[0]))
+          p += sprintf(p, "\"%s\":\"%.*s\",", row[0].c_str(), (int)row[1].length(), FILLSTAR);
+        else p += sprintf(p, "\"%s\":\"%s\",", row[0].c_str(), row[1].c_str());
+      }
       p += sprintf(p, "\"logType\":\"%d\",", logType);
       // passwords stored in prefs on NVS 
       p += sprintf(p, "\"ST_Pass\":\"%.*s\",", strlen(ST_Pass), FILLSTAR);
@@ -463,8 +475,8 @@ void buildJsonString(uint8_t filter) {
         }
         // for each config item, list - key:value, key:label text, key:type identifier
         p += sprintf(p, "\"%s\":\"%s\",\"lab%s\":\"%s\",\"typ%s\":\"%s\",", row[0].c_str(),
-          row[0].find("_Pass") == std::string::npos ? row[1].c_str() : pwdHide, row[0].c_str(), 
-          row[4].c_str(), row[0].c_str(), row[3].c_str()); 
+          isSensitiveKey(row[0]) ? pwdHide : row[1].c_str(), row[0].c_str(),
+          row[4].c_str(), row[0].c_str(), row[3].c_str());
       }
     }
   }

@@ -200,9 +200,21 @@ bool checkFreeStorage() {
   return res;
 } 
 
+bool pathIsSafe(const char* path) {
+  // reject path traversal attempts - '..' is never a legitimate path segment
+  // for any file/folder name this app generates or accepts from a user
+  if (strstr(path, "..") != NULL) return false;
+  return true;
+}
+
 void setFolderName(const char* fname, char* fileName) {
-  // set current or previous folder 
+  // set current or previous folder
   char partName[FILE_NAME_LEN];
+  if (!pathIsSafe(fname)) {
+    LOG_WRN("Rejected unsafe path: %s", fname);
+    strcpy(fileName, "");
+    return;
+  }
   if (strchr(fname, '~') != NULL) {
     if (!strcmp(fname, currentDir)) {
       dateFormat(partName, sizeof(partName), true);

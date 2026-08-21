@@ -138,7 +138,8 @@ static bool sendFtpCommand(const char* cmd, const char* param, const char* respC
     rclient.print(cmd);
     rclient.println(param);
   }
-  LOG_VRB("Sent cmd: %s%s", cmd, param);
+  // avoid echoing the password into the log for the PASS command
+  LOG_VRB("Sent cmd: %s%s", cmd, !strcmp(cmd, "PASS ") ? "****" : param);
   
   // wait for ftp server response
   uint32_t start = millis();

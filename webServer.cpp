@@ -91,6 +91,19 @@ static void displayLog(httpd_req_t *req) {
   } 
 }
 
+static bool constTimeEquals(const char* a, const char* b) {
+  // constant-time string comparison to avoid leaking credential info via response timing
+  size_t lenA = strlen(a), lenB = strlen(b);
+  uint8_t diff = (lenA == lenB) ? 0 : 1;
+  size_t maxLen = lenA > lenB ? lenA : lenB;
+  for (size_t i = 0; i < maxLen; i++) {
+    uint8_t ca = i < lenA ? (uint8_t)a[i] : 0;
+    uint8_t cb = i < lenB ? (uint8_t)b[i] : 0;
+    diff |= ca ^ cb;
+  }
+  return diff == 0;
+}
+
 bool checkAuth(httpd_req_t* req) {
   // check if authentication is required
   if (strlen(Auth_Name)) {
@@ -110,7 +123,7 @@ bool checkAuth(httpd_req_t* req) {
       size_t authLen = authHdrLen + 1;
       char auth[authLen];
       if (httpd_req_get_hdr_value_str(req, "Authorization", auth, authLen) == ESP_OK) {
-        if (strcmp(auth, expectedAuth) == 0) authenticated = true;
+        if (constTimeEquals(auth, expectedAuth)) authenticated = true;
       }
     }
     if (!authenticated) {
@@ -162,6 +175,12 @@ esp_err_t extractHeaderVal(httpd_req_t *req, const char* variable, char* value) 
 esp_err_t extractQueryKeyVal(httpd_req_t *req, char* variable, char* value) {
   // get variable and value pair from URL query
   size_t queryLen = httpd_req_get_url_query_len(req) + 1;
+  if (queryLen >= FILE_NAME_LEN) {
+    LOG_WRN("Query string too long (%u)", queryLen);
+    httpd_resp_set_status(req, "400 Query string too long");
+    httpd_resp_sendstr(req, NULL);
+    return ESP_FAIL;
+  }
   httpd_req_get_url_query_str(req, variable, queryLen);
   urlDecode(variable);
   // extract key 
@@ -180,9 +199,22 @@ esp_err_t extractQueryKeyVal(httpd_req_t *req, char* variable, char* value) {
 
 static esp_err_t webHandler(httpd_req_t* req) {
   // return required web page or component to browser using filename from query string
+  if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
   size_t queryLen = httpd_req_get_url_query_len(req) + 1;
+  if (queryLen >= FILE_NAME_LEN) {
+    LOG_WRN("Query string too long (%u)", queryLen);
+    httpd_resp_set_status(req, "400 Query string too long");
+    httpd_resp_sendstr(req, NULL);
+    return ESP_FAIL;
+  }
   httpd_req_get_url_query_str(req, variable, queryLen);
   urlDecode(variable);
+  if (!pathIsSafe(variable)) {
+    LOG_WRN("Rejected unsafe path in web request: %s", variable);
+    httpd_resp_set_status(req, "400 Invalid path");
+    httpd_resp_sendstr(req, NULL);
+    return ESP_FAIL;
+  }
 
   // check file extension to determine required processing before response sent to browser
   size_t varLen = strlen(variable);
@@ -215,18 +247,26 @@ static esp_err_t webHandler(httpd_req_t* req) {
 }
 
 static esp_err_t controlHandler(httpd_req_t *req) {
-  // process control query from browser 
+  // process control query from browser
   // obtain details from query string
+  if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   if (extractQueryKeyVal(req, variable, value) != ESP_OK) return ESP_FAIL;
   if (!strcmp(variable, "displayLog")) displayLog(req);
   else {
     if (!strcmp(variable, "reset")) {
       httpd_resp_sendstr(req, NULL); // stop browser resending reset
-      doRestart(value); 
+      doRestart(value);
       return ESP_OK;
     }
-    if (!strcmp(variable, "startOTA")) snprintf(inFileName, IN_FILE_NAME_LEN - 1, "%s/%s", DATA_DIR, value); 
+    if (!strcmp(variable, "startOTA")) {
+      if (!pathIsSafe(value)) {
+        LOG_WRN("Rejected unsafe OTA file name: %s", value);
+        httpd_resp_sendstr(req, NULL);
+        return ESP_FAIL;
+      }
+      snprintf(inFileName, IN_FILE_NAME_LEN - 1, "%s/%s", DATA_DIR, value);
+    }
     else {
       // if not handled by appSpecificWebHandler(), try updateStatus()
       if (appSpecificWebHandler(req, variable, value) == ESP_FAIL) updateStatus(variable, value);
@@ -237,6 +277,7 @@ static esp_err_t controlHandler(httpd_req_t *req) {
 }
 
 static esp_err_t statusHandler(httpd_req_t *req) {
+  if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
   uint8_t filter = (uint8_t)httpd_req_get_url_query_len(req); // filter number is length of query string
   buildJsonString(filter);
   httpd_resp_set_type(req, "application/json");
@@ -306,6 +347,7 @@ void sendSSE(const char* eventType, const char* eventData) {
 
 static esp_err_t updateHandler(httpd_req_t *req) {
   // bulk update of config, extract key pairs from received json string
+  if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
   size_t rxSize = min(req->content_len, (size_t)JSON_BUFF_LEN);
   int ret = 0;
   // obtain json payload
@@ -326,16 +368,27 @@ void progress(size_t prg, size_t sz) {
   if (calcProgress(prg, sz, 5, pcProgress)) LOG_INF("OTA uploaded %d%%", pcProgress); 
 }
 
+// smallest plausible firmware/filesystem image - guards against a garbage/truncated
+// upload being handed to Update.begin(), which would otherwise brick the running partition
+#define MIN_OTA_IMAGE_SIZE (64 * 1024)
+
 esp_err_t uploadHandler(httpd_req_t *req) {
   // upload file for storage or firmware update
+  if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
   esp_err_t res = ESP_OK;
   size_t fileSize = req->content_len;
   size_t rxSize = min(fileSize, (size_t)JSON_BUFF_LEN);
   int bytesRead = -1;
   LOG_INF("Upload file %s", inFileName);
-  
+
   if (strstr(inFileName, ".bin") != NULL) {
     // partition update - sketch or SPIFFS
+    if (fileSize < MIN_OTA_IMAGE_SIZE) {
+      LOG_WRN("Rejected OTA upload %s, implausibly small (%u bytes)", inFileName, fileSize);
+      httpd_resp_set_status(req, "400 File too small to be a valid firmware image");
+      httpd_resp_sendstr(req, NULL);
+      return ESP_FAIL;
+    }
     LOG_INF("Firmware update using file %s", inFileName);
     OTAprereq();
     if (fdWs >= 0) httpd_sess_trigger_close(httpServer, fdWs);
@@ -397,6 +450,7 @@ esp_err_t uploadHandler(httpd_req_t *req) {
 }
 
 static esp_err_t setupHandler(httpd_req_t *req) {
+  if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
   // Scan for WiFi networks
   int w = (netMode == 0) ? WiFi.scanNetworks() : 0;
   // Start building the JSON string
@@ -481,6 +535,9 @@ static esp_err_t wsHandler(httpd_req_t *req) {
   esp_err_t ret = ESP_OK;
   if (req->method == HTTP_GET) {
     // websocket connection request from browser client
+    // the websocket carries the same config-update/control commands as /control and /update
+    // (see appSpecificWsHandler cases 'C'/'U'), so it needs the same auth check on connection
+    if (!checkAuth(req)) return ESP_OK;
     if (fdWs != -1) {
       if (fdWs != httpd_req_to_sockfd(req)) {
         // websocket connection from browser when another browser connection is active
@@ -534,7 +591,10 @@ static esp_err_t customOrNotFoundHandler(httpd_req_t *req, httpd_err_code_t err)
   // either handle WebDAV methods or report non existent URI
   if (req->method == HTTP_OPTIONS) sendCrossOriginHeader(req);
 #if INCLUDE_WEBDAV
-  if (strncmp(req->uri, WEBDAV, strlen(WEBDAV)) == 0) return handleWebDav(req) ? ESP_OK : ESP_FAIL;
+  if (strncmp(req->uri, WEBDAV, strlen(WEBDAV)) == 0) {
+    if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
+    return handleWebDav(req) ? ESP_OK : ESP_FAIL;
+  }
 #endif
   // For any other URI send 404 and close socket
   httpd_resp_send_404(req);

@@ -167,6 +167,7 @@ void logLine();
 void logSetup();
 void OTAprereq();
 bool parseJson(int rxSize);
+bool pathIsSafe(const char* path);
 bool prepFreq(int maxFreq, int sampleInterval);
 bool prepI2C();
 void prepPeripherals();

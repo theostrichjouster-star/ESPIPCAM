@@ -282,7 +282,7 @@ static bool checkSamePath(const char *source_path, const char *dest_path) {
 static bool handleMove() {
   // rename file or folder, or change file location
   bool res = false;
-  char dest[100];
+  char dest[IN_FILE_NAME_LEN]; // sized to match what extractHeaderVal() actually guarantees
   if (extractHeaderVal(req, "Destination", dest) == ESP_OK) {
     // obtain destination filename
     res = true;
@@ -293,6 +293,11 @@ static bool handleMove() {
       return false;
     }
     memmove(dest, pos + strlen(WEBDAV), strlen(pos + strlen(WEBDAV)) + 1);
+    if (!pathIsSafe(dest)) {
+      LOG_WRN("Rejected unsafe WebDAV destination: %s", dest);
+      httpd_resp_send_404(req);
+      return false;
+    }
 
     // only allow renaming if a folder
     if (isFolder()) res = checkSamePath(pathName, dest);
@@ -318,10 +323,15 @@ static bool handleCopy() {
 bool handleWebDav(httpd_req_t* rreq) {
   // extract method to determine which WebDAV action to take
   req = rreq;
-  sprintf(pathName, "%s", req->uri + strlen(WEBDAV)); // strip out "/webdav"
+  snprintf(pathName, IN_FILE_NAME_LEN - 1, "%s", req->uri + strlen(WEBDAV)); // strip out "/webdav"
   if (pathName[strlen(pathName) - 1] == '/') pathName[strlen(pathName) - 1] = 0; // remove final / if present
   if (!strlen(pathName)) strcpy(pathName, "/"); // if pathname empty, use single /
   urlDecode(pathName);
+  if (!pathIsSafe(pathName)) {
+    LOG_WRN("Rejected unsafe WebDAV path: %s", pathName);
+    httpd_resp_send_404(req);
+    return false;
+  }
   // common response header
   httpd_resp_set_hdr(req, "DAV", "1");
   httpd_resp_set_hdr(req, "Allow", ALLOW);
