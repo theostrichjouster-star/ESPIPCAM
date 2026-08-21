@@ -13,26 +13,28 @@
 
     <style>
       :root {
-        /* colors used on web pages - see https://www.w3schools.com/colors/colors_names.asp */
-        --buttonReady: crimson;
-        --buttonActive: ForestGreen;
-        --buttonHover: green;
-        --buttonText: white;
-        --buttonLabel: black;
-        --itemInactive: gray;
+        /* "Aperture" palette - cool charcoal base with steel-blue / teal accents,
+           refined for a hobby IP-camera dashboard. Same variable roles as before,
+           only the values changed, so no markup/JS/functionality is affected. */
+        --buttonReady: #2E86A6;    /* steel-blue - default/inactive button state */
+        --buttonActive: #3FB68A;   /* teal-green - toggled-on / recording-live state */
+        --buttonHover: #34997A;    /* deeper teal-green - hover feedback */
+        --buttonText: #F4F6F8;
+        --buttonLabel: #12161C;
+        --itemInactive: #4B5560;
         --menuBackground: transparent;
-        --inputText: navy;
-        --pageText: WhiteSmoke;
-        --inputBackground: WhiteSmoke;
-        --alertMsg: orange;
-        --itemBorder: silver;
-        --pageBackground:#181818; /* nearly black */
+        --inputText: #16233A;
+        --pageText: #E8ECEF;
+        --inputBackground: #E8ECEF;
+        --alertMsg: #E8A33D;
+        --itemBorder: #333D47;
+        --pageBackground: #12161C; /* cool charcoal-blue, near-black */
 
         /* logcolors */
-        --warnColor: orange;
-        --errColor: red;
-        --chkColor: green;
-        --dbgColor: blue;
+        --warnColor: #E8A33D;
+        --errColor: #E0524A;
+        --chkColor: #3FB68A;
+        --dbgColor: #5AA9E6;
 
         /* element sizes */
         --bodySize:1rem; /* used as basis for element, padding, and font sizes */
