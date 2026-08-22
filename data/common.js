@@ -2,6 +2,33 @@
         // s60sc 2023, 2024, 2025
         // with ideas from @rjsachse
 
+        /*********** icon sprite ***********/
+        // single set of outline SVG icons shared by all pages, replacing the previous
+        // emoji / ad-hoc character icons. Injected once here rather than duplicated in
+        // each htm file. Icons are colored via currentColor so they follow the theme.
+        (function injectIconSprite() {
+          const sprite = '<svg xmlns="http://www.w3.org/2000/svg" style="display:none">' +
+            '<symbol id="icon-camera" viewBox="0 0 24 24"><path d="M4 8.5h2.7L8.2 6h7.6l1.5 2.5H20a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.3"/></symbol>' +
+            '<symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12S5.6 5.5 12 5.5 22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>' +
+            '<symbol id="icon-film" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M9.5 9l6 3-6 3V9Z" fill="currentColor" stroke="none"/></symbol>' +
+            '<symbol id="icon-sliders" viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor"/></symbol>' +
+            '<symbol id="icon-gear" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M21.5 12 18.467 14.679 18.717 18.717 14.679 18.467 12 21.5 9.321 18.467 5.283 18.717 5.533 14.679 2.5 12 5.533 9.321 5.283 5.283 9.321 5.533 12 2.5 14.679 5.533 18.717 5.283 18.467 9.321Z M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/></symbol>' +
+            '<symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></symbol>' +
+            '<symbol id="icon-speaker" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4v-5Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></symbol>' +
+            '<symbol id="icon-pin" viewBox="0 0 24 24"><path d="M9 3h6l-.7 6.2L18 12.5v2h-5v6l-1 2-1-2v-6H6v-2l3.7-3.3L9 3Z"/></symbol>' +
+            '<symbol id="icon-gamepad" viewBox="0 0 24 24"><rect x="2" y="8" width="20" height="10" rx="4"/><line x1="7" y1="11" x2="7" y2="15"/><line x1="5" y1="13" x2="9" y2="13"/><circle cx="15.5" cy="12" r="1" fill="currentColor"/><circle cx="18" cy="14.5" r="1" fill="currentColor"/></symbol>' +
+            '<symbol id="icon-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M7 9a5 5 0 1 1 10 0c0 2.2-1.3 3.3-2.1 4.2-.6.6-.9 1-.9 1.8H10c0-.8-.3-1.2-.9-1.8C8.3 12.3 7 11.2 7 9Z"/></symbol>' +
+            '<symbol id="icon-close" viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></symbol>' +
+            '<symbol id="icon-rotate" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 13.7-5.7M20 12a8 8 0 0 1-13.7 5.7"/><path d="M17 3v4h-4M7 21v-4h4" fill="currentColor" stroke="none"/></symbol>' +
+            '<symbol id="icon-frame" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5"/><line x1="12" y1="8.5" x2="12" y2="15.5"/><line x1="8.5" y1="12" x2="15.5" y2="12"/></symbol>' +
+            '<symbol id="icon-maximize" viewBox="0 0 24 24"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></symbol>' +
+            '<symbol id="icon-aspect" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9V4h5M15 4h5v5M4 15v5h5M15 20h5v-5"/></symbol>' +
+            '<symbol id="icon-fullscreen" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>' +
+            '<symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v11M8 10l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>' +
+            '</svg>';
+          document.body.insertAdjacentHTML('afterbegin', sprite);
+        })();
+
         /*********** initialisation  ***********/
 
         'use strict'

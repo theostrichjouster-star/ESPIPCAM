@@ -9,7 +9,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>ESP32-CAM_MJPEG2SD</title>
-    <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">📷</text></svg>'>
+    <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="%232E86A6"/><path d="M4 8.5h2.7L8.2 6h7.6l1.5 2.5H20a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z" fill="none" stroke="%23F4F6F8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.3" fill="none" stroke="%23F4F6F8" stroke-width="1.75"/></svg>'>
 
     <style>
       :root {
@@ -896,6 +896,78 @@
         width: calc(var(--buttonSize) * 6);
       }
 
+      /* icon sprite - shared outline-style SVG icons, see common.js for the <symbol> defs */
+      svg.icon {
+        width: 65%;
+        height: 65%;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.75;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        display: block;
+        pointer-events: none;
+      }
+
+      .icon-inline {
+        width: 1.1em;
+        height: 1.1em;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.75;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        vertical-align: -0.2em;
+        margin-right: var(--buttonQuart);
+        pointer-events: none;
+      }
+
+      .quick-nav, .pin-menu, .audButtons, .iconSize {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--buttonText);
+        flex-shrink: 0;
+      }
+
+      /* nested icon svg inside the existing rect+text RC button markup - width/height/x/y
+         set as attributes on the element itself, since nested-svg viewport sizing via CSS
+         is unreliable across browsers; this rule only needs to carry the icon color */
+      svg.svgIcon svg.icon {
+        color: var(--buttonLabel);
+      }
+
+      /*************** narrow phone layout (<30rem, ~480px) ***************/
+      @media (max-width: 30rem) {
+        .input-group {
+          flex-wrap: wrap;
+        }
+        .input-group>label {
+          min-width: 100%;
+          padding-right: 0;
+          padding-bottom: var(--buttonQuart);
+        }
+        .input-group>input, .input-group>select {
+          width: 100%;
+        }
+        .quick-nav {
+          width: calc(var(--buttonDbl) * 1.375); /* >=44px touch target at default 16px root */
+          height: calc(var(--buttonDbl) * 1.375);
+        }
+        .pin-menu {
+          width: calc(var(--buttonSize) * 2.75);
+          height: calc(var(--buttonSize) * 2.75);
+        }
+        .config-group th, .config-group td {
+          padding-left: var(--buttonHalf);
+          font-size: var(--inputSize);
+        }
+        input.configItem[type="number"] {
+          min-width: calc(var(--buttonSize) * 2.5);
+          width: calc(var(--buttonSize) * 2.5);
+        }
+      }
+
     </style>
   </head>
 
@@ -929,25 +1001,25 @@
           <div id="sidebar">
             <div id="menu-container" class="menu-pinned">
               <nav id="menu-selector" class="menu-pinned menu-closed">
-                <nav class="quick-nav" id="camControl" name="camera-control">📷</nav>
-                <nav class="quick-nav" id="motionRec" name="motion-record">👀</nav>
-                <nav class="quick-nav" id="fileControl" name="playback-transfers">🎥</nav>
-                <nav class="quick-nav" id="picSettings" name="picture-settings">📺</nav>
-                <nav class="quick-nav" id="accSettings" name="access-settings">🔧</nav>
+                <nav class="quick-nav" id="camControl" name="camera-control"><svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg></nav>
+                <nav class="quick-nav" id="motionRec" name="motion-record"><svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg></nav>
+                <nav class="quick-nav" id="fileControl" name="playback-transfers"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg></nav>
+                <nav class="quick-nav" id="picSettings" name="picture-settings"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg></nav>
+                <nav class="quick-nav" id="accSettings" name="access-settings"><svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg></nav>
                 <div class="micContainer">
-                  <button class="quick-nav audButtons disabled" id="micRem">🎤</button>
+                  <button class="quick-nav audButtons disabled" id="micRem" title="Microphone"><svg class="icon" aria-hidden="true"><use href="#icon-mic"></use></svg></button>
                   <canvas id="micLevel"></canvas>
                 </div>
                 <div class="spkrContainer">
-                  <button class="quick-nav audButtons disabled" id="spkrRem">🔈</button>
+                  <button class="quick-nav audButtons disabled" id="spkrRem" title="Speaker"><svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg></button>
                   <canvas id="spkrLevel"></canvas>
                 </div>
               </nav>
               <div id="menu-top" class="menu-pinned">
                 <nav class="menu panel" id="camera-control">
                   <input type="checkbox" id="control-cb" class="menu-action local" checked="checked">
-                  <div class="pin-menu" title="Pin / unpin menu">📌</div>
-                  <label for="control-cb" class="nav-toggle">📷&nbsp;&nbsp;Camera Control&nbsp;&nbsp;</label>
+                  <div class="pin-menu" title="Pin / unpin menu"><svg class="icon" aria-hidden="true"><use href="#icon-pin"></use></svg></div>
+                  <label for="control-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-camera"></use></svg>Camera Control</label>
                   <div class='addButtons'></div>
                   <div>
                     <div class="input-group" id="framesize-group">
@@ -1013,8 +1085,8 @@
               </nav>
               <nav class="menu panel" id="picture-settings">
                 <input type="checkbox" id="settings-cb" class="menu-action local">
-                <div class="pin-menu" title="Pin / unpin menu">📌</div>
-                <label for="settings-cb" class="nav-toggle">📺&nbsp;&nbsp;Picture Settings&nbsp;&nbsp;</label>
+                <div class="pin-menu" title="Pin / unpin menu"><svg class="icon" aria-hidden="true"><use href="#icon-pin"></use></svg></div>
+                <label for="settings-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-sliders"></use></svg>Picture Settings</label>
                 <div class='addButtons'></div>
                 <div>
                   <div class="input-group" id="xclk-group">
@@ -1186,8 +1258,8 @@
               </nav>
               <nav class="menu panel" id="motion-record">
                 <input type="checkbox" id="motion-cb" class="menu-action local">
-                <div class="pin-menu" title="Pin / unpin menu">📌</div>
-                <label for="motion-cb" class="nav-toggle">👀&nbsp;&nbsp;Motion Detect & Recording&nbsp;&nbsp;</label>
+                <div class="pin-menu" title="Pin / unpin menu"><svg class="icon" aria-hidden="true"><use href="#icon-pin"></use></svg></div>
+                <label for="motion-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-eye"></use></svg>Motion Detect & Recording</label>
                 <div class='addButtons'></div>
                 <div>
                   <div class="input-group" id="motion-group">
@@ -1240,8 +1312,8 @@
               </nav>
               <nav class="menu panel" id="playback-transfers">
                 <input type="checkbox" id="files-cb" class="menu-action local">
-                <div class="pin-menu" title="Pin / unpin menu">📌</div>
-                <label for="files-cb" class="nav-toggle">🎥&nbsp;&nbsp;Playback & File Transfers&nbsp;&nbsp;</label>
+                <div class="pin-menu" title="Pin / unpin menu"><svg class="icon" aria-hidden="true"><use href="#icon-pin"></use></svg></div>
+                <label for="files-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-film"></use></svg>Playback & File Transfers</label>
                 <div class='addButtons'></div>
                 <div>
                   <div class="input-group" id="sfiles-group" style="display: grid;">
@@ -1290,8 +1362,8 @@
               </nav>
               <nav class="menu panel" id="access-settings">
                 <input type="checkbox" id="other-cb" class="menu-action local">
-                <div class="pin-menu" title="Pin / unpin menu">📌</div>
-                <label for="other-cb" class="nav-toggle">🔧&nbsp;&nbsp;Access Settings&nbsp;&nbsp;</label>
+                <div class="pin-menu" title="Pin / unpin menu"><svg class="icon" aria-hidden="true"><use href="#icon-pin"></use></svg></div>
+                <label for="other-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-gear"></use></svg>Access Settings</label>
                 <div class='addButtons'></div>
                 <div>
                   <div class="subheader">Network settings</div>
@@ -1469,18 +1541,18 @@
         </div>
         <figure>
           <div id="stream-container" class="image-container hidden">
-            <div class="iconSize" id="closeStream" title="Close screen">×</div>
-            <div class="iconSize" id="rotate" title="Rotate screen">@</div>
-            <div class="iconSize" id="actualSize" title="Actual size">-</div>
-            <div class="iconSize" id="maxFit" title="Fit to browser">#</div>
-            <div class="iconSize" id="fullAspect" title="Full screen with aspect">&curren;</div>
-            <div class="iconSize" id="fullSize" title="Full screen">&rect;</div>
-            <div class="iconSize" id="saveImage" title="Download screenshot">v</div>
+            <div class="iconSize" id="closeStream" title="Close screen"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></div>
+            <div class="iconSize" id="rotate" title="Rotate screen"><svg class="icon" aria-hidden="true"><use href="#icon-rotate"></use></svg></div>
+            <div class="iconSize" id="actualSize" title="Actual size"><svg class="icon" aria-hidden="true"><use href="#icon-frame"></use></svg></div>
+            <div class="iconSize" id="maxFit" title="Fit to browser"><svg class="icon" aria-hidden="true"><use href="#icon-maximize"></use></svg></div>
+            <div class="iconSize" id="fullAspect" title="Full screen with aspect"><svg class="icon" aria-hidden="true"><use href="#icon-aspect"></use></svg></div>
+            <div class="iconSize" id="fullSize" title="Full screen"><svg class="icon" aria-hidden="true"><use href="#icon-fullscreen"></use></svg></div>
+            <div class="iconSize" id="saveImage" title="Download screenshot"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></div>
             <div id="RCenable" class="hidden">
               <div class="RCcontrolFmt RCbuttonFmt" title="Switch RC controls on / off">
                 <svg class="svgIcon">
                   <rect class="RCoff"/>
-                  <text class="RCbutton local" id="RCcontrols">🎮</text>
+                  <svg class="icon local" id="RCcontrols" x="22.5%" y="22.5%" width="55%" height="55%" aria-hidden="true"><use href="#icon-gamepad"></use></svg>
                 </svg>
               </div>
             </div>
@@ -1488,7 +1560,7 @@
               <div class="RCcontrolFmt RClightsFmt" title="Switch RC lights on / off">
                 <svg class="svgIcon">
                   <rect class="RCoff"/>
-                  <text class="RCcontrol local" id="RClights">💡</text>
+                  <svg class="icon local" id="RClights" x="22.5%" y="22.5%" width="55%" height="55%" aria-hidden="true"><use href="#icon-bulb"></use></svg>
                 </svg>
               </div>
               <div class="RCcontrolFmt RCsteerFmt">
