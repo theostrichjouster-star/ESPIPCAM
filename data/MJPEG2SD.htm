@@ -221,6 +221,14 @@
         background: var(--itemInactive)
       }
 
+      /* action buttons sat inside a settings row need explicit sizing, as the
+         base button rule leaves them shorter than the app's other buttons */
+      #ota-group button {
+        min-height: calc(var(--buttonDbl) * 1.125);
+        padding-left: var(--buttonSize);
+        padding-right: var(--buttonSize);
+      }
+
       .input-group {
         position: relative;
         display: flex;
@@ -958,6 +966,10 @@
           width: calc(var(--buttonSize) * 2.75);
           height: calc(var(--buttonSize) * 2.75);
         }
+        #ota-group button {
+          min-height: calc(var(--buttonDbl) * 1.375); /* >=44px touch target at default 16px root */
+          width: 100%;
+        }
         .config-group th, .config-group td {
           padding-left: var(--buttonHalf);
           font-size: var(--inputSize);
@@ -1476,6 +1488,18 @@
                       <label title="Check remote servers certificate" class="slider" for="useSecure"></label>
                     </div>
                   </div>
+                  <br>
+                  <div class="subheader">Firmware update</div>
+                  <div class="input-group" id="ota-group">
+                    <label for="otaStatus">Status</label>
+                    <div id="otaStatus" class="info displayonly">&nbsp;</div>
+                  </div>
+                  <div class="input-group" id="ota-group">
+                    <button id="checkUpdate" class="local" value="1" title="Ask GitHub whether a newer release has been published">Check for Updates</button>
+                  </div>
+                  <div class="input-group" id="ota-group">
+                    <button id="doUpdate" class="local disabled" value="1" disabled title="Run a check first">Install Update &amp; Restart</button>
+                  </div>
                 </div>
                 <br><br>
               </nav>
@@ -1769,6 +1793,7 @@
       let streamButton;
       let playbackButton;
       let rotateAngle = 0;
+      let otaLatestTag = ""; // tag of the latest GitHub release, from /status
       let RCmode = false;
       let showRC = false;
       let wsInd = 0;
@@ -1824,6 +1849,18 @@
           }
           else if (key == "clearLog") clearLog();
           else if (key == "refreshLog") getLog();
+          else if (key == "checkUpdate") { sendControl("checkUpdate", "1"); return; }
+          else if (key == "otaLatestTag") { otaLatestTag = value; return; }
+          else if (key == "doUpdate") {
+            if (!confirm("Download " + (otaLatestTag || "the latest release") + " and reflash the camera?\n\nThe camera will restart and be unreachable for a minute or so. Do not power it off during the update.")) return;
+            sendControl("doUpdate", "1");
+            return;
+          }
+          else if (key == "otaUpdateAvailable") {
+            // only offer the install button once a check has found something newer
+            value == "1" ? enable($('#doUpdate')) : disable($('#doUpdate'));
+            return;
+          }
           else if (key == "logType") { logType = value; sendControl(key, value); return; }
           else if (key == "refreshVal") refreshInterval = value * 1000;
           else if (key == "heartbeatRC") heartbeatInterval = value * 1000;

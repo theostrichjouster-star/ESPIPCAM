@@ -85,7 +85,7 @@
 #define DOT_MAX 50
 #define HOSTNAME_GRP 99
  
-#define APP_VER "10.9.4"
+#define APP_VER "1.0.0"
 // to determine if newer data files need to be loaded
 #define CFG_VER 38
 
@@ -111,7 +111,19 @@
 #define EXTHB_LEN 64
 
 #define STORAGE SD_MMC
-#define GITHUB_PATH "/s60sc/ESP32-CAM_MJPEG2SD/master"
+// OTA updates are pulled from GitHub Releases on the repo below, which is
+// also where setupAssist looks for missing web UI files (GITHUB_PATH).
+// A release must be tagged with a version above APP_VER (a leading 'v' is
+// optional, eg v1.0.1) and carry an asset named exactly OTA_ASSET_NAME.
+#define OTA_REPO_OWNER "theostrichjouster-star"
+#define OTA_REPO_NAME "ESPIPCAM"
+#define OTA_ASSET_NAME "ESPIPCAM.bin"
+#define GITHUB_PATH "/" OTA_REPO_OWNER "/" OTA_REPO_NAME "/main"
+#define OTA_TAG_LEN 16 // longest release tag handled, eg "v10.20.30"
+#define OTA_STATUS_LEN 64 // update status message shown in the web UI
+// smallest plausible firmware image - guards against a garbage or truncated
+// image being handed to Update.begin(), which would brick the running partition
+#define MIN_OTA_IMAGE_SIZE (64 * 1024)
 #define RAMSIZE (1024 * 8) // set this to multiple of SD card sector size (512 or 1024 bytes)
 #define CHUNKSIZE (1024 * 4)
 #define ISCAM // cam specific code in generic cpp files
@@ -143,6 +155,7 @@
 #define CAPTURE_STACK_SIZE (1024 * 4)
 #define EMAIL_STACK_SIZE (1024 * 6)
 #define FS_STACK_SIZE (1024 * 4)
+#define OTA_STACK_SIZE (1024 * 6)
 #define LOG_STACK_SIZE (1024 * 3)
 #define AUDIO_STACK_SIZE (1024 * 4)
 #define MICREM_STACK_SIZE (1024 * 2)
@@ -229,6 +242,11 @@ void openSDfile(const char* streamFile);
 void prepAudio();
 void prepAviIndex(bool isTL = false);
 bool prepCam();
+bool checkForUpdate();
+bool startOtaUpdate();
+extern char otaLatestTag[];
+extern char otaStatus[];
+extern bool otaUpdateAvailable;
 bool prepRecording();
 void prepTelemetry();
 void prepMotors();

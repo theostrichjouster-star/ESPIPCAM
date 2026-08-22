@@ -385,6 +385,8 @@ void updateStatus(const char* variable, const char* _value, bool fromUser) {
     }
     doRestart("user requested restart after data deletion"); 
   }
+  else if (!strcmp(variable, "checkUpdate")) checkForUpdate();
+  else if (!strcmp(variable, "doUpdate")) startOtaUpdate();
   else if (!strcmp(variable, "showsys")) showSys();
   else if (!strcmp(variable, "save")) {
     if (intVal) savePrefs();
@@ -445,7 +447,10 @@ void buildJsonString(uint8_t filter) {
       p += sprintf(p, "\"RTSP_Pass\":\"%.*s\",", strlen(RTSP_Pass), FILLSTAR);
 #endif
       // session constants
-      p += sprintf(p, "\"fw_version\":\"%s\",", APP_VER); 
+      p += sprintf(p, "\"fw_version\":\"%s\",", APP_VER);
+      p += sprintf(p, "\"otaStatus\":\"%s\",", otaStatus);
+      p += sprintf(p, "\"otaLatestTag\":\"%s\",", otaLatestTag);
+      p += sprintf(p, "\"otaUpdateAvailable\":\"%d\",", otaUpdateAvailable ? 1 : 0);
       p += sprintf(p, "\"macAddressEfuse\":\"%012llX\",", ESP.getEfuseMac() ); 
       p += sprintf(p, "\"macAddressWiFi\":\"%s\",", netMacAddress().c_str() ); 
       p += sprintf(p, "\"extIP\":\"%s\",", extIP); 

@@ -79,6 +79,8 @@
 #define COMMON_JS_PATH DATA_DIR "/common" JS_EXT 
 #define WEBDAV "/webdav"
 #define GITHUB_HOST "raw.githubusercontent.com"
+#define GITHUB_API_HOST "api.github.com" // release metadata
+#define GITHUB_DL_HOST "github.com" // release asset download, redirects to objects.githubusercontent.com
 #define FILLSTAR "****************************************************************"
 #define DELIM '~'
 
@@ -390,7 +392,7 @@ extern int I2Cscl;
   (method == HTTP_UNLINK) ? "UNLINK" : \
   "UNKNOWN"
 
-enum RemoteFail {SETASSIST, GETEXTIP, TGRAMCONN, FSFTP, EMAILCONN, EXTERNALHB, BLOCKLIST, GETEXTMSL, GETEXTMAG, GETEXTNOCT, REMFAILCNT}; // REMFAILCNT always last
+enum RemoteFail {SETASSIST, GETEXTIP, TGRAMCONN, FSFTP, EMAILCONN, EXTERNALHB, BLOCKLIST, GETEXTMSL, GETEXTMAG, GETEXTNOCT, OTAGITHUB, REMFAILCNT}; // REMFAILCNT always last
 
 /*********************** Log formatting ************************/
 

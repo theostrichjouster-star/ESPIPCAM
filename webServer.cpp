@@ -368,10 +368,6 @@ void progress(size_t prg, size_t sz) {
   if (calcProgress(prg, sz, 5, pcProgress)) LOG_INF("OTA uploaded %d%%", pcProgress); 
 }
 
-// smallest plausible firmware/filesystem image - guards against a garbage/truncated
-// upload being handed to Update.begin(), which would otherwise brick the running partition
-#define MIN_OTA_IMAGE_SIZE (64 * 1024)
-
 esp_err_t uploadHandler(httpd_req_t *req) {
   // upload file for storage or firmware update
   if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
