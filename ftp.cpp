@@ -353,7 +353,8 @@ static void fileServerTask(void* parameter) {
 #ifdef ISCAM
   doPlayback = false; // close any current playback
 #endif
-  fsChunk = psramFound() ? (byte*)ps_malloc(CHUNKSIZE) : (byte*)malloc(CHUNKSIZE); 
+  // allocated once and retained, as reallocating per transfer fragments the heap
+  if (fsChunk == NULL) fsChunk = psramFound() ? (byte*)ps_malloc(CHUNKSIZE) : (byte*)malloc(CHUNKSIZE);
   if (strlen(storedPathName) >= 2) {
     File root = STORAGE.open(storedPathName);
     if (!root) LOG_WRN("Failed to open: %s", storedPathName);
@@ -363,7 +364,6 @@ static void fileServerTask(void* parameter) {
     }
   } else LOG_VRB("Root or null is not allowed %s", storedPathName);  
   uploadInProgress = false;
-  free(fsChunk);
   fsHandle = NULL;
   vTaskDelete(NULL);
 }
