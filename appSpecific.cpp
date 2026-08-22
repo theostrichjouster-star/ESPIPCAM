@@ -801,7 +801,7 @@ void appSpecificTelegramTask(void* p) {
 /************** default app configuration **************/
 const char* appConfig = R"~(
 ST_SSID~~99~~na
-netMode~0~99~S:WiFi:Ethernet:Eth+AP~Network interface selection
+netMode~0~99~S:WiFi~Network interface selection
 fsPort~21~99~~na
 fsServer~~99~~na
 ftpUser~~99~~na
@@ -876,8 +876,6 @@ alarmHour~1~2~N~Hour of day for daily actions
 refreshVal~5~2~N~Web page refresh rate (secs)
 responseTimeoutSecs~10~2~N~Server response timeout (secs)
 useUart~0~3~C~Use UART for Auxiliary connection
-uartTxdPin~~3~N~UART TX pin
-uartRxdPin~~3~N~UART RX pin
 tlSecsBetweenFrames~600~1~N~Timelapse interval (secs)
 tlDurationMins~720~1~N~Timelapse duration (mins)
 tlPlaybackFPS~1~1~N~Timelapse playback FPS
@@ -907,18 +905,7 @@ accelUse~0~3~C~Use I2C accelerometer for detection
 accelDeg~5~3~N~Min accelerometer degrees movement
 lampType~0~3~S:Manual:Auto~How lamp activated
 SVactive~0~3~C~Enable servo use
-pirPin~~3~N~Pin used for PIR
-lampPin~~3~N~Pin used for Lamp
-servoPanPin~~6~N~Pin used for Pan Servo
-servoTiltPin~~6~N~Pin used for Tilt Servo
-ds18b20Pin~~3~N~Pin used for DS18B20 temperature sensor
 AudActive~0~3~C~Show audio configuration
-micSckPin~-1~7~N~Microphone I2S SCK pin
-micSWsPin~-1~7~N~Microphone I2S WS, PDM CLK pin
-micSdPin~-1~7~N~Microphone I2S SD, PDM DAT pin
-mampBckIo~-1~7~N~Amplifier I2S BCLK (SCK) pin
-mampSwsIo~-1~7~N~Amplifier I2S LRCLK (WS) pin
-mampSdIo~-1~7~N~Amplifier I2S DIN pin
 servoDelay~0~6~N~Delay between each 1 degree change (ms)
 servoMinAngle~0~6~N~Set min angle for servo model
 servoMaxAngle~180~6~N~Set max angle for servo model
@@ -928,9 +915,7 @@ servoCenter~90~6~N~Angle at which servo centered
 voltDivider~2~3~N~Voltage divider resistor ratio
 voltLow~3~3~N~Warning level for low voltage
 voltInterval~5~3~N~Voltage check interval (mins)
-voltPin~-1~3~N~ADC Pin used for battery voltage
 voltUse~0~3~C~Use Voltage check
-wakePin~-1~3~N~Pin used to wake app from sleep
 wakeLevel~1~3~N~Pin level (0,1) to wake app from sleep
 wakeUse~0~3~C~Deep sleep app during night
 mqtt_active~0~2~C~Mqtt enabled
@@ -948,17 +933,8 @@ usePing~1~0~C~Use ping
 teleUse~0~3~C~Enable telemetry recording
 teleInterval~1~3~N~Telemetry collection interval (secs)
 RCactive~0~3~C~Enable remote control
-servoSteerPin~~4~N~Pin used for steering servo
-motorRevPin~~4~N~Pin used for motor reverse / left track 
-motorFwdPin~~4~N~Pin used for motor forward / left track 
-motorRevPinR~~4~N~Pin used for right track reverse
-motorFwdPinR~~4~N~Pin used for right track forward
-lightsRCpin~~4~N~Pin used for RC lights output
 heartbeatRC~5~4~N~RC connection heartbeat time (secs)
 AuxIP~~3~T~Send RC / Servo / PG commands to Auxiliary IP
-stickXpin~~4~N~Pin used for joystick steering
-stickYpin~~4~N~Pin used for joystick motor
-stickzPushPin~~4~N~Pin used for joystick lights
 stickUse~0~4~C~Use joystick
 pwmFreq~50~4~N~RC Motor PWM frequency
 maxSteerAngle~45~4~N~Max steering angle from straightahead
@@ -973,12 +949,7 @@ tgramToken~~2~T~Telegram Bot token
 tgramChatId~~2~T~Telegram chat identifier
 devHub~0~2~C~Show Camera Hub tab
 buzzerUse~0~3~C~Use active buzzer
-buzzerPin~~3~N~Pin used for active buzzer
 buzzerDuration~~3~N~Duration of buzzer sound in secs
-stepIN1pin~-1~5~N~Stepper IN1 pin number
-stepIN2pin~-1~5~N~Stepper IN2 pin number
-stepIN3pin~-1~5~N~Stepper IN3 pin number
-stepIN4pin~-1~5~N~Stepper IN4 pin number
 PGactive~0~3~C~Enable photogrammetry
 numberOfPhotos~20~5~N~Number of photos
 RPM~1~5~N~Turntable revolution speed as RPM
@@ -986,16 +957,11 @@ gearing~5.7~5~N~Turntable / motor gearing ratio
 clockwise~1~5~C~Clockwise turntable if true
 timeForFocus~0~5~N~Time allocated to auto focus (secs)
 timeForPhoto~2~5~N~Time allocated to take photo (secs)
-pinShutter~-1~5~N~Pin connected to camera shutter
-pinFocus~-1~5~N~Pin connected to camera focus
 extCam~0~5~C~Use external camera
 AtakePhotos~Start~5~A~Start photogrammetry
 BabortPhotos~Abort~5~A~Abort photogrammetry
-relayPin~-1~3~N~Pin to switch relay 
 relayMode~0~3~S:Manual:Night~How relay activated
 relaySwitch~0~3~C~Switch relay off / on
-I2Csda~-1~3~N~I2C SDA pin if unshared
-I2Cscl~-1~3~N~I2C SCL pin if unshared
 RTSP_Name~~8~T~RTSP Auth Username
 RTSP_Pass~~8~T~RTSP Auth Password
 rtsp00Video~0~8~C~Enable RTSP Video
@@ -1008,10 +974,4 @@ rtsp06SubtitlesPort~5434~8~N~RTSP Subtitles Port
 rtsp07Ip~239.255.0.1~8~T~RTSP Multicast IP
 rtsp08MaxC~3~8~N~RTSP Multicast Max Connections
 rtsp09TTL~1~8~N~RTSP Multicast Time-to-Live
-ethCS~-1~9~N~Ethernet CS pin
-ethInt~-1~9~N~Ethernet Interrupt pin
-ethRst~-1~9~N~Ethernet Reset pin
-ethSclk~-1~9~N~Ethernet SPI clock pin
-ethMiso~-1~9~N~Ethernet SPI MISO pin
-ethMosi~-1~9~N~Ethernet SPI MOSI pin
 )~";

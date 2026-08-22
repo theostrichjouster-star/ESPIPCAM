@@ -1299,8 +1299,6 @@
                     <label for="netMode">Network Type</label>
                     <select id="netMode" class="selectField">
                       <option value="0">WiFi</option>
-                      <option value="1">Ethernet</option>
-                      <option value="2">Eth+AP</option>
                     </select>
                   </div>
                   <div class="input-group" id="wifi-group">
@@ -1645,18 +1643,6 @@
             <text class="local midText" id="other">Other</text>
           </svg>
         </div>
-        <div id="AudconfigBtn" class="hidden">
-          <svg>
-            <rect class="buttonRect" tabindex="0"/>
-            <text class="local midText" id="Audconfig">Audio</text>
-          </svg>
-        </div>
-        <div id="EthconfigBtn" class="hidden">
-          <svg>
-            <rect class="buttonRect" tabindex="0"/>
-            <text class="local midText" id="Ethconfig">Ethernet</text>
-          </svg>
-        </div>
         <div id="RCconfigBtn" class="hidden">
           <svg>
             <rect class="buttonRect" tabindex="0"/>
@@ -1784,8 +1770,6 @@
           else if (key == "RCconfig") { doLoadStatus = false; getConfig("01234"); }
           else if (key == "SVconfig") { doLoadStatus = false; getConfig("0123456"); }
           else if (key == "PGconfig") { doLoadStatus = false; getConfig("012345"); }
-          else if (key == "Audconfig") { doLoadStatus = false; getConfig("01234567"); }
-          else if (key == "Ethconfig") { doLoadStatus = false; getConfig("0123456789"); }
           else if (key == "camModel") customButtons(key, value);
           else if (key == "delete" || key == "uploadMove" || key == "upload") sdFile(key, value);
           else if (key == 'timezoneSel') fromUser = setTz(value);
@@ -1815,18 +1799,11 @@
           else if (key == "autoControl") autoControl = value > 0 ? true : false;
           else if (key == "PGactive") Number(value) ? show($('#PGconfigBtn')) : hide($('#PGconfigBtn'));
           else if (key == "SVactive") Number(value) ? show($('#SVconfigBtn')) : hide($('#SVconfigBtn'));
-          else if (key == "AudActive") Number(value) ? show($('#AudconfigBtn')) : hide($('#AudconfigBtn'));
-          else if (key == "netMode") Number(value) > 0 ? show($('#EthconfigBtn')) : hide($('#EthconfigBtn'));
           else if (key == "waitTime") waitTime = value;
           else if (key == "camTilt") { wsAuxSend("T" + value, wsInd); }
           else if (key == "camPan") { wsAuxSend("P" + value, wsInd); }
           else if (key == "AtakePhotos") { if (fromUser) wsAuxSend("G1", wsInd); return;}
           else if (key == "BabortPhotos") { if (fromUser) wsAuxSend("G0", wsInd); return;}
-          else if (key == "lampPin") { value > 0 ? enableRangeSlider($('#lampLevel')) : disableRangeSlider($('#lampLevel')); }
-          else if (key == "servoPanPin") { value > 0 ? enableRangeSlider($('#camPan')) : disableRangeSlider($('#camPan')); }
-          else if (key == "servoTiltPin") { value > 0 ? enableRangeSlider($('#camTilt')) : disableRangeSlider($('#camTilt')); }
-          else if (key == "micSdPin") micState(value);
-          else if (key == "mampSdIo") spkrState(value);
           else if (key == 'save') await sleep(600); // allow last input to debounce
           if (fromUser && !$('#'+key).classList.contains("local")) debounceSendControl(key, value);
         }
@@ -2469,7 +2446,8 @@
         disableRangeSlider($('#ampVol'));
         disableRangeSlider($('#camTilt'));
         disableRangeSlider($('#camPan'));
-        disableRangeSlider($('#lampLevel'));
+        // lampLevel left enabled - the onboard LED is a fixed pin on this board, not
+        // a user-configurable one, so there's no lampPin status update to enable it
         disable($('#micRem'));
         disable($('#spkrRem'));
         closedTab(false);
