@@ -171,7 +171,7 @@ Motion detection is enabled by default and can be switched off under **Motion De
 
 The onboard PDM microphone is enabled by default and its pins are applied automatically. Audio is 16-bit mono PCM at 16 kHz, stored as WAV inside the AVI.
 
-**Microphone Gain** on the web page controls level; `0` disables the microphone. The speaker icon streams live microphone audio to the browser.
+**Microphone Gain** on the web page controls level, defaulting to 5. A value of 3 is unity gain; higher amplifies, lower attenuates. Setting it to **0 turns audio off** - recording, the NVR stream and RTSP audio are all gated on it. The speaker icon streams live microphone audio to the browser.
 
 The intercom feature — two-way audio between the device and a browser — additionally requires an I2S amplifier, which needs a free pin and therefore a source change on this build. Browser microphone access has security constraints; see [`audio.cpp`](audio.cpp).
 

@@ -37,8 +37,6 @@ i2s_port_t MIC_CHAN = I2S_NUM_1;
 i2s_port_t AMP_CHAN = I2S_NUM_0;
 
 static bool micUse = false; // esp mic available
-bool micRem = false; // use browser mic (depends on app)
-static bool ampUse = false; // whether esp amp / speaker available
 bool spkrRem = false; // use browser speaker
 bool volatile stopAudio = false;
 static bool micRecording = false;
@@ -65,8 +63,7 @@ int mampSdIo = -1;   // I2S DIN
 
 int ampTimeout = 1000; // ms for amp write abandoned if no output
 uint32_t SAMPLE_RATE = 16000;  // audio rate in Hz
-int micGain = 0;  // microphone gain 0 is off 
-int8_t ampVol = 0; // amplifier volume factor 0 is off
+int micGain = 5;  // mic gain, MIC_GAIN_CENTER (3) is unity; 0 turns audio recording and streaming off
 
 TaskHandle_t audioHandle = NULL;
 
@@ -87,7 +84,6 @@ static const char* micLabels[2] = {"PDM", "I2S"};
 #define psramMax (ONEMEG * 2)
 #endif
 #ifdef ISCAM
-bool AudActive = false; // whether to show audio features
 static File wavFile;
 #endif
 static uint8_t wavHeader[WAV_HDR_LEN] = { // WAV header template
@@ -95,20 +91,6 @@ static uint8_t wavHeader[WAV_HDR_LEN] = { // WAV header template
   0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x11, 0x2B, 0x00, 0x00, 0x11, 0x2B, 0x00, 0x00,
   0x02, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00,
 };
-
-void applyVolume() {
-  // determine required volume setting
-  int8_t adjVol = ampVol * 2; // use web page setting
-  if (adjVol) {
-    // increase or reduce volume, 6 is unity eg midpoint of pot / web slider
-    adjVol = adjVol > 5 ? adjVol - 5 : adjVol - 7; 
-    // apply volume control to samples
-    for (int i = 0; i < DMA_BUFF_LEN; i++) {   
-      // apply volume control 
-      sampleBuffer[i] = adjVol < 0 ? sampleBuffer[i] / abs(adjVol) : constrain((int32_t)sampleBuffer[i] * adjVol, SHRT_MIN, SHRT_MAX);
-    }
-  } // else turn off volume
-}
 
 static bool setupMic() {
   bool res;
@@ -126,16 +108,6 @@ static bool setupMic() {
     I2Spdm.setPinsPdmRx(micSWsPin, micSdPin);
     res = I2Spdm.begin(I2S_MODE_PDM_RX, SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
   }
-  return res;
-}
-
-static bool setupAmp() {
-  bool res = true;
-  if (!micUse || !I2Smic) {
-    // if not already started by setupMic()
-    I2Sstd.setPins(mampBckIo, mampSwsIo, mampSdIo, -1, -1); // BCLK/SCK, LRCLK/WS, SDOUT, SDIN, MCLK
-    res = I2Sstd.begin(I2S_MODE_STD, SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
-  } // already started by setupMic()
   return res;
 }
 
@@ -197,28 +169,6 @@ size_t updateWavHeader() {
 /*****************************************************************/
 
 #ifdef ISCAM
-
-void browserMicInput(uint8_t* wsMsg, size_t wsMsgLen) {
-  // input from browser mic via websocket, send to esp amp
-  if (!micRem || wsMsgLen == 0 || wsMsgLen > MAX_PAYLOAD_LEN) return;
-  if (wsBufferLen == 0) {
-    size_t copyLen = wsMsgLen <= MAX_PAYLOAD_LEN ? wsMsgLen : MAX_PAYLOAD_LEN;
-    memcpy(wsBuffer, wsMsg, copyLen);
-    int8_t adjVol = ampVol * 2; // use web page setting
-    if (adjVol) {
-      // increase or reduce volume, 6 is unity eg midpoint of web slider
-      adjVol = adjVol > 5 ? adjVol - 5 : adjVol - 7; 
-      // apply volume control to samples
-      int16_t* wsPtr = (int16_t*) wsBuffer;
-      for (int i = 0; i < (int)(copyLen / sizeof(int16_t)); i++) {
-        // apply volume control 
-        wsPtr[i] = adjVol < 0 ? wsPtr[i] / abs(adjVol) : constrain((int32_t)wsPtr[i] * adjVol, SHRT_MIN, SHRT_MAX);
-      }
-    }
-    I2Sstd.write(wsBuffer, copyLen);
-    wsBufferLen = 0;
-  }
-}    
 
 void startAudioRecord() {
   // called from openAvi() in mjpeg2sd.cpp
@@ -339,12 +289,6 @@ void prepAudio() {
       micUse = setupMic(); 
       if (micUse) LOG_INF("Sound capture is available using %s mic on I2S%i with gain %d", micLabels[I2Smic], MIC_CHAN, micGain);
       else LOG_WRN("Unable to start ESP mic");
-    }
-    if (mampSdIo <= 0) LOG_WRN("Amplifier pins not defined");
-    else {
-      ampUse = setupAmp();
-      if (ampUse) LOG_INF("Speaker output is available using I2S amp on I2S%i with vol %d", AMP_CHAN, ampVol);
-      else LOG_WRN("Unable to start ESP amp");
     }
   }
 

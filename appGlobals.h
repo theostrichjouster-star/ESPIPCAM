@@ -87,7 +87,9 @@
  
 #define APP_VER "1.0.0"
 // to determine if newer data files need to be loaded
-#define CFG_VER 38
+// bumped to 39: the audio config rows changed (ampVol and AudActive removed,
+// micGain default 0 -> 5), so an existing configs.txt must be regenerated
+#define CFG_VER 39
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -212,15 +214,11 @@ enum stepperModel {BYJ_48, BIPOLAR_8mm};
 
 // global app specific functions
 
-void applyFilters();
-void applyVolume();
 void appShutdown();
-void browserMicInput(uint8_t* wsMsg, size_t wsMsgLen);
 void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL = false);
 void buildAviIdx(size_t dataSize, bool isVid = true, bool isTL = false);
 void buzzerAlert(bool buzzerOn);
 bool checkAccelMove();
-int8_t checkPotVol(int8_t adjVol);
 void currentStackUsage();
 void displayAudioLed(int16_t audioSample);
 void finalizeAviIndex(uint16_t frameCnt, bool isTL = false);
@@ -320,7 +318,6 @@ extern bool isCapturing;
 extern uint8_t lightLevel;  
 extern uint8_t lampLevel;  
 extern int micGain;
-extern int8_t ampVol;
 extern uint8_t minSeconds; // default min video length (includes moveStopSecs time)
 extern float motionVal;  // motion sensitivity setting - min percentage of changed pixels that constitute a movement
 extern uint8_t nightSwitch; // initial white level % for night/day switching
@@ -396,11 +393,9 @@ extern int ds18b20Pin; // if INCLUDE_DS18B20 true
 extern int voltPin; 
 
 // audio
-extern bool AudActive;
 extern int micSckPin; // I2S SCK 
 extern int micSWsPin;  // I2S WS / PDM CLK
 extern int micSdPin;  // I2S SD / PDM DAT
-extern bool micRem;
 extern bool spkrRem; // true to use browser speaker
 extern int mampBckIo; 
 extern int mampSwsIo;

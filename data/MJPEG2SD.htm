@@ -894,12 +894,12 @@
         width: calc(var(--buttonSize) * 3);
       }
 
-      .micContainer, .spkrContainer{
+      .spkrContainer{
         display: flex;
         align-items: center;
       }
 
-      #micLevel, #spkrLevel {
+      #spkrLevel {
         height: var(--buttonDbl);
         width: calc(var(--buttonSize) * 6);
       }
@@ -1018,12 +1018,8 @@
                 <nav class="quick-nav" id="fileControl" name="playback-transfers"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg></nav>
                 <nav class="quick-nav" id="picSettings" name="picture-settings"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg></nav>
                 <nav class="quick-nav" id="accSettings" name="access-settings"><svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg></nav>
-                <div class="micContainer">
-                  <button class="quick-nav audButtons disabled" id="micRem" title="Microphone"><svg class="icon" aria-hidden="true"><use href="#icon-mic"></use></svg></button>
-                  <canvas id="micLevel"></canvas>
-                </div>
                 <div class="spkrContainer">
-                  <button class="quick-nav audButtons disabled" id="spkrRem" title="Speaker"><svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg></button>
+                  <button class="quick-nav audButtons" id="spkrRem" title="Listen - hear the camera's microphone"><svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg></button>
                   <canvas id="spkrLevel"></canvas>
                 </div>
               </nav>
@@ -1075,11 +1071,7 @@
                   </div>
                   <div class="input-group" id="micGain-group">
                     <label for="micGain">Microphone Gain</label>
-                    <input title="Set microphone gain" type="range" id="micGain" min="0" max="10" value="0">
-                  </div>
-                  <div class="input-group" id="ampGain-group">
-                    <label for="ampVol">Amplifier Volume</label>
-                    <input title="Set amplifier volume" type="range" id="ampVol" min="0" max="10" value="0">
+                    <input title="Set microphone gain (3 is unity, 0 turns audio off)" type="range" id="micGain" min="0" max="10" value="5">
                   </div>
                   <div class="input-group" id="CamTilt-group">
                     <label for="camTilt">Camera Tilt</label>
@@ -1889,7 +1881,6 @@
           else if (key == "showRecord") setRecIndicator(value);
           else if (key == "forcePlayback") fromUser ? playbackAction(key) : deactivatePlaybackButton();
           else if (key == "forceStream") streamAction(key);
-          else if (key == "micRem") { value = micOrSpkrState(key); value ? runMic(wsInd) : closeMic(wsInd); }
           else if (key == "spkrRem") { value = micOrSpkrState(key); value ? runSpkr(wsInd) : closeSpkr(wsInd); }
           else if (key == "RCactive") RCstatus(Number(value));
           else if (key == "RClights") { value = RCbuttons(key, value); wsAuxSend("L" + value, wsInd); }
@@ -2168,8 +2159,6 @@
       }
 
       async function stopAll(caller, sendStop = true) {
-        closeMic(wsInd);
-        deactivateButton($('#micRem'));
         closeSpkr(wsInd);
         deactivateButton($('#spkrRem'));
         if (!isHidden(viewContainer)) {
@@ -2371,16 +2360,6 @@
         sendWsMsg('C' + key + '=' + val);
       }
 
-      function micState(value) {
-        value > 0 ? enableRangeSlider($('#micGain')) : disableRangeSlider($('#micGain'));
-        value > 0 ? enable($('#spkrRem')) : disable($('#spkrRem'))
-      }
-
-      function spkrState(value) {
-        value > 0 ? enableRangeSlider($('#ampVol')) : disableRangeSlider($('#ampVol'));
-        value > 0 ? enable($('#micRem')) : disable($('#micRem'));
-      }
-
       /************** RC ****************/
 
       function RCstatus(doShow) {
@@ -2525,13 +2504,10 @@
 
       function closedTab(isClosed) {
         // actions when page refreshed, closed or not in focus
-        const micRemBtn = $('#micRem');
         const spkrRemBtn = $('#spkrRem');
-        deactivateButton(micRemBtn);
         deactivateButton(spkrRemBtn);
         if (isClosed) {
           pageVisible = false;
-          if (!micRemBtn.classList.contains('disabled')) sendControl("micRem", '0');
           if (!spkrRemBtn.classList.contains('disabled')) sendControl("spkrRem", '0');
           stopAll("closedTab");
         }
@@ -2545,14 +2521,11 @@
       function customWsMsg(data) {}
 
       function customInit() {
-        disableRangeSlider($('#micGain'));
-        disableRangeSlider($('#ampVol'));
         disableRangeSlider($('#camTilt'));
         disableRangeSlider($('#camPan'));
-        // lampLevel left enabled - the onboard LED is a fixed pin on this board, not
-        // a user-configurable one, so there's no lampPin status update to enable it
-        disable($('#micRem'));
-        disable($('#spkrRem'));
+        // micGain and the listen button are left enabled - the PDM mic is on a fixed
+        // pin on this board, so there is no mic pin status update to re-enable them.
+        // lampLevel left enabled for the same reason - the onboard LED is a fixed pin
         closedTab(false);
       }
 

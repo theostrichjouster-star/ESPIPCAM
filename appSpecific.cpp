@@ -134,11 +134,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "accelDeg")) accelDeg = intVal;
 #endif
 #if INCLUDE_AUDIO
-  else if (!strcmp(variable, "micRem")) {
-    micRem = bool(intVal);
-    LOG_INF("Remote mic is %s", micRem ? "On" : "Off");
-    if (micRem && !ampVol) LOG_WRN("Amp volume is off");
-  }
   else if (!strcmp(variable, "spkrRem")) {
     spkrRem = (bool)intVal;
     LOG_INF("Remote speaker is %s", spkrRem ? "On" : "Off");
@@ -148,11 +143,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "micSckPin")) micSckPin = intVal;
   else if (!strcmp(variable, "micSWsPin")) micSWsPin = intVal;
   else if (!strcmp(variable, "micSdPin")) micSdPin = intVal;
-  else if (!strcmp(variable, "ampVol")) ampVol = intVal;
   else if (!strcmp(variable, "mampBckIo")) mampBckIo = intVal;
   else if (!strcmp(variable, "mampSwsIo")) mampSwsIo = intVal;
   else if (!strcmp(variable, "mampSdIo")) mampSdIo = intVal;
-  else if (!strcmp(variable, "AudActive")) AudActive = intVal;
 #endif
 #if INCLUDE_TELEM
   else if (!strcmp(variable, "teleUse")) teleUse = (bool)intVal;
@@ -439,9 +432,8 @@ void appSpecificWsHandler(const char* wsMsg) {
 }
 
 void appSpecificWsBinHandler(uint8_t* wsMsg, size_t wsMsgLen) {
-#if INCLUDE_AUDIO
-  browserMicInput(wsMsg, wsMsgLen);
-#endif
+  // no binary websocket input is used - the browser microphone path was removed
+  // as this board has no I2S amplifier to play it out of
 }
 
 char* buildAppJsonString(bool filter) {
@@ -459,7 +451,6 @@ char* buildAppJsonString(bool filter) {
 #if INCLUDE_PERIPH
   p += sprintf(p, "\"SVactive\":\"%d\",", SVactive);
  #if INCLUDE_AUDIO
-  p += sprintf(p, "\"AudActive\":\"%d\",", AudActive);
  #endif
  #if (INCLUDE_PGRAM)
   p += sprintf(p, "\"PGactive\":\"%d\",", PGactive);
@@ -518,14 +509,6 @@ void externalAlert(const char* subject, const char* message) {
 void displayAudioLed(int16_t audioSample) {}
 
 void setupAudioLed() {}
-
-int8_t checkPotVol(int8_t adjVol) {
-  return adjVol; // dummy
-}
-
-void applyFilters() {
-  applyVolume();
-}
 
 #if !INCLUDE_PERIPH
 float readVoltage() {
@@ -830,8 +813,7 @@ hmirror~0~98~~na
 lampLevel~0~98~~na
 lenc~1~98~~na
 lswitch~10~98~~na
-micGain~0~98~~na
-ampVol~0~98~~na
+micGain~5~98~~na
 minf~5~98~~na
 motionVal~8~98~~na
 quality~12~98~~na
@@ -893,7 +875,6 @@ accelUse~0~3~C~Use I2C accelerometer for detection
 accelDeg~5~3~N~Min accelerometer degrees movement
 lampType~0~3~S:Manual:Auto~How lamp activated
 SVactive~0~3~C~Enable servo use
-AudActive~0~3~C~Show audio configuration
 servoDelay~0~6~N~Delay between each 1 degree change (ms)
 servoMinAngle~0~6~N~Set min angle for servo model
 servoMaxAngle~180~6~N~Set max angle for servo model
