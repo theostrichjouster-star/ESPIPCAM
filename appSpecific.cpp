@@ -790,7 +790,6 @@ void appSpecificTelegramTask(void* p) {
 /************** default app configuration **************/
 const char* appConfig = R"~(
 ST_SSID~~99~~na
-netMode~0~99~S:WiFi~Network interface selection
 fsPort~21~99~~na
 fsServer~~99~~na
 ftpUser~~99~~na

@@ -51,14 +51,6 @@ char AP_ip[MAX_IP_LEN]  = ""; // Leave blank to use 192.168.4.1
 char AP_sn[MAX_IP_LEN]  = "";
 char AP_gw[MAX_IP_LEN]  = "";
 
-// SPI pins for Ethernet
-int ethCS = -1; // W5500 chip select / LAN8720 MDC
-int ethInt = -1; // W5500 interrupt / LAN8720 MDIO
-int ethRst = -1; // W5500 reset / LAN8720 POWER
-int ethSclk = -1; // W5500 SPI clock / LAN8720 CLOCK
-int ethMiso = -1; // W5500 SPI data pin
-int ethMosi = -1; // W5500 SPI data pin
-
 // basic HTTP Authentication access to web page
 char Auth_Name[MAX_HOST_LEN] = ""; 
 char Auth_Pass[MAX_PWD_LEN] = "";
@@ -73,11 +65,6 @@ bool usePing = true;
 static void startPing();
 static bool getLocalNTP();
 
-int netMode = 0; // 0=WiFi only, 1=Ethernet only, 2=Ethernet+AP
-
-// LAN8720
-#define ETH_PHY_ADDR  0 
-#define ETH_CLK_MODE  ETH_CLOCK_GPIO0_IN // external clock from crystal oscillator
 
 static void setupMdnsHost() {  
   // set up MDNS service 
@@ -154,24 +141,6 @@ static void onNetEvent(arduino_event_id_t event, arduino_event_info_t info) {
     case ARDUINO_EVENT_WIFI_AP_GOT_IP6: LOG_INF("AP interface V6 IP addr is preferred"); break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP6: LOG_INF("Station interface V6 IP addr is preferred"); break;
 
-    case ARDUINO_EVENT_ETH_START: LOG_INF("Ethernet started, speed %uMHz", ETH.linkSpeed()); break;
-    case ARDUINO_EVENT_ETH_CONNECTED: LOG_INF("Ethernet connected, MAC: %s", ETH.macAddress().c_str()); break;
-    case ARDUINO_EVENT_ETH_STOP: LOG_INF("Ethernet Stopped"); break;
-    case ARDUINO_EVENT_ETH_GOT_IP: {
-      LOG_INF("Ethernet IP, use '%s://%s' to connect", useHttps ? "https" : "http", formatIPstr()); 
-      if (netMode == 2) WiFi.AP.enableNAPT(true);
-      break;
-    }
-    case ARDUINO_EVENT_ETH_DISCONNECTED: {
-      LOG_INF("Ethernet disconnected");
-      if (netMode == 2) WiFi.AP.enableNAPT(false);
-      break;
-    }
-    case ARDUINO_EVENT_ETH_LOST_IP: {
-      LOG_INF("Ethernet lost IP");
-      if (netMode == 2) WiFi.AP.enableNAPT(false);
-      break;
-    }
     default: LOG_WRN("Unhandled network event %d", event); break;
   }
 }
@@ -216,80 +185,6 @@ static void setWifiSTA() {
   debugMemory("setWifiSTA");
 }
 
-static bool startEth(bool firstcall) {
-  // Initialize Ethernet (W5500) via SPI, only viable on ESP32-S3 board
-  // Internal on ESP32-S3-ETH board, or use separate external board
-  if (ethCS != -1) {
-    if (!firstcall) {
-      // reset after ping failure
-      ETH.end();
-      // Give PHY time to fully de-assert
-      unsigned long phySettle = millis() + 5000; // 5 secs
-      while (millis() < phySettle) yield();
-    }
-#if CONFIG_IDF_TARGET_ESP32S3
-    if (!ETH.begin(ETH_PHY_W5500,
-                   ETH_PHY_ADDR_AUTO,
-                   ethCS,
-                   ethInt,
-                   ethRst,
-                   SPI2_HOST,
-                   ethSclk,
-                   ethMiso,
-                   ethMosi,
-                   ETH_PHY_SPI_FREQ_MHZ)) { 
-      LOG_WRN("Ethernet W5500 init failed");
-      return false;
-    }
-#endif
-#if CONFIG_IDF_TARGET_ESP32
- #ifdef ISCAM
-    LOG_WRN("Insufficient pins for Ethernet on ESP32");
-    netMode = 0;
-    return false;
- #else
-    // RMII uses predefined pins 19, 21, 22, 25, 26, 27
-    if (!ETH.begin(ETH_PHY_LAN8720,
-                   ETH_PHY_ADDR,
-                   ethCS,  // LAN8720 MDC 
-                   ethInt, // LAN8720 MDIO
-                   ethRst, // LAN8720 POWER
-                   ETH_CLK_MODE)) { 
-      LOG_WRN("Ethernet LAN8720 init failed");
-      return false;
-    }
- #endif
-#endif
-
-    // Apply static IP to Ethernet if configured in existing fields
-    if (strlen(ST_ip) > 1) {
-      IPAddress _ip, _gw, _sn, _ns1, _ns2;
-      if (_ip.fromString(ST_ip)) {
-        _gw.fromString(ST_gw);
-        _sn.fromString(ST_sn);
-        _ns1.fromString(ST_ns1);
-        _ns2.fromString(ST_ns2);
-        ETH.config(_ip, _gw, _sn, _ns1, _ns2);
-        LOG_INF("Ethernet set static IP");
-      } else LOG_WRN("Failed to parse Ethernet static IP: %s", ST_ip);
-    }
-  } else {
-    LOG_WRN("Ethernet pins not defined");
-    return false;
-  }
-
-  // wait for link and DHCP or static assignment
-  uint32_t startAttemptTime = millis();
-  while (!ETH.linkUp() && millis() - startAttemptTime < 8000) delay(100);
-  if (!ETH.linkUp()) LOG_WRN("Ethernet link not up");
-  startAttemptTime = millis();
-  while (!ETH.localIP() && millis() - startAttemptTime < 8000) delay(100);
-  if (!ETH.localIP()) LOG_WRN("Ethernet no IP yet");
-  setupMdnsHost();
-  if (pingHandle == NULL) startPing();
-  return ETH.linkUp();
-}
-
 static bool startWifi(bool firstcall = true) {
   // start wifi station (and wifi AP if allowed or station not defined)
   if (firstcall) {
@@ -302,77 +197,49 @@ static bool startWifi(bool firstcall = true) {
     delay(100);
   }
   
+  // connect to Wifi station
   wl_status_t wlStat = WL_NO_SSID_AVAIL;
-  if (netMode == 0) {
-    // connect to Wifi station
-    setWifiSTA();
-    uint32_t startAttemptTime = millis();
-    // Stop trying on failure timeout, will try to reconnect later by ping
-    wlStat = WL_NO_SSID_AVAIL;
-    if (strlen(ST_SSID)) {
-      while (wlStat = WiFi.STA.status(), wlStat != WL_CONNECTED && millis() - startAttemptTime < 5000)  {
-        LOG_SEND(".");
-        delay(500);
-      }
+  setWifiSTA();
+  uint32_t startAttemptTime = millis();
+  // Stop trying on failure timeout, will try to reconnect later by ping
+  if (strlen(ST_SSID)) {
+    while (wlStat = WiFi.STA.status(), wlStat != WL_CONNECTED && millis() - startAttemptTime < 5000)  {
+      LOG_SEND(".");
+      delay(500);
     }
-    // show stats of requested SSID
-    int numNetworks = WiFi.scanNetworks();
-    for (int i=0; i < numNetworks; i++) {
-      if (WiFi.SSID(i) == ST_SSID)
-        LOG_INF("Wifi stats for %s - signal strength: %ld dBm; Encryption: %s; channel: %ld",  ST_SSID, WiFi.RSSI(i), getEncType(i), WiFi.channel(i));
-    }
-    if (wlStat != WL_CONNECTED) LOG_WRN("SSID %s not connected %s", ST_SSID, wifiStatusStr(wlStat));
   }
-  
-  if (wlStat == WL_NO_SSID_AVAIL || allowAP) setWifiAP(); // AP allowed if no Station SSID eg on first time use 
-#if CONFIG_IDF_TARGET_ESP32S3
-  if (netMode == 0) setupMdnsHost(); // not on ESP32 as uses 6k of heap
-#endif
+  // show stats of requested SSID
+  int numNetworks = WiFi.scanNetworks();
+  for (int i=0; i < numNetworks; i++) {
+    if (WiFi.SSID(i) == ST_SSID)
+      LOG_INF("Wifi stats for %s - signal strength: %ld dBm; Encryption: %s; channel: %ld",  ST_SSID, WiFi.RSSI(i), getEncType(i), WiFi.channel(i));
+  }
+  if (wlStat != WL_CONNECTED) LOG_WRN("SSID %s not connected %s", ST_SSID, wifiStatusStr(wlStat));
+
+  if (wlStat == WL_NO_SSID_AVAIL || allowAP) setWifiAP(); // AP allowed if no Station SSID eg on first time use
+  setupMdnsHost();
   if (pingHandle == NULL) startPing();
   return wlStat == WL_CONNECTED ? true : false;
 }
 
 bool startNetwork(bool firstcall) {
-  // start WiFi, Ethernet, Eth+AP by config
+  // start WiFi
   bool res = false;
   if (firstcall) Network.onEvent(onNetEvent);
-  if (netMode > 0) {
-    // Ethernet or Eth+AP
-    if (startEth(firstcall)) {
-      if (netMode == 1) {
-        // Quiet mode: stop WiFi/BLE radios for RF silence
-        WiFi.mode(WIFI_OFF);
-#ifdef APP_BT_ENABLED
-        if (btStarted()) btStop();
-#endif
-        res = true;
-      }
-    } else {
-      LOG_WRN("Ethernet start failed, falling back to WiFi");
-      ETH.end();
-      WiFi.AP.enableNAPT(false);
-      netMode = 0;
-    }
-  }
-  // Wifi only / Eth fail / Eth + AP
-  if (netMode == 2) {
-    WiFi.AP.enableNAPT(true);
-    allowAP = true;
-  }
   // connect wifi STA, or AP if router details not available
-  if (!res) startWifi(firstcall);
-  res = startWebServer(); 
+  startWifi(firstcall);
+  res = startWebServer();
 #ifdef DEV_ONLY
   devCheck();
 #endif
   return res;
 }
 
-static IPAddress netLocalIP() { return (netMode > 0) ? ETH.localIP() : WiFi.STA.localIP(); }
-static IPAddress netGatewayIP() { return (netMode > 0) ? ETH.gatewayIP() : WiFi.STA.gatewayIP(); }
-String netMacAddress() { return (netMode > 0) ? ETH.macAddress() : WiFi.STA.macAddress(); }
-int netRSSI() { return (netMode == 1) ? 0 : WiFi.STA.RSSI(); }
-bool netIsConnected() { return (netMode > 0) ? (ETH.linkUp() && ETH.localIP()) : (WiFi.STA.status() == WL_CONNECTED); }
+static IPAddress netLocalIP() { return WiFi.STA.localIP(); }
+static IPAddress netGatewayIP() { return WiFi.STA.gatewayIP(); }
+String netMacAddress() { return WiFi.STA.macAddress(); }
+int netRSSI() { return WiFi.STA.RSSI(); }
+bool netIsConnected() { return WiFi.STA.status() == WL_CONNECTED; }
 
 const char* formatIPstr(bool getAP) {
   static char localIP[16] = "";
@@ -436,30 +303,17 @@ static void pingTimeout(esp_ping_handle_t hdl, void *args) {
   // but some routers may not respond to ping - https://github.com/s60sc/ESP32-CAM_MJPEG2SD/issues/221
   // so setting usePing to false ignores ping failure if connection still present
   resetWatchDog(0, wifiTimeoutSecs * 1000 * 2);
-  if (netMode > 0) {
-    if (usePing) {
-      LOG_WRN("Failed to ping gateway, restart ethernet ...");
-      startNetwork(false);
-    } else {
-      if (netIsConnected()) statusCheck();
-      else {
-        LOG_WRN("Disconnected, restart ethernet ...");
-        startNetwork(false);
-      }
-    }
-  } else {
-    if (strlen(ST_SSID)) {
-      wl_status_t wStat = WiFi.STA.status();
-      if (wStat != WL_NO_SSID_AVAIL && wStat != WL_NO_SHIELD) {
-        if (usePing) {
-          LOG_WRN("Failed to ping gateway, restart wifi ...");
+  if (strlen(ST_SSID)) {
+    wl_status_t wStat = WiFi.STA.status();
+    if (wStat != WL_NO_SSID_AVAIL && wStat != WL_NO_SHIELD) {
+      if (usePing) {
+        LOG_WRN("Failed to ping gateway, restart wifi ...");
+        startWifi(false);
+      } else {
+        if (wStat == WL_CONNECTED) statusCheck();
+        else {
+          LOG_WRN("Disconnected, restart wifi ...");
           startWifi(false);
-        } else {
-          if (wStat == WL_CONNECTED) statusCheck();
-          else {
-            LOG_WRN("Disconnected, restart wifi ...");
-            startWifi(false);
-          }
         }
       }
     }
@@ -1016,7 +870,7 @@ void goToSleep(bool deepSleep) {
   }
   // light sleep restarts here
   LOG_INF("Light sleep wakeup");
-  if (netMode != 1) esp_wifi_start();
+  esp_wifi_start();
 }
 
 bool utilsStartup() {

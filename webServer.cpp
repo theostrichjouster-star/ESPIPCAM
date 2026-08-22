@@ -452,7 +452,7 @@ esp_err_t uploadHandler(httpd_req_t *req) {
 static esp_err_t setupHandler(httpd_req_t *req) {
   if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
   // Scan for WiFi networks
-  int w = (netMode == 0) ? WiFi.scanNetworks() : 0;
+  int w = WiFi.scanNetworks();
   // Start building the JSON string
   char* p = jsonBuff;
   p += sprintf(p, "{\"networks\":[");

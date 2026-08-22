@@ -281,13 +281,6 @@ void updateStatus(const char* variable, const char* _value, bool fromUser) {
   else if (!strcmp(variable, "useHttps")) useHttps = (bool)intVal;
   else if (!strcmp(variable, "useSecure")) useSecure = (bool)intVal;
   else if (!strcmp(variable, "doGetExtIP")) doGetExtIP = (bool)intVal;  
-  else if (!strcmp(variable, "netMode")) netMode = intVal;
-  else if (!strcmp(variable, "ethCS")) ethCS = intVal;
-  else if (!strcmp(variable, "ethInt")) ethInt = intVal;
-  else if (!strcmp(variable, "ethRst")) ethRst = intVal;
-  else if (!strcmp(variable, "ethSclk")) ethSclk = intVal;
-  else if (!strcmp(variable, "ethMiso")) ethMiso = intVal;
-  else if (!strcmp(variable, "ethMosi")) ethMosi = intVal;
   else if (!strcmp(variable, "extIP")) strncpy(extIP, value, MAX_IP_LEN-1);
 #if INCLUDE_TGRAM
   else if (!strcmp(variable, "tgramUse")) {
