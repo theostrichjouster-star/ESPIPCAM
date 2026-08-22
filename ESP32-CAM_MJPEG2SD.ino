@@ -12,8 +12,6 @@ void setup() {
 #ifndef AUXILIARY
     LOG_INF("Selected board %s", CAM_BOARD);
     prepCam();
-#else
-    LOG_INF("AUXILIARY mode without camera");
 #endif
   }
 

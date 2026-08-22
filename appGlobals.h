@@ -89,20 +89,10 @@
 // to determine if newer data files need to be loaded
 #define CFG_VER 38
 
-#if defined(AUXILIARY)
-#define APP_NAME "ESP-CAM_AUX" // max 15 chars
-#define INDEX_PAGE_PATH DATA_DIR "/Auxil" HTML_EXT
-#define USE_UARTTASK
-#elif defined(SIDE_ALARM)
-#define APP_NAME "ESP-CAM_SIDE" // max 15 chars
-#define INDEX_PAGE_PATH DATA_DIR "/SideAl" HTML_EXT
-#define NO_SD
-#else
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
 #define NEED_PSRAM true
 #define MIN_PSRAM 2
-#endif
 
 #define HTTP_CLIENTS 2 // http(s), ws(s)
 #define MAX_STREAMS 4 // (web stream, playback, download), NVR, audio, subtitle
@@ -120,11 +110,7 @@
 #define GRAYSCALE_BYTES 1 // number of bytes per pixel 
 #define EXTHB_LEN 64
 
-#ifdef NO_SD
-#define STORAGE LittleFS
-#else
 #define STORAGE SD_MMC
-#endif
 #define GITHUB_PATH "/s60sc/ESP32-CAM_MJPEG2SD/master"
 #define RAMSIZE (1024 * 8) // set this to multiple of SD card sector size (512 or 1024 bytes)
 #define CHUNKSIZE (1024 * 4)
@@ -219,11 +205,9 @@ void appShutdown();
 void browserMicInput(uint8_t* wsMsg, size_t wsMsgLen);
 void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL = false);
 void buildAviIdx(size_t dataSize, bool isVid = true, bool isTL = false);
-size_t buildSubtitle(int srtSeqNo, uint32_t sampleInterval);
 void buzzerAlert(bool buzzerOn);
 bool checkAccelMove();
 int8_t checkPotVol(int8_t adjVol);
-bool checkSDFiles();
 void currentStackUsage();
 void displayAudioLed(int16_t audioSample);
 void finalizeAviIndex(uint16_t frameCnt, bool isTL = false);
@@ -240,7 +224,6 @@ bool identifyMPU(char* _mpuModel);
 void intercom();
 bool isNight(uint8_t nightSwitch);
 void laserLevel() ;
-void micTaskStatus();
 void motorSpeed(int speedVal, bool leftMotor = true);
 void openSDfile(const char* streamFile);
 void prepAudio();
@@ -248,7 +231,6 @@ void prepAviIndex(bool isTL = false);
 bool prepCam();
 bool prepRecording();
 void prepTelemetry();
-void prepMic();
 void prepMotors();
 void prepRTSP();
 void prepUart();

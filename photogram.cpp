@@ -74,11 +74,6 @@ static void prepPgram() {
 }
 
 static void getPhoto() {
-#ifdef AUXILIARY
-  LOG_WRN("Internal camera not available on auxiliary board");
-  photosDone = numberOfPhotos;
-  stepperDone();
-#else
   // use built in esp cam
   setLamp(lampLevel); // turn on lamp led as flash if required
   if (timeForPhoto * 1000 > MAX_FRAME_WAIT) delay((timeForPhoto * 1000) - MAX_FRAME_WAIT); // allow time for turntable to stabilise
@@ -100,7 +95,6 @@ static void getPhoto() {
     alertBufferSize = 0;
   } else LOG_WRN("Failed to get photo");
   setLamp(0);
-#endif
 }
 
 static void takePhoto() {

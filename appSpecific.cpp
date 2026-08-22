@@ -177,12 +177,8 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
 #if INCLUDE_PERIPH
   else if (!strcmp(variable, "RCactive")) {
     RCactive = (bool)intVal;
-    bool aux = false;
-#ifdef AUXILIARY
-    aux = true;
-#endif
 #if INCLUDE_MCPWM
-    useBDC = (useUart && !aux) ? false : (bool)intVal;
+    useBDC = useUart ? false : (bool)intVal;
 #endif
   }
   else if (!strcmp(variable, "heartbeatRC")) heartbeatRC = intVal;
@@ -382,12 +378,9 @@ static bool setPeripheral(char cmd, int controlVal, bool fromUart) {
       takePhotos(bool(controlVal));
     break;
 #endif
-    case 'K': 
+    case 'K':
       // cam browser conn closed
-#ifdef AUXILIARY
-      if (fromUart) 
-#endif
-        stopRC();
+      stopRC();
     break;
     default:
       res = false;
@@ -401,11 +394,7 @@ void appSpecificWsHandler(const char* wsMsg) {
   int wsLen = strlen(wsMsg) - 1;
   char cmd = (char)wsMsg[0];
   int controlVal = atoi(wsMsg + 1); // skip first char
-  bool aux = false;
-#ifdef AUXILIARY
-  aux = true;
-#endif
-  if (useUart && !aux) {
+  if (useUart) {
 #if INCLUDE_UART 
     // send command over uart to auxiliary
     if (!writeUart(cmd, (uint32_t)controlVal)) LOG_WRN("Failed to send data to Auxiliary over UART");

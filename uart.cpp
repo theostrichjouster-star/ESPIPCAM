@@ -129,32 +129,6 @@ static bool configureUart() {
   return (res == ESP_OK) ? true : false;
 }
 
-static void uartRxTask(void *arg) {
-  // used by auxiliary to receive data from uart
-  while (true) {
-    // wait for response to previous request to be processed 
-    xSemaphoreTake(responseMutex, portMAX_DELAY); 
-    if (readUart()) {
-      // update given peripheral status
-      uint32_t receivedData;
-      memcpy(&receivedData, uartBuffRx + 3, 4); // response data (if relevant)
-#ifdef AUXILIARY
-      // try output request
-      if (!setOutputPeripheral(uartBuffRx[2], receivedData)) {
-        // try input request    
-        int receivedData = getInputPeripheral(uartBuffRx[2]); // cmd 
-        // write response to client
-        if (receivedData >= 0) writeUart(uartBuffRx[2], (uint32_t)receivedData); // cmd, data
-      }
-#else
-      // client, process received input
-      setInputPeripheral(uartBuffRx[2], receivedData);
-#endif
-    }
-    xSemaphoreGive(responseMutex);
-  }
-}
-
 void prepUart() {
   // setup uart if Auxiliary being used
   if (useUart) {
@@ -163,10 +137,6 @@ void prepUart() {
       responseMutex = xSemaphoreCreateBinary();
       writeMutex = xSemaphoreCreateMutex();
       if (configureUart()) {
-#ifdef USE_UARTTASK
-        xSemaphoreTake(responseMutex, portMAX_DELAY);
-        xTaskCreateWithCaps(uartRxTask, "uartRxTask", UART_STACK_SIZE, NULL, UART_PRI, &uartRxHandle, STACK_MEM);
-#endif
         xSemaphoreGive(responseMutex);
         xSemaphoreGive(writeMutex);
       }

@@ -137,23 +137,7 @@ static void sendRTSPAudio(void* p) {
   vTaskDelete(NULL);
 }
 
-static void initRTSP() {
-#ifdef ISVC
-  // Initialize the RTSP server for VC using constants
-  rtspVideo = rtspSubtitles = false;
-  rtspAudio = true;
-  strcpy(RTP_ip, "239.255.0.1");
-  rtspPort = 554;
-  rtpAudioPort = 5432; 
-  rtpVideoPort = 0; 
-  rtpSubtitlesPort = 0;
-  rtspMaxClients = 1;
-  rtpTTL = 1; 
-#endif
-}
-
 void prepRTSP() {
-  initRTSP();
   useAuth = rtspServer.setCredentials(RTSP_Name, RTSP_Pass); // Set RTSP authentication
   RTSPServer::TransportType transport = determineTransportType();
   rtpIp.fromString(RTP_ip);
@@ -181,10 +165,7 @@ void prepRTSP() {
       if (rtspAudio) xTaskCreateWithCaps(sendRTSPAudio, "sendRTSPAudio", 1024 * 5, NULL, SUSTAIN_PRI, &sustainHandle[2], STACK_MEM);
       if (rtspSubtitles) xTaskCreateWithCaps(startRTSPSubtitles, "startRTSPSubtitles", 1024 * 1, NULL, SUSTAIN_PRI, &sustainHandle[3], STACK_MEM);
 #endif
-#ifdef ISVC
-      xTaskCreate(sendRTSPAudio, "sendRTSPAudio", 1024 * 5, NULL, 5, NULL);
-#endif
-    } else LOG_ERR("Failed to start RTSP server"); 
+    } else LOG_ERR("Failed to start RTSP server");
   } else LOG_WRN("RTSP server not started, no transport selected");
 }
 

@@ -59,19 +59,8 @@ static bool prepSD_MMC() {
   fileVec.reserve(1000);
   if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
 #if CONFIG_IDF_TARGET_ESP32S3
-#if !defined(SD_MMC_CLK)
-  LOG_WRN("SD card pins not defined");
-  return false;
-#else
- #if defined(SD_MMC_D1)
-  // assume 4 bit mode
-  SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
-  use1bitMode = false;
- #else
-  // assume 1 bit mode
+  // XIAO ESP32S3 Sense wires only CLK/CMD/D0, so 1 bit mode
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
- #endif
-#endif
 #endif
   
   res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);

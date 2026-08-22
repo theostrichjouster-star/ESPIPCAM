@@ -16,7 +16,6 @@ bool dataFilesChecked = false;
 size_t alertBufferSize = 0;
 size_t maxAlertBuffSize = 32 * 1024;
 byte* alertBuffer = NULL; // buffer for telegram / smtp alert image
-static void printPartitionTable();
 int wakePin = -1; // if wakeUse is true
 int wakeLevel; // if wakeUse is true
 bool wakeUse = false; // true to allow app to sleep and wake
@@ -217,25 +216,6 @@ static void setWifiSTA() {
   debugMemory("setWifiSTA");
 }
 
-static void predefEthPins() {
-  // set board specific pins if defined
-#if defined(ETH_CS)
-  char ethPin[3];
-  sprintf(ethPin, "%d", ETH_CS);
-  updateStatus("ethCS", ethPin);
-  sprintf(ethPin, "%d", ETH_INT);
-  updateStatus("ethInt", ethPin);
-  sprintf(ethPin, "%d", ETH_RST);
-  updateStatus("ethRst", ethPin);
-  sprintf(ethPin, "%d", ETH_SCLK);
-  updateStatus("ethSclk", ethPin);
-  sprintf(ethPin, "%d", ETH_MISO);
-  updateStatus("ethMiso", ethPin);
-  sprintf(ethPin, "%d", ETH_MOSI);
-  updateStatus("ethMosi", ethPin);
-#endif
-}
-
 static bool startEth(bool firstcall) {
   // Initialize Ethernet (W5500) via SPI, only viable on ESP32-S3 board
   // Internal on ESP32-S3-ETH board, or use separate external board
@@ -356,7 +336,6 @@ bool startNetwork(bool firstcall) {
   // start WiFi, Ethernet, Eth+AP by config
   bool res = false;
   if (firstcall) Network.onEvent(onNetEvent);
-  predefEthPins();
   if (netMode > 0) {
     // Ethernet or Eth+AP
     if (startEth(firstcall)) {
@@ -921,15 +900,8 @@ float smoothSensor(float latestVal, float smoothedVal, float alpha) {
 }
 
 // onboard chip temperature sensor
-#if CONFIG_IDF_TARGET_ESP32
-extern "C" {
-// Use internal on chip temperature sensor (if present)
-uint8_t temprature_sens_read(); // sic
-}
-#elif CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
 #include "driver/temperature_sensor.h"
 static temperature_sensor_handle_t temp_sensor = NULL;
-#endif
 
 static void prepInternalTemp() {
 #if CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32S3
@@ -942,12 +914,7 @@ static void prepInternalTemp() {
 
 float readInternalTemp() {
   float intTemp = NULL_TEMP;
-#if CONFIG_IDF_TARGET_ESP32
-  // convert on chip raw temperature in F to Celsius degrees
-  intTemp = (temprature_sens_read() - 32) / 1.8;  // value of 55 means not present
-#elif CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32S3
-    temperature_sensor_get_celsius(temp_sensor, &intTemp); 
-#endif
+  temperature_sensor_get_celsius(temp_sensor, &intTemp);
   return intTemp;
 }
 
@@ -1022,7 +989,6 @@ static void sleepTimer(bool startCycle) {
 }
 
 void goToSleep(bool deepSleep) {
-#if !CONFIG_IDF_TARGET_ESP32C3
   // if deep sleep, restarts with reset
   // if light sleep, restarts by continuing this function
   LOG_INF("Going into %s sleep", deepSleep ? "deep" : "light");
@@ -1051,20 +1017,12 @@ void goToSleep(bool deepSleep) {
   // light sleep restarts here
   LOG_INF("Light sleep wakeup");
   if (netMode != 1) esp_wifi_start();
-#else
-  LOG_WRN("This function not compatible with ESP32-C3");
-#endif
 }
 
 bool utilsStartup() {
   bool res = false;
   sleepTimer(false);
-#if CONFIG_IDF_TARGET_ESP32S3
   STACK_MEM = psramFound() ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL;
-#else
-  // Original ESP32 must use internal memory for stacks
-  STACK_MEM = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-#endif
   logSetup();
 #ifdef NEED_PSRAM
   if (psramFound()) {

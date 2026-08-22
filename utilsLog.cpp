@@ -150,11 +150,7 @@ static void logTask(void *pvParams) {
       // output message to various recipients
       size_t msgLen = strlen(msg);
       if (msgLen > 1) {
-#ifdef AUXILIARY
-        sendSSE("log", msg);
-#else
         wsAsyncSendText(msg); // output to browser over web socket
-#endif
         if (msg[msgLen - 2] == '~') msg[msgLen - 2] = ' '; // remove '~' if present
       }
       if (monitorOpen) {
@@ -225,12 +221,6 @@ static void appPanicHandler(arduino_panic_info_t *info, void *arg) {
 
 static void expandReason() {
   if (!strlen(btReason)) strcpy(btReason, "unknown");
-#if CONFIG_IDF_TARGET_ARCH_RISCV
-  // riscV
-  else if (strstr(btReason, "Breakpoint") != NULL) sprintf(btReason, "probably printf format"); // usually misplaced or misformatted vsnprintf()
-  else if (strstr(btReason, "Stack protection fault") != NULL) sprintf(btReason, "stack overflow after HWM: %lu bytes", btHWM);  
-  else if (!strcmp(btReason, "LoadAccessFault") || !strcmp(btReason, "StoreAccessFault") || !strcmp(btReason, "InstructionAccessFault")) strcat(btReason, " (pointer issue)");
-#else
   // Xtensa
   else if (strstr(btReason, "Unhandled debug exception") != NULL) {
     if (btHWM < HWM_MIN) sprintf(btReason, "probably stack overflow @ HWM: %lu bytes", btHWM);
@@ -238,7 +228,6 @@ static void expandReason() {
     else sprintf(btReason, "stack overflow / printf format. HWM: %lu bytes", btHWM); 
   }
   else if (!strcmp(btReason, "LoadProhibited") || !strcmp(btReason, "StoreProhibited") || !strcmp(btReason, "InstructionFetchError")) strcat(btReason, " (pointer issue)");
-#endif
 }
 
 static void showBacktrace() {
