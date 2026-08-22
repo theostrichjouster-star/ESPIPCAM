@@ -78,15 +78,17 @@ Optional, off by default — set the corresponding `#define INCLUDE_*` to `true`
 Requires the **arduino-esp32 core v3.1.1 or later**, and the [`OV5640_Auto_Focus_for_ESP32_Camera`](https://github.com/0015/ESP32-OV5640-AF) library (autofocus is on by default, so the build fails clearly without it).
 
 ```bash
-arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 --warnings all .
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --warnings all .
+arduino-cli upload  --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --port COM3 .
 ```
 
-In the Arduino IDE, select **XIAO_ESP32S3** and set:
+> **`PSRAM=opi` is not optional.** The board's PSRAM menu defaults to *Disabled* in `boards.txt`, so a bare `--fqbn esp32:esp32:XIAO_ESP32S3` compiles without `-DBOARD_HAS_PSRAM` and produces a binary that flashes and boots but then halts with `Startup Failure: Need PSRAM to be enabled`. Verify with `arduino-cli compile --fqbn ... --show-properties | grep build.defines`, and confirm on the device — a correct build logs `PSRAM 8.0MB, mode OPI @ 80Mhz` at boot.
 
-* **PSRAM: OPI PSRAM** — required for the XIAO Sense's octal PSRAM. Getting this wrong is a common and silent cause of poor frame rates.
-* **Partition scheme: 8M with spiffs** or **16MB (3MB APP...)**
+In the Arduino IDE, select **XIAO_ESP32S3** and set **PSRAM: OPI PSRAM**. The remaining defaults are already correct for this board: 8 MB flash, QIO 80 MHz, *Default with spiffs (3MB APP/1.5MB SPIFFS)*, USB hardware CDC with CDC-on-boot enabled, 240 MHz.
 
-No board selection is needed — there is no `CAMERA_MODEL_*` choice to make.
+`arduino-cli board list` reports this board as the generic `esp32:esp32:esp32_family`, because every ESP32-S3 with native USB shares the same USB IDs (`303A:1001`). That is expected — always pass the FQBN explicitly rather than relying on detection.
+
+No board selection is needed in code — there is no `CAMERA_MODEL_*` choice to make.
 
 ## First run
 
