@@ -37,7 +37,7 @@
 #define INCLUDE_MCPWM false   // mcpwm.cpp (BDC motor control). Needs INCLUDE_PERIPH true
 #define INCLUDE_RTSP false    // rtsp.cpp (RTSP Streaming). Requires additional library: ESP32-RTSPServer
 #define INCLUDE_DS18B20 false // if true, requires INCLUDE_PERIPH and additional libraries: OneWire and DallasTemperature
-#define INCLUDE_AF false      // for auto focused equipped OV5640. Requires additional library: OV5640_Auto_Focus_for_ESP32_Camera
+#define INCLUDE_AF true       // for auto focused equipped OV5640. Requires additional library: OV5640_Auto_Focus_for_ESP32_Camera - XIAO Sense ships with an OV5640
 #define INCLUDE_NEW_JPG false // true to use esp_new_jpg library, which must be installed first. Faster but uses more memory
 #define INCLUDE_I2C false     // periphsI2C.cpp (support for I2C peripherals)
 
