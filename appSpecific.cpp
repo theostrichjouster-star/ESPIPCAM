@@ -16,8 +16,7 @@ static char alertCaption[100];
 static bool alertReady = false;
 static bool depthColor = true;
 static bool devHub = false;
-char AuxIP[MAX_IP_LEN];
-bool useUart = false; 
+bool useUart = false; // no longer settable - kept false for the INCLUDE_UART / INCLUDE_MCPWM paths
 int quality; // Variable to hold quality for RTSP frame
 volatile audioAction THIS_ACTION = PASS_ACTION;
 static void stopRC();
@@ -47,8 +46,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "detectStartBand")) detectStartBand = intVal;
   else if (!strcmp(variable, "detectEndBand")) detectEndBand = intVal;
   else if (!strcmp(variable, "detectChangeThreshold")) detectChangeThreshold = intVal;
-  else if (!strcmp(variable, "mlUse")) mlUse = (bool)intVal;
-  else if (!strcmp(variable, "mlProbability")) mlProbability = fltVal < 0 ? 0.0 : (fltVal > 1.0 ? 1.0 : fltVal);
   else if (!strcmp(variable, "depthColor")) {
     depthColor = (bool)intVal;
     colorDepth = depthColor ? RGB888_BYTES : GRAYSCALE_BYTES;
@@ -152,8 +149,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
 #endif
   else if (!strcmp(variable, "teleInterval")) srtInterval = intVal;
   else if (!strcmp(variable, "wakeUse")) wakeUse = (bool)intVal;
-  else if (!strcmp(variable, "wakePin")) wakePin = intVal;
-  else if (!strcmp(variable, "wakeLevel")) wakeLevel = intVal;
 #if INCLUDE_MCPWM
   else if (!strcmp(variable, "motorRevPin")) motorRevPin = intVal;
   else if (!strcmp(variable, "motorFwdPin")) motorFwdPin = intVal;
@@ -163,9 +158,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     if (motorFwdPinR > 0) trackSteer = true; // use track steering if pin defined
   }
   else if (!strcmp(variable, "pwmFreq")) pwmFreq = intVal;
-#endif
-#ifndef AUXILIARY
-  else if (!strcmp(variable, "AuxIP")) strncpy(AuxIP, value, MAX_IP_LEN-1);
 #endif
 #if INCLUDE_PERIPH
   else if (!strcmp(variable, "RCactive")) {
@@ -217,7 +209,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "external_heartbeat_token")) snprintf(external_heartbeat_token, EXTHB_LEN, "%s", value);
 #endif
 
-  else if (!strcmp(variable, "useUart")) useUart = (bool)intVal;
 #if INCLUDE_UART
   else if (!strcmp(variable, "uartTxdPin")) uartTxdPin = intVal;
   else if (!strcmp(variable, "uartRxdPin")) uartRxdPin = intVal;
@@ -387,46 +378,41 @@ void appSpecificWsHandler(const char* wsMsg) {
   int wsLen = strlen(wsMsg) - 1;
   char cmd = (char)wsMsg[0];
   int controlVal = atoi(wsMsg + 1); // skip first char
-  if (useUart) {
-#if INCLUDE_UART 
-    // send command over uart to auxiliary
-    if (!writeUart(cmd, (uint32_t)controlVal)) LOG_WRN("Failed to send data to Auxiliary over UART");
-#endif
-  } else {
-    if (!setPeripheral(cmd, controlVal, false)) {
-      switch (cmd) {
-        case 'X':
+  // the auxiliary-over-UART branch was removed with the rest of the auxiliary feature -
+  // useUart is no longer settable, so this always took the direct path
+  if (!setPeripheral(cmd, controlVal, false)) {
+    switch (cmd) {
+      case 'X':
 #if INCLUDE_AUDIO
-          // stop remote mic stream
-          stopAudio = true;
+        // stop remote mic stream
+        stopAudio = true;
 #endif
-        break;
-        case 'C': 
-          // control request
-          if (extractKeyVal(wsMsg + 1)) updateStatus(variable, value);
-        break;
-        case 'S': 
-          // status request
-          buildJsonString(wsLen); // required config number 
-          LOG_SEND("%s\n", jsonBuff);
-        break;
-        case 'U': 
-          // update or control request
-          memcpy(jsonBuff, wsMsg + 1, wsLen); // remove 'U'
-          parseJson(wsLen);
-        break;
-        case 'H': 
-          // browser keepalive heartbeat
-          heartBeatDone = true;
-        break;
-        case 'K': 
-          // kill websocket connection
-          killSocket();
-        break;
-        default:
-          LOG_WRN("unknown command %s", wsMsg);
-        break;
-      }
+      break;
+      case 'C':
+        // control request
+        if (extractKeyVal(wsMsg + 1)) updateStatus(variable, value);
+      break;
+      case 'S':
+        // status request
+        buildJsonString(wsLen); // required config number
+        LOG_SEND("%s\n", jsonBuff);
+      break;
+      case 'U':
+        // update or control request
+        memcpy(jsonBuff, wsMsg + 1, wsLen); // remove 'U'
+        parseJson(wsLen);
+      break;
+      case 'H':
+        // browser keepalive heartbeat
+        heartBeatDone = true;
+      break;
+      case 'K':
+        // kill websocket connection
+        killSocket();
+      break;
+      default:
+        LOG_WRN("unknown command %s", wsMsg);
+      break;
     }
   }
 }
@@ -444,9 +430,6 @@ char* buildAppJsonString(bool filter) {
   float aTemp = readTemperature(true);
   if (aTemp > -127.0) p += sprintf(p, "\"atemp\":\"%0.1f\",", aTemp);
   else p += sprintf(p, "\"atemp\":\"n/a\",");
-  float currentVoltage = readVoltage();
-  if (currentVoltage < 0) p += sprintf(p, "\"battv\":\"n/a\",");
-  else p += sprintf(p, "\"battv\":\"%0.1fV\",", currentVoltage);
   p += sprintf(p, "\"camModel\":\"%s\",", camModel);
 #if INCLUDE_PERIPH
   p += sprintf(p, "\"SVactive\":\"%d\",", SVactive);
@@ -511,10 +494,6 @@ void displayAudioLed(int16_t audioSample) {}
 void setupAudioLed() {}
 
 #if !INCLUDE_PERIPH
-float readVoltage() {
-  return -1.0;
-}
-
 float readTemperature(bool isCelsius, bool onlyDS18) {
   return readInternalTemp();
 }
@@ -810,7 +789,6 @@ fps~20~98~~na
 framesize~10~98~~na
 gainceiling~0~98~~na
 hmirror~0~98~~na
-lampLevel~0~98~~na
 lenc~1~98~~na
 lswitch~10~98~~na
 micGain~5~98~~na
@@ -845,7 +823,6 @@ ntpServer~pool.ntp.org~0~T~NTP Server address
 alarmHour~1~2~N~Hour of day for daily actions
 refreshVal~5~2~N~Web page refresh rate (secs)
 responseTimeoutSecs~10~2~N~Server response timeout (secs)
-useUart~0~3~C~Use UART for Auxiliary connection
 tlSecsBetweenFrames~600~1~N~Timelapse interval (secs)
 tlDurationMins~720~1~N~Timelapse duration (mins)
 tlPlaybackFPS~1~1~N~Timelapse playback FPS
@@ -859,8 +836,6 @@ detectNumBands~10~1~N~Total num of detection bands
 detectStartBand~3~1~N~Top band where motion is checked
 detectEndBand~8~1~N~Bottom band where motion is checked
 detectChangeThreshold~15~1~N~Pixel difference to indicate change
-mlUse~0~1~C~Use Machine Learning
-mlProbability~0.8~1~N~ML minimum positive probability 0.0 - 1.0
 depthColor~0~1~C~Color depth for motion detection: Gray <> RGB
 streamVid~0~8~C~Enable NVR Video stream: /sustain?video=1
 streamAud~0~8~C~Enable NVR Audio stream: /sustain?audio=1
@@ -870,23 +845,7 @@ smtpMaxEmails~10~2~N~Max daily alerts
 sdMinCardFreeSpace~100~2~N~Min free MBytes on SD before action
 sdFreeSpaceMode~1~2~S:No Check:Delete oldest:Ftp then delete~Action mode on SD min free
 formatIfMountFailed~0~2~C~Format file system on failure
-pirUse~0~3~C~Use PIR for detection
-accelUse~0~3~C~Use I2C accelerometer for detection
-accelDeg~5~3~N~Min accelerometer degrees movement
-lampType~0~3~S:Manual:Auto~How lamp activated
-SVactive~0~3~C~Enable servo use
-servoDelay~0~6~N~Delay between each 1 degree change (ms)
-servoMinAngle~0~6~N~Set min angle for servo model
-servoMaxAngle~180~6~N~Set max angle for servo model
-servoMinPulseWidth~544~6~N~Set min pulse width for servo model (usecs)
-servoMaxPulseWidth~2400~6~N~Set max pulse width for servo model (usecs)
-servoCenter~90~6~N~Angle at which servo centered
-voltDivider~2~3~N~Voltage divider resistor ratio
-voltLow~3~3~N~Warning level for low voltage
-voltInterval~5~3~N~Voltage check interval (mins)
-voltUse~0~3~C~Use Voltage check
-wakeLevel~1~3~N~Pin level (0,1) to wake app from sleep
-wakeUse~0~3~C~Deep sleep app during night
+wakeUse~0~2~C~Deep sleep app during night
 mqtt_active~0~2~C~Mqtt enabled
 mqtt_broker~~2~T~Mqtt server ip to connect
 mqtt_port~1883~2~N~Mqtt server port
@@ -899,38 +858,11 @@ external_heartbeat_uri~~2~T~Heartbeat receiver URI (eg. /heartbeat/)
 external_heartbeat_port~443~2~N~Heartbeat receiver port
 external_heartbeat_token~~2~T~Heartbeat receiver auth token
 usePing~1~0~C~Use ping
-teleUse~0~3~C~Enable telemetry recording
-teleInterval~1~3~N~Telemetry collection interval (secs)
-RCactive~0~3~C~Enable remote control
-heartbeatRC~5~4~N~RC connection heartbeat time (secs)
-AuxIP~~3~T~Send RC / Servo / PG commands to Auxiliary IP
-stickUse~0~4~C~Use joystick
-pwmFreq~50~4~N~RC Motor PWM frequency
-maxSteerAngle~45~4~N~Max steering angle from straightahead
-maxTurnSpeed~50~4~N~Max tracked turn speed differential 
-maxDutyCycle~100~4~N~Max motor duty cycle % (speed)
-minDutyCycle~10~4~N~Min motor duty cycle % (stop)
-allowReverse~1~4~C~Reverse motion required
-autoControl~1~4~C~Stop motor or center steering if control inactive
-waitTime~20~4~N~Min wait (ms) between RC updates to app
+teleInterval~1~8~N~Subtitle stream interval (secs)
 tgramUse~0~2~C~Use Telegram Bot
 tgramToken~~2~T~Telegram Bot token
 tgramChatId~~2~T~Telegram chat identifier
 devHub~0~2~C~Show Camera Hub tab
-buzzerUse~0~3~C~Use active buzzer
-buzzerDuration~~3~N~Duration of buzzer sound in secs
-PGactive~0~3~C~Enable photogrammetry
-numberOfPhotos~20~5~N~Number of photos
-RPM~1~5~N~Turntable revolution speed as RPM
-gearing~5.7~5~N~Turntable / motor gearing ratio
-clockwise~1~5~C~Clockwise turntable if true
-timeForFocus~0~5~N~Time allocated to auto focus (secs)
-timeForPhoto~2~5~N~Time allocated to take photo (secs)
-extCam~0~5~C~Use external camera
-AtakePhotos~Start~5~A~Start photogrammetry
-BabortPhotos~Abort~5~A~Abort photogrammetry
-relayMode~0~3~S:Manual:Night~How relay activated
-relaySwitch~0~3~C~Switch relay off / on
 RTSP_Name~~8~T~RTSP Auth Username
 RTSP_Pass~~8~T~RTSP Auth Password
 rtsp00Video~0~8~C~Enable RTSP Video

@@ -87,9 +87,10 @@
  
 #define APP_VER "1.0.0"
 // to determine if newer data files need to be loaded
-// bumped to 39: the audio config rows changed (ampVol and AudActive removed,
-// micGain default 0 -> 5), so an existing configs.txt must be regenerated
-#define CFG_VER 39
+// bumped to 40: the peripheral, RC, servo, photogrammetry, lamp and machine learning
+// config rows were removed (none of their code is compiled in), and wakeUse / teleInterval
+// moved group, so an existing configs.txt must be regenerated
+#define CFG_VER 40
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -297,8 +298,6 @@ extern int detectNumBands;
 extern int detectStartBand;
 extern int detectEndBand; // inclusive
 extern int detectChangeThreshold; // min difference in pixel comparison to indicate a change
-extern bool mlUse; // whether to use ML for motion detection, requires INCLUDE_TINYML to be true
-extern float mlProbability; // minimum probability (0.0 - 1.0) for positive classification
 
 // record timelapse avi independently of motion capture, file name has same format as avi except ends with T
 extern int tlSecsBetweenFrames; // too short interval will interfere with other activities
@@ -431,7 +430,6 @@ extern int motorFwdPinR;
 extern bool trackSteer;
 extern int servoSteerPin;
 extern int lightsRCpin;
-extern char AuxIP[];
 extern int pwmFreq;
 extern int maxSteerAngle;
 extern int maxTurnSpeed;

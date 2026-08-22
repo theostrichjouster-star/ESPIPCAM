@@ -41,8 +41,9 @@ Pin assignments are fixed in [`camera_pins.h`](camera_pins.h) and are not user-c
 |---|---|
 | SD card CLK / CMD / D0 | 7 / 9 / 8 |
 | PDM microphone data / clock | 41 / 42 (`I2S_SCK` = -1, i.e. PDM mode) |
-| Onboard user LED (used as the "lamp") | 21 |
 | Camera | per the XIAO Sense reference layout |
+
+The onboard user LED on GPIO 21 is **not** driven. Upstream's lamp driver (`setupLamp()` / `setLamp()`) lives entirely inside `#if INCLUDE_PERIPH`, which is `false` in this build, so the LED control was removed from the web UI rather than left as a slider that does nothing.
 
 **4-bit SD mode is not available.** The XIAO Sense expansion board only wires `D0`, so the roughly 2× write speedup that upstream documents for 4-line SD_MMC on ESP32S3 cannot be achieved here without hardware modification.
 
@@ -136,12 +137,12 @@ Most behaviour is changed from the main web page, which is largely self-explanat
 
 * **Access Settings** — WiFi, hostname and mDNS, time zone, FTP/HTTPS, SMTP, authentication, HTTPS toggles, and firmware update
 * **Motion Detect & Recording** — motion sensitivity, time lapse, dashcam length, minimum frames
-* **Edit Config → Motion / Streaming / Other** — detection tuning, stream enables, SD management, MQTT, Telegram, heartbeat
+* **Edit Config → Network / Motion / Streaming / Other** — detection tuning, stream enables, SD management, MQTT, Telegram, heartbeat, night-time deep sleep
 * Recording parameters: `Resolution`, `Frame Rate`, `Quality`
 
 For time zone, use the dropdown or paste a value from the second column of [this list](https://raw.githubusercontent.com/nayarsystems/posix_tz_db/master/zones.csv).
 
-There is **no pin configuration UI** — it was removed along with multi-board support.
+There is **no pin configuration UI** — it was removed along with multi-board support. The **Peripherals** settings panel went with it: every setting it held (PIR, buzzer, relay, servos, battery voltage, remote control, photogrammetry, telemetry, accelerometer, lamp) belongs to a subsystem this build does not compile, so toggling them only ever wrote a value to `configs.txt`. For the same reason there is no battery-voltage readout in the page footer, no lamp slider, no camera pan/tilt sliders, no RC control overlay, and no Machine Learning options under Motion.
 
 Logs are viewable under the **Show Log** tab, held in RTC RAM (7 KB cyclic, default), streamed over websocket, or written to SD. SD logging can slow recording.
 
@@ -259,7 +260,9 @@ Removing the GPIO configuration UI left several upstream features present in the
 | Remote control of an RC vehicle | `INCLUDE_PERIPH`, `INCLUDE_MCPWM` | Depends on peripheral pins |
 | Photogrammetry turntable | `INCLUDE_PGRAM` | Depends on peripheral pins |
 
-Machine learning (`INCLUDE_TINYML`) is a separate case: the classifier function in [`motionDetect.cpp`](motionDetect.cpp) contains a syntax error and has never compiled. It is preserved as inherited from upstream, but enabling the flag will not build.
+Their **web UI controls and config rows have been removed**, since none of these flags is enabled and the settings therefore had no effect. The C++ is left in place behind its `#if INCLUDE_*` guards, so enabling a flag also means restoring the corresponding rows to the `appConfig` table in [`appSpecific.cpp`](appSpecific.cpp) and bumping `CFG_VER`.
+
+Machine learning (`INCLUDE_TINYML`) is a separate case: the classifier function in [`motionDetect.cpp`](motionDetect.cpp) contains a syntax error and has never compiled. It is preserved as inherited from upstream, but enabling the flag will not build — so unlike the others, its settings cannot be restored by a flag flip alone.
 
 The auxiliary-board *companion* mode — running this firmware on a second, cameraless ESP32 — was removed entirely and is not recoverable by configuration.
 
@@ -275,6 +278,7 @@ Forked at upstream **v10.9.4**. Versioning was restarted at `1.0.0` for this pro
 | Security hardening | Authentication enforced on every endpoint, buffer bounds checks, path-traversal rejection, constant-time credential compare, token masking, OTA size sanity check |
 | GPIO UI removal | All pin configuration fields removed from the web interface |
 | Web UI | New colour palette, SVG icon set replacing emoji, mobile breakpoint with 44 px touch targets |
+| Inert control removal | Removed every UI control and config row backed by a subsystem this build does not compile — the Peripherals settings panel, the RC / Servos / Photogrammetry panels and control overlay, the lamp and pan/tilt sliders, the battery-voltage footer field, and the Machine Learning options |
 | Dead code removal | Removed unreachable macro branches, orphaned declarations, and Ethernet support entirely — around 1,800 lines, reducing flash use by roughly 86 KB |
 | Autofocus and audio | Both enabled by default for this hardware |
 | OTA | Added update checking and installation from GitHub Releases |

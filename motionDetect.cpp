@@ -41,8 +41,6 @@ int detectEndBand = 8; // inclusive
 int detectChangeThreshold = 15; // min difference in pixel comparison to indicate a change
 uint8_t colorDepth; // set by depthColor config
 static size_t stride;
-bool mlUse = false; // whether to use ML for motion detection, requires INCLUDE_TINYML to be true
-float mlProbability = 0.8; // minimum probability (0.0 - 1.0) for positive classification
 
 uint8_t lightLevel; // Current ambient light level 
 uint8_t nightSwitch = 20; // initial white level % for night/day switching

@@ -380,7 +380,6 @@ void sendMqttHasDiscovery(){
   sendHasEntities ("free_psram", "Free PSRAM", "", "mdi:memory", "diagnostic", "free_psram");
   sendHasEntities ("free_bytes", "Free SD", "", "mdi:memory", "diagnostic", "free_bytes");
   //Home Asssistant Buttons
-  sendHasEntities ("led", "Camera led", "", "mdi:led-on", "", "", "lampLevel=15","lampLevel=0");
   sendHasEntities ("forceRecord", "Start Record", "", "mdi:video-check", "", "", "forceRecord=1","forceRecord=0");
   //Home Asssistant Config Buttons
   sendHasEntities ("still", "Get Picture", "", "mdi:list-status", "config", "", "still");

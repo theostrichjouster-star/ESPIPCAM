@@ -113,7 +113,7 @@
         font-size: calc(var(--buttonSize) * 1.1);
       }
 
-      .tab button.active, .audButtons.active{
+      .tab button.active{
         box-shadow: 0 0 0 var(--buttonQuart) var(--buttonActive);
         background: var(--buttonActive);
       }
@@ -364,19 +364,6 @@
         font-size: calc(var(--buttonSize) * 1.5);
       }
 
-      .svgIcon {
-        width: var(--buttonDbl);
-        height: var(--buttonDbl);
-      }
-
-      rect.RCon {
-        fill: var(--buttonActive);
-      }
-
-      rect.RCoff {
-        fill: var(--buttonReady);
-      }
-
       .upperText {
         transform: translate(50%,30%);
       }
@@ -520,10 +507,17 @@
         display: block;
       }
 
+      /* the sidebar icons are a mix of <nav> and <button> elements - box-sizing and font
+         are reset so the button computes the same box as the navs, and the hover / active
+         / disabled rules are class-only (not tag qualified) so all of them match */
       .quick-nav {
+        box-sizing: content-box;
+        font: inherit;
+        -webkit-appearance: none;
+        appearance: none;
         width: var(--buttonDbl);
         height: var(--buttonDbl);
-        margin: var(--buttonHalf) var(--buttonHalf); var(--buttonHalf) var(--buttonHalf);
+        margin: var(--buttonHalf);
         border: 1px solid var(--itemBorder);
         border-radius: var(--buttonQuart);
         cursor: pointer;
@@ -532,13 +526,19 @@
         background: var(--buttonReady);
       }
 
-      nav.quick-nav:hover {
+      .quick-nav:hover {
         background: var(--buttonHover);
       }
 
-      nav.quick-nav.active {
+      .quick-nav.active {
         box-shadow: 0 0 0 var(--buttonQuart) var(--buttonActive);
         background: var(--buttonActive);
+      }
+
+      .quick-nav.disabled {
+        cursor: default;
+        pointer-events: none;
+        background: var(--itemInactive);
       }
 
       nav#maintoolbar {
@@ -807,44 +807,6 @@
         z-Index: 1;
       }
 
-      .RCcontrolFmt {
-        position: absolute;
-        background: var(--buttonReady);
-        width: var(--buttonDbl);
-        height: var(--buttonDbl);
-        border-radius: calc(var(--buttonSize) * 6);
-        color: var(--buttonText);
-        text-align: center;
-        line-height: var(--buttonSize);
-        cursor: pointer;
-        text-decoration: none;
-        dominant-baseline: middle;
-        text-anchor: middle;
-        z-Index: 1;
-      }
-
-      .RCbuttonFmt {
-        left: 1px;
-        top: 1px;
-      }
-
-      .RCmotorFmt {
-        background: transparent;
-        left: -56px;
-        bottom: 72px;
-      }
-
-      .RClightsFmt {
-        left: 160px;
-        bottom: 8px;
-      }
-
-      .RCsteerFmt {
-        background: transparent;
-        right: 140px;
-        bottom: 4px;
-      }
-
       fieldset {
         margin: 0px;
       }
@@ -889,21 +851,6 @@
         touch-action: none;
       }
 
-      .audButtons {
-        height: calc(var(--buttonSize) * 3);
-        width: calc(var(--buttonSize) * 3);
-      }
-
-      .spkrContainer{
-        display: flex;
-        align-items: center;
-      }
-
-      #spkrLevel {
-        height: var(--buttonDbl);
-        width: calc(var(--buttonSize) * 6);
-      }
-
       /* icon sprite - shared outline-style SVG icons, see common.js for the <symbol> defs */
       svg.icon {
         width: 65%;
@@ -930,19 +877,12 @@
         pointer-events: none;
       }
 
-      .quick-nav, .pin-menu, .audButtons, .iconSize {
+      .quick-nav, .pin-menu, .iconSize {
         display: flex;
         align-items: center;
         justify-content: center;
         color: var(--buttonText);
         flex-shrink: 0;
-      }
-
-      /* nested icon svg inside the existing rect+text RC button markup - width/height/x/y
-         set as attributes on the element itself, since nested-svg viewport sizing via CSS
-         is unreliable across browsers; this rule only needs to carry the icon color */
-      svg.svgIcon svg.icon {
-        color: var(--buttonLabel);
       }
 
       /*************** narrow phone layout (<30rem, ~480px) ***************/
@@ -1018,10 +958,9 @@
                 <nav class="quick-nav" id="fileControl" name="playback-transfers"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg></nav>
                 <nav class="quick-nav" id="picSettings" name="picture-settings"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg></nav>
                 <nav class="quick-nav" id="accSettings" name="access-settings"><svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg></nav>
-                <div class="spkrContainer">
-                  <button class="quick-nav audButtons" id="spkrRem" title="Listen - hear the camera's microphone"><svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg></button>
-                  <canvas id="spkrLevel"></canvas>
-                </div>
+                <!-- must stay a <button>: common.js dispatches BUTTON by id (giving key
+                     spkrRem) but NAV by class, which routes into navigation() instead -->
+                <button class="quick-nav" id="spkrRem" title="Listen - hear the camera's microphone"><svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg></button>
               </nav>
               <div id="menu-top" class="menu-pinned">
                 <nav class="menu panel" id="camera-control">
@@ -1072,18 +1011,6 @@
                   <div class="input-group" id="micGain-group">
                     <label for="micGain">Microphone Gain</label>
                     <input title="Set microphone gain (3 is unity, 0 turns audio off)" type="range" id="micGain" min="0" max="10" value="5">
-                  </div>
-                  <div class="input-group" id="CamTilt-group">
-                    <label for="camTilt">Camera Tilt</label>
-                    <input class="local" title="Set camera tilt angle" type="range" id="camTilt" min="0" max="180" value="90">
-                  </div>
-                  <div class="input-group" id="CamPan-group">
-                    <label for="camPan">Camera Pan</label>
-                    <input class="local" title="Set camera pan angle" type="range" id="camPan" min="0" max="180" value="90">
-                  </div>
-                  <div class="input-group" id="lamp-group">
-                    <label for="lampLevel">Lamp</label>
-                     <input title="Control onboard lamp led brightness" type="range" id="lampLevel" min="0" max="15" value="0">
                   </div>
                 </div>
               </nav>
@@ -1516,10 +1443,6 @@
                 <div id="atemp" class="info displayonly">&nbsp;</div>
             </div>
             <div class="info-group center">
-                <label for="battv">Battery&nbsp;Voltage</label>
-                <div id="battv" class="info displayonly">&nbsp;</div>
-            </div>
-            <div class="info-group center">
                 <label for="clock">&nbsp;Camera&nbsp;local&nbsp;time</label>
                 <div id="clock" class="info displayonly">&nbsp;</div>
             </div>
@@ -1558,30 +1481,6 @@
             <div class="iconSize" id="fullAspect" title="Full screen with aspect"><svg class="icon" aria-hidden="true"><use href="#icon-aspect"></use></svg></div>
             <div class="iconSize" id="fullSize" title="Full screen"><svg class="icon" aria-hidden="true"><use href="#icon-fullscreen"></use></svg></div>
             <div class="iconSize" id="saveImage" title="Download screenshot"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></div>
-            <div id="RCenable" class="hidden">
-              <div class="RCcontrolFmt RCbuttonFmt" title="Switch RC controls on / off">
-                <svg class="svgIcon">
-                  <rect class="RCoff"/>
-                  <svg class="icon local" id="RCcontrols" x="22.5%" y="22.5%" width="55%" height="55%" aria-hidden="true"><use href="#icon-gamepad"></use></svg>
-                </svg>
-              </div>
-            </div>
-            <div id="RCdisplay" class="hidden touchDisabled">
-              <div class="RCcontrolFmt RClightsFmt" title="Switch RC lights on / off">
-                <svg class="svgIcon">
-                  <rect class="RCoff"/>
-                  <svg class="icon local" id="RClights" x="22.5%" y="22.5%" width="55%" height="55%" aria-hidden="true"><use href="#icon-bulb"></use></svg>
-                </svg>
-              </div>
-              <div class="RCcontrolFmt RCsteerFmt">
-                <input title="Control RC steering" type="range" id="steerDirection" class="RCcontrol immed bigThumb ignore" value=0>
-                <div name="rangeVal" style="top: 2px" class="rvThumb">0</div>
-              </div>
-              <div class="RCcontrolFmt RCmotorFmt">
-                <input title="Control RC speed" type="range" id="motorSpeed" class="RCcontrol immed bigThumb ignore" value=0>
-                <div name="rangeVal" class="rvThumb">0</div>
-              </div>
-            </div>
             <img id="stream" src="" crossorigin>
           </div>
         </figure>
@@ -1716,31 +1615,7 @@
         <div>
           <svg>
             <rect class="buttonRect" tabindex="0"/>
-            <text class="local midText" id="peripherals">Peripherals</text>
-          </svg>
-        </div>
-        <div>
-          <svg>
-            <rect class="buttonRect" tabindex="0"/>
             <text class="local midText" id="other">Other</text>
-          </svg>
-        </div>
-        <div id="RCconfigBtn" class="hidden">
-          <svg>
-            <rect class="buttonRect" tabindex="0"/>
-            <text class="local midText" id="RCconfig">RC Config</text>
-          </svg>
-        </div>
-        <div id="SVconfigBtn" class="hidden">
-          <svg>
-            <rect class="buttonRect" tabindex="0"/>
-            <text class="local midText" id="SVconfig">Servos</text>
-          </svg>
-        </div>
-        <div id="PGconfigBtn" class="hidden">
-          <svg>
-            <rect class="buttonRect" tabindex="0"/>
-            <text class="local midText" id="PGconfig">PG Control</text>
           </svg>
         </div>
       </div>
@@ -1786,25 +1661,7 @@
       let playbackButton;
       let rotateAngle = 0;
       let otaLatestTag = ""; // tag of the latest GitHub release, from /status
-      let RCmode = false;
-      let showRC = false;
       let wsInd = 0;
-
-      // slider orientation is one of:
-      //   horizontal : left -> right (default)
-      //   vertical   : vertical up for forward
-      //   vertInv    : vertical up for reverse / stop
-      const steerOrientation = "horizontal";
-      const motorOrientation = "vertical";
-      // following set from app
-      let maxSteerAngle = 45;   // max steering angle in degrees from straightahead
-      let maxDutyCycle = 100;   // maximum motor duty cycle % (speed)
-      let minDutyCycle = 10;    // minimum motor duty cycle % needed to operate motor
-      let allowReverse = true;  // set false if reverse motion not required
-      let autoControl = true;   // stop motor or center the steering if control not active
-      let servoCenter = 90;     // angle in degrees where servo is centered (SG90 style)
-      // shorter the waitTime, more responsive RC but more load on ESP32
-      let waitTime = 20;        // minimum wait in ms between controller updates
 
       function appInit() {
         view = $('#stream');
@@ -1813,18 +1670,6 @@
         recordingIndicator = $('#recording-indicator');
         streamButton = $('#forceStream');
         playbackButton = $('#forcePlayback');
-        $('#steerDirection').min = 0 - maxSteerAngle;
-        $('#steerDirection').max = maxSteerAngle;
-        $('#steerDirection').classList.add(steerOrientation);
-        $('#motorSpeed').max = maxDutyCycle;
-        $('#motorSpeed').min = allowReverse ? 0 - maxDutyCycle : 0;
-        $('#motorSpeed').classList.add(motorOrientation);
-        const RCcfgObserver = new IntersectionObserver((entries) => {
-          entries.forEach((entry) => {
-            if (!entry.isIntersecting && isHidden($('#RCdisplay'))) doLoadStatus = true;
-          });
-        });
-        RCcfgObserver.observe($('#RCconfigBtn'));
         sustainId = +appClock + Math.ceil(refreshInterval / 1000);
         fetchTimeZones();
       }
@@ -1833,7 +1678,6 @@
         // process change to status value
         if (dest == ID) {
           // operation based on ID
-          if (RCsliders(key, value)) return;
           if (key == "wifi") getConfig("0");
           else if (key == "hostName") {
             document.title = value;
@@ -1855,16 +1699,11 @@
           }
           else if (key == "logType") { logType = value; sendControl(key, value); return; }
           else if (key == "refreshVal") refreshInterval = value * 1000;
-          else if (key == "heartbeatRC") heartbeatInterval = value * 1000;
           else if (key == "clockUTC") { appClock = value; checkTime(value); }
           else if (key == "streaming") getConfig("012345678");
           else if (key == "motion") getConfig("01");
           else if (key == "other") getConfig("012");
-          else if (key == "peripherals") getConfig("0123");
           else if (key == "sustainId") { if (value >= sustainId) stopAll("sustainId", false); }
-          else if (key == "RCconfig") { doLoadStatus = false; getConfig("01234"); }
-          else if (key == "SVconfig") { doLoadStatus = false; getConfig("0123456"); }
-          else if (key == "PGconfig") { doLoadStatus = false; getConfig("012345"); }
           else if (key == "camModel") customButtons(key, value);
           else if (key == "delete" || key == "uploadMove" || key == "upload") sdFile(key, value);
           else if (key == 'timezoneSel') fromUser = setTz(value);
@@ -1873,7 +1712,6 @@
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
           else if (key == "devHub") {value == "1" ? show($('[name="DeviceHub"]')) : hide($('[name="DeviceHub"]')); }
-          else if (key == "AuxIP") wsAux(value);
           else if (key == "aec") value ? hide($('#aec_value-group')) : showAec();
           else if (key == "awb_gain") value ? show($('#wb_mode-group')) : hide($('#wb_mode-group'));
           else if (key == "agc") setAgc(key, value);
@@ -1882,22 +1720,6 @@
           else if (key == "forcePlayback") fromUser ? playbackAction(key) : deactivatePlaybackButton();
           else if (key == "forceStream") streamAction(key);
           else if (key == "spkrRem") { value = micOrSpkrState(key); value ? runSpkr(wsInd) : closeSpkr(wsInd); }
-          else if (key == "RCactive") RCstatus(Number(value));
-          else if (key == "RClights") { value = RCbuttons(key, value); wsAuxSend("L" + value, wsInd); }
-          else if (key == "RCcontrols") showRCcontrols(RCbuttons(key, value));
-          else if (key == "maxSteerAngle") updateMaxSteerAngle(value);
-          else if (key == "maxDutyCycle") updateMaxDutyCycle(value);
-          else if (key == "minDutyCycle") minDutyCycle = value;
-          else if (key == "servoCenter") servoCenter = value;
-          else if (key == "allowReverse") { allowReverse = value > 0 ? true : false; updateMaxDutyCycle(maxDutyCycle, true); }
-          else if (key == "autoControl") autoControl = value > 0 ? true : false;
-          else if (key == "PGactive") Number(value) ? show($('#PGconfigBtn')) : hide($('#PGconfigBtn'));
-          else if (key == "SVactive") Number(value) ? show($('#SVconfigBtn')) : hide($('#SVconfigBtn'));
-          else if (key == "waitTime") waitTime = value;
-          else if (key == "camTilt") { wsAuxSend("T" + value, wsInd); }
-          else if (key == "camPan") { wsAuxSend("P" + value, wsInd); }
-          else if (key == "AtakePhotos") { if (fromUser) wsAuxSend("G1", wsInd); return;}
-          else if (key == "BabortPhotos") { if (fromUser) wsAuxSend("G0", wsInd); return;}
           else if (key == 'save') await sleep(600); // allow last input to debounce
           if (fromUser && !$('#'+key).classList.contains("local")) debounceSendControl(key, value);
         }
@@ -2054,7 +1876,6 @@
       }
 
       function getStill() {
-        hide($('#RCenable'));
         stopAll("getStill");
         view.src = webServer + "/control?still="+Date.now();
         sustainId = +appClock + Math.ceil(refreshInterval / 1000);
@@ -2097,7 +1918,6 @@
             if (await checkTask('/sustain?playback=0')) {
               view.src = webServer + '/sustain?playback=0';
               checkStream();
-              hide($('#RCenable'));
               showView(true);
             } else deactivatePlaybackButton();
           }
@@ -2143,7 +1963,6 @@
         streamButton.classList.add("active");
         streamButton.innerHTML = "▢&nbsp;Stop Stream";
         streamButton.classList.add('blinking');
-        showRC ? show($('#RCenable')) : hide($('#RCenable'));
         if (await checkTask('/sustain?stream=0')) {
           view.src = webServer + '/sustain?stream=0';
           showView(false);
@@ -2162,7 +1981,6 @@
         closeSpkr(wsInd);
         deactivateButton($('#spkrRem'));
         if (!isHidden(viewContainer)) {
-          stopRC();
           if (isSecure) await sleep(1000); // otherwise TLS crash
           window.stop();
         }
@@ -2360,145 +2178,7 @@
         sendWsMsg('C' + key + '=' + val);
       }
 
-      /************** RC ****************/
-
-      function RCstatus(doShow) {
-        if (doShow) {
-          if (!showRC) {
-            showRC = true;
-            show($('#RCconfigBtn'));
-          }
-        } else {
-          showRC = false;
-          hide($('#RCconfigBtn'));
-        }
-      }
-
-      async function showRCcontrols(showControls) {
-        if (showControls) {
-          // start rc control
-          show($('#RCdisplay'))
-          RCmode = true;
-          await sleep(50); // allow websocket to start
-          doLoadStatus = false;
-        } else stopRC();
-      }
-
-      function stopRC() {
-        if (RCmode) {
-          resetButton('RClights');
-          resetButton('RCcontrols');
-
-          // stop rc control
-          hide($('#RCdisplay'));
-          doLoadStatus = true;
-          // close off RC activity
-          try {
-            sendWsMsg("D" + servoCenter, wsInd);
-            sendWsMsg("M0", wsInd);
-            sendWsMsg("L0", wsInd);
-          } catch(error) { alert("No connection to " + wsServers[wsInd]); }
-          RCmode = false;
-        }
-      }
-
-      function resetButton(buttonId) {
-        const rect = $('#'+buttonId).previousElementSibling;
-        if (rect.classList.contains('RCon')) {
-          rect.classList.remove('RCon');
-          rect.classList.add('RCoff');
-        }
-      }
-
-      // minimum period of RC changes sent to esp32
-      let lastSend = 0;
-      function readyToSend() {
-        // prevent input overload on esp32
-        const now = (new Date).getTime();
-        if (now - lastSend > waitTime) {
-          lastSend = now;
-          return true;
-        } else return false;
-      }
-
-      function RCsliders(key, value) {
-        // RC control
-        let checkedRC = false;
-
-          let doSend = false;
-          let val = parseInt(value);
-          if (key == "steerDirection" || key == "motorSpeed") {
-          if (readyToSend()) doSend = true;
-          checkedRC = true;
-          if (autoControl && !isImmed) {
-            // auto centre steering or stop motor if focus lost
-            val = 0;
-            const e = $('#'+key);
-            e.parentElement.children.rangeVal.innerHTML = '0';
-            rangeSlider(e, false);
-            doSend = true;
-          }
-          if (doSend) {
-            if (key == "steerDirection") {
-              val += 1 * servoCenter;
-              wsAuxSend("D" + val, wsInd);
-            }
-            else if (key == "motorSpeed") {
-              if (Math.abs(val) < minDutyCycle) val = 0;
-              wsAuxSend("M" + val, wsInd);
-            }
-          }
-        }
-        isImmed = false;
-        return checkedRC;
-      }
-
-      function RCbuttons(key, value) {
-        // RC buttons processing
-        const rect = $('#'+key).previousElementSibling;
-        if (rect.classList.contains('RCon')) {
-          rect.classList.remove('RCon');
-          rect.classList.add('RCoff');
-        } else {
-          rect.classList.remove('RCoff');
-          rect.classList.add('RCon');
-        }
-        const val = rect.classList.contains('RCon') ? 1 : 0;
-        return val;
-      }
-
-      function updateMaxSteerAngle(val) {
-        if (maxSteerAngle != val) {
-          maxSteerAngle = val;
-          $('#steerDirection').min = 0 - maxSteerAngle;
-          $('#steerDirection').max = maxSteerAngle;
-        }
-      }
-
-      function updateMaxDutyCycle(val, force = false) {
-        if (maxDutyCycle != val || force) {
-          maxDutyCycle = val;
-          $('#motorSpeed').max = maxDutyCycle;
-          $('#motorSpeed').min = allowReverse ? 0 - maxDutyCycle : 0;
-        }
-      }
-
-      function wsAuxSend(msg, index) {
-        if (!sendWsMsg(msg, index)) stopRC();
-      }
-
       /*********************** General ************************/
-
-      function wsAux(AuxIP) {
-        // setup websocket used for auxiliary board if required
-        if (AuxIP.length > 0) {
-          wsInd = 1;
-          if (wsSkt[wsInd] == null) {
-            wsServers[wsInd] = (isSecure ? "wss" : "ws") + "://" + AuxIP + ":" + webPort + "/ws";
-            initWebSocket(wsInd);
-          }
-        }
-      }
 
       function configStatus(refresh) {}
 
@@ -2521,11 +2201,9 @@
       function customWsMsg(data) {}
 
       function customInit() {
-        disableRangeSlider($('#camTilt'));
-        disableRangeSlider($('#camPan'));
-        // micGain and the listen button are left enabled - the PDM mic is on a fixed
-        // pin on this board, so there is no mic pin status update to re-enable them.
-        // lampLevel left enabled for the same reason - the onboard LED is a fixed pin
+        // nothing to disable - every control still on this page is backed by code that
+        // is actually compiled in. The servo, lamp and RC controls were removed rather
+        // than disabled, since INCLUDE_PERIPH is false and none of them could ever work
         closedTab(false);
       }
 
