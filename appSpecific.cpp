@@ -30,7 +30,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   sensor_t* s = esp_camera_sensor_get();
 #endif
   int intVal = atoi(value);
-  float fltVal = atof(value);
+#if INCLUDE_PERIPH
+  float fltVal = atof(value); // only consumed by voltLow / gearing, both INCLUDE_PERIPH gated
+#endif
   if (!strcmp(variable, "custom")) return true;
 #ifndef AUXILIARY
   else if (!strcmp(variable, "stopStream")) stopSustainTask(intVal);
@@ -216,6 +218,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
 
 #ifndef AUXILIARY
   // camera settings
+  // diagnostics - no config row, so nothing is persisted and CFG_VER is unaffected
+  else if (!strcmp(variable, "dumpCam")) dumpCamRegs();
+  else if (!strcmp(variable, "camPll")) setCamPll(value);
   else if (!strcmp(variable, "xclkMhz")) xclkMhz = intVal;
   else if (!strcmp(variable, "framesize")) {
     if (intVal > maxFS && fromUser) LOG_WRN("Frame size %s too large for %s PSRAM ", frameData[intVal].frameSizeStr, fmtSize(ESP.getPsramSize()));

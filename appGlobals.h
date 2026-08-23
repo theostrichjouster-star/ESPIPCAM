@@ -253,6 +253,8 @@ void prepRTSP();
 void prepUart();
 void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
+void dumpCamRegs();
+void setCamPll(const char* csv);
 uint8_t setFPS(uint8_t val);
 uint8_t setFPSlookup(uint8_t val);
 void setInputPeripheral(uint8_t cmd, uint32_t controlVal);
@@ -514,30 +516,43 @@ struct frameStruct {
 // indexed by frame size - needs to be consistent with sensor.h framesize_t enum
 // and update corresponding frameSizeData[] entries in avi.cpp 
 // https://github.com/espressif/esp32-camera/blob/master/driver/include/sensor.h
+// defaultFPS retuned for the OV5640 on XIAO Sense, measured on hardware (Phase 5.8).
+// Upstream's values were tuned for an OV2640 on an AI Thinker board and are wrong here in
+// both directions: the sub-VGA rows claimed 30fps the sensor cannot produce, while XGA and
+// HD were pinned at 5fps when the pipeline sustains 2-2.4x that.
+// Two independent ceilings apply:
+//  - sensor:   SYSCLK / (HTS x VTS). set_framesize() picks the PLL multiplier from the frame
+//              size in 3 tiers (160 below QVGA, 180 below XGA, 200 above), and all binned
+//              sizes <=920 wide share HTS 2060 / VTS 984 - so every size from 96X96 to VGA
+//              is capped at 19.7-22.2fps regardless of how small it is.
+//  - pipeline: SD write dominates above VGA (54ms of the 63ms per-frame budget at XGA).
+// Values below are the highest measured rate that the app actually sustains with headroom
+// (busy <=75%), not the sensor ceiling. Raising the sensor PLL does not help - a sweep to
+// SYSCLK 63MHz moved VGA only 22.2 -> 22.7fps, so XCLK stays at 20MHz.
 const frameStruct frameData[] = {
-  {"96X96", 96, 96, 30, 1, 1},     // 2MP sensors // PY260
-  {"QQVGA", 160, 120, 30, 1, 1},
-  {"128X128", 128, 128, 30, 1, 1}, // PY260
-  {"QCIF", 176, 144, 30, 1, 1}, 
-  {"HQVGA", 240, 176, 30, 2, 1}, 
-  {"240X240", 240, 240, 30, 2, 1}, 
-  {"QVGA", 320, 240, 30, 2, 1},    // PY260
-  {"320X320", 320, 320, 30, 2, 1}, // PY260 only
-  {"CIF", 400, 296, 30, 2, 1},  
-  {"HVGA", 480, 320, 30, 2, 1}, 
-  {"VGA", 640, 480, 20, 3, 1},     // PY260
-  {"SVGA", 800, 600, 20, 3, 1}, 
-  {"XGA", 1024, 768, 5, 3, 1},   
-  {"HD", 1280, 720, 5, 3, 1},      // PY260
-  {"SXGA", 1280, 1024, 5, 3, 1}, 
-  {"UXGA", 1600, 1200, 5, 4, 1},   // PY260
-  {"FHD", 1920, 1080, 5, 3, 1},    // 3MP Sensors only // PY260
-  {"P_HD", 720, 1280, 5, 3, 1},    //
-  {"P_3MP", 864, 1536, 5, 3, 1},   //
-  {"QXGA", 2048, 1536, 5, 4, 1},
-  {"QHD", 2560, 1440, 5, 4, 1},    // 5MP Sensors only
-  {"WQXGA", 2560, 1600, 5, 4, 1},  //
-  {"P_FHD", 1080, 1920, 5, 4, 1},  //
-  {"QSXGA", 2560, 1920, 4, 4, 1},  //
-  {"5MP", 2592, 1944, 4, 4, 1}     // PY260 only
+  {"96X96", 96, 96, 18, 1, 1},     // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160)
+  {"QQVGA", 160, 120, 18, 1, 1},   // measured 19.7 flat out
+  {"128X128", 128, 128, 18, 1, 1}, // PY260
+  {"QCIF", 176, 144, 18, 1, 1},
+  {"HQVGA", 240, 176, 18, 2, 1},
+  {"240X240", 240, 240, 18, 2, 1},
+  {"QVGA", 320, 240, 20, 2, 1},    // PY260 | measured 22.2 flat out (PLL tier 180)
+  {"320X320", 320, 320, 20, 2, 1}, // PY260 only
+  {"CIF", 400, 296, 20, 2, 1},
+  {"HVGA", 480, 320, 20, 2, 1},
+  {"VGA", 640, 480, 20, 3, 1},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2
+  {"SVGA", 800, 600, 15, 3, 1},    // measured 14.6 @ 37% busy
+  {"XGA", 1024, 768, 10, 3, 1},    // measured 9.7 @ 72% busy
+  {"HD", 1280, 720, 10, 3, 1},     // PY260 | 11.4/10.9 @ 78-84% busy at 12, backed off for SD margin
+  {"SXGA", 1280, 1024, 3, 3, 1},   // measured 3.0 @ 25% busy
+  {"UXGA", 1600, 1200, 3, 4, 1},   // PY260 | measured 2.8 @ 66% busy
+  {"FHD", 1920, 1080, 4, 3, 1},    // 3MP Sensors only // PY260 | measured 3.0 @ 29% busy
+  {"P_HD", 720, 1280, 6, 3, 1},    // measured 5.0 @ 19% busy
+  {"P_3MP", 864, 1536, 4, 3, 1},   // OV3660 only - not selectable on this sensor, set by analogy
+  {"QXGA", 2048, 1536, 3, 4, 1},   // measured 2.9 @ 67% busy
+  {"QHD", 2560, 1440, 2, 4, 1},    // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin
+  {"WQXGA", 2560, 1600, 2, 4, 1},  // measured 2.8 @ 85% busy at req 3, backed off
+  {"P_FHD", 1080, 1920, 4, 4, 1},  // measured 4.0 @ 37% busy
+  {"QSXGA", 2560, 1920, 2, 4, 1},  // measured 2.0 @ 59% busy
+  {"5MP", 2592, 1944, 4, 4, 1}     // PY260 only - unreachable on OV5640, left as inherited
 };

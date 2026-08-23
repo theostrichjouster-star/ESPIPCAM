@@ -885,6 +885,143 @@ static esp_err_t changeXCLK(camera_config_t config) {
   return res;
 }
 
+/************** OV5640 clock tree diagnostics **************/
+// The esp32-camera driver is shipped prebuilt with CONFIG_LOG_MAXIMUM_LEVEL=1, so its own
+// "Calculated XVCLK ... PCLK" and "Set PLL" ESP_LOGI lines are compiled out and cannot be
+// re-enabled at runtime. Reading the registers back over SCCB is the only way to see what
+// the sensor is actually doing. ov5640_regs.h is a private driver header and is not shipped
+// with the Arduino core, so the addresses are repeated here.
+
+#define OV5640_SC_PLL_CTRL0  0x3034 // [3:0] MIPI bit mode, 0x1A = 10 bit
+#define OV5640_SC_PLL_CTRL1  0x3035 // [7:4] system clock divider
+#define OV5640_SC_PLL_CTRL2  0x3036 // [7:0] PLL multiplier
+#define OV5640_SC_PLL_CTRL3  0x3037 // [3:0] pre-divider, [4] root divider (2x)
+#define OV5640_SC_PLL_CTRL5  0x3039 // [7] PLL bypass
+#define OV5640_SC_PLLS_CTRL0 0x3108 // [5:4] PCLK root divider
+#define OV5640_SYSREM_RESET  0x3103 // clock source select
+#define OV5640_PCLK_DIV      0x3824 // [4:0] DVP PCLK divider
+#define OV5640_PCLK_MANUAL   0x460C // 0x22 = manual PCLK divider, 0x20 = auto
+#define OV5640_X_ADDR_ST     0x3800 // .. 0x3803 sensor window start
+#define OV5640_X_ADDR_END    0x3804 // .. 0x3807 sensor window end
+#define OV5640_X_OUTPUT_SIZE 0x3808 // .. 0x380b DVP output size
+#define OV5640_X_TOTAL_SIZE  0x380c // .. 0x380f HTS / VTS
+#define OV5640_X_OFFSET      0x3810 // .. 0x3813 ISP offset
+#define OV5640_X_INCREMENT   0x3814 // horizontal subsample increment
+#define OV5640_Y_INCREMENT   0x3815 // vertical subsample increment
+#define OV5640_TIMING_TC_R20 0x3820 // vflip / vertical binning
+#define OV5640_TIMING_TC_R21 0x3821 // hmirror / horizontal binning
+
+static int camReg(sensor_t* s, int reg) {
+  // single 8 bit register, -1 on SCCB failure
+  return (s == NULL || s->get_reg == NULL) ? -1 : s->get_reg(s, reg, 0xFF);
+}
+
+static int camReg16(sensor_t* s, int reg) {
+  // big endian register pair, eg HTS in 0x380c/0x380d
+  int hi = camReg(s, reg);
+  int lo = camReg(s, reg + 1);
+  return (hi < 0 || lo < 0) ? -1 : ((hi << 8) | lo);
+}
+
+void dumpCamRegs() {
+  // report the OV5640 clock tree and frame timing as actually programmed
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL) {
+    LOG_WRN("dumpCam: no camera sensor");
+    return;
+  }
+  int r34 = camReg(s, OV5640_SC_PLL_CTRL0);
+  int r35 = camReg(s, OV5640_SC_PLL_CTRL1);
+  int mul = camReg(s, OV5640_SC_PLL_CTRL2);
+  int r37 = camReg(s, OV5640_SC_PLL_CTRL3);
+  int r39 = camReg(s, OV5640_SC_PLL_CTRL5);
+  int r08 = camReg(s, OV5640_SC_PLLS_CTRL0);
+  int pclkDiv = camReg(s, OV5640_PCLK_DIV);
+  int pclkMan = camReg(s, OV5640_PCLK_MANUAL);
+  if (mul < 0 || r35 < 0 || r37 < 0) {
+    LOG_WRN("dumpCam: SCCB read failed - camera may be unresponsive");
+    return;
+  }
+
+  // decode, then recompute the clocks using the driver's own arithmetic (calc_sysclk)
+  int sysDiv = (r35 >> 4) & 0x0F;
+  if (!sysDiv) sysDiv = 1;
+  int preDiv = r37 & 0x0F;
+  bool root2x = (r37 & 0x10) ? true : false;
+  int pclkRoot = (r08 >> 4) & 0x03;
+  bool bypass = (r39 & 0x80) ? true : false;
+  bool pclkManual = (pclkMan == 0x22);
+  static const float preDivMap[] = {1, 1, 2, 3, 4, 1.5, 6, 2.5, 8};
+  static const int pclkRootMap[] = {1, 2, 4, 8};
+  float preDivVal = preDivMap[preDiv > 8 ? 0 : preDiv];
+
+  uint32_t xclk = xclkMhz * OneMHz;
+  uint32_t refin = (uint32_t)(xclk / preDivVal);
+  uint32_t vco = refin * mul / (root2x ? 2 : 1);
+  uint32_t pllClk = bypass ? xclk : (vco / sysDiv * 2 / 5); // 2/5 is 10 bit mode
+  uint32_t sysClk = pllClk / 4;
+  uint32_t pclk = pllClk / pclkRootMap[pclkRoot] / ((pclkManual && pclkDiv) ? pclkDiv : 2);
+
+  int hts = camReg16(s, OV5640_X_TOTAL_SIZE);
+  int vts = camReg16(s, OV5640_X_TOTAL_SIZE + 2);
+  float sensorFps = (hts > 0 && vts > 0) ? (float)sysClk / ((float)hts * vts) : 0.0;
+
+  LOG_INF("******** OV5640 clock tree ********");
+  LOG_INF("Frame size: %s, XCLK %uMHz (fixed)", frameData[fsizePtr].frameSizeStr, xclkMhz);
+  LOG_INF("PLL regs: 0x3034=0x%02X 0x3035=0x%02X 0x3036=%d 0x3037=0x%02X 0x3039=0x%02X",
+    r34, r35, mul, r37, r39);
+  LOG_INF("PCLK regs: 0x3108=0x%02X 0x3824=%d 0x460C=0x%02X 0x3103=0x%02X",
+    r08, pclkDiv, pclkMan, camReg(s, OV5640_SYSREM_RESET));
+  LOG_INF("Decoded: mul=%d sys_div=%d pre_div=%d(/%.1f) root_2x=%d pclk_root=%d(/%d) pclk_manual=%d pclk_div=%d bypass=%d",
+    mul, sysDiv, preDiv, preDivVal, root2x, pclkRoot, pclkRootMap[pclkRoot], pclkManual, pclkDiv, bypass);
+  LOG_INF("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, SYSCLK %.2fMHz, PCLK %.2fMHz",
+    refin / 1000000.0, vco / 1000000.0, pllClk / 1000000.0, sysClk / 1000000.0, pclk / 1000000.0);
+  LOG_INF("Timing: HTS %d, VTS %d -> sensor ceiling %.1f fps (app FPS %u)", hts, vts, sensorFps, FPS);
+  LOG_INF("Window: start %d,%d end %d,%d output %dx%d offset %d,%d",
+    camReg16(s, OV5640_X_ADDR_ST), camReg16(s, OV5640_X_ADDR_ST + 2),
+    camReg16(s, OV5640_X_ADDR_END), camReg16(s, OV5640_X_ADDR_END + 2),
+    camReg16(s, OV5640_X_OUTPUT_SIZE), camReg16(s, OV5640_X_OUTPUT_SIZE + 2),
+    camReg16(s, OV5640_X_OFFSET), camReg16(s, OV5640_X_OFFSET + 2));
+  LOG_INF("Subsample: 0x3814=0x%02X 0x3815=0x%02X 0x3820=0x%02X 0x3821=0x%02X",
+    camReg(s, OV5640_X_INCREMENT), camReg(s, OV5640_Y_INCREMENT),
+    camReg(s, OV5640_TIMING_TC_R20), camReg(s, OV5640_TIMING_TC_R21));
+  LOG_INF("Die temp: %.1fC, free heap %s, free PSRAM %s",
+    readInternalTemp(), fmtSize(ESP.getFreeHeap()), fmtSize(ESP.getFreePsram()));
+  LOG_INF("**********************************");
+}
+
+void setCamPll(const char* csv) {
+  // apply an arbitrary PLL config, for sweeping at a fixed XCLK
+  // csv is the 8 public set_pll() args: bypass,mul,sys_div,root_2x,pre_div,seld5,pclk_manual,pclk_div
+  // NOTE the public sensor->set_pll arg order differs from the driver internal set_pll:
+  // public is (bypass, mul, sys_div, root_2x, pre_div, seld5, pclk_manual, pclk_div)
+  // internal is (bypass, mul, sys_div, pre_div, root_2x, pclk_root_div, pclk_manual, pclk_div)
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->set_pll == NULL) {
+    LOG_WRN("camPll: set_pll not available for this sensor");
+    return;
+  }
+  int bypass, mul, sysDiv, root2x, preDiv, seld5, pclkManual, pclkDiv;
+  if (sscanf(csv, "%d,%d,%d,%d,%d,%d,%d,%d", &bypass, &mul, &sysDiv, &root2x,
+      &preDiv, &seld5, &pclkManual, &pclkDiv) != 8) {
+    LOG_WRN("camPll: need 8 csv values bypass,mul,sys_div,root_2x,pre_div,seld5,pclk_manual,pclk_div - got '%s'", csv);
+    return;
+  }
+  // range check up front - the driver masks mul above 127 silently and only logs at ERROR
+  if (mul < 4 || mul > 252 || sysDiv < 0 || sysDiv > 15 || preDiv < 0 || preDiv > 8
+      || pclkDiv < 0 || pclkDiv > 31 || seld5 < 0 || seld5 > 3) {
+    LOG_WRN("camPll: out of range - mul 4-252, sys_div 0-15, pre_div 0-8, seld5 0-3, pclk_div 0-31");
+    return;
+  }
+  if (mul > 127 && (mul & 1)) LOG_WRN("camPll: mul %d will be masked to %d (only even above 127)", mul, mul & 0xFE);
+  LOG_INF("camPll: applying bypass=%d mul=%d sys_div=%d root_2x=%d pre_div=%d seld5=%d pclk_manual=%d pclk_div=%d",
+    bypass, mul, sysDiv, root2x, preDiv, seld5, pclkManual, pclkDiv);
+  int res = s->set_pll(s, bypass, mul, sysDiv, root2x, preDiv, seld5, pclkManual, pclkDiv);
+  if (res) LOG_WRN("camPll: set_pll rejected the config, error %d", res);
+  delay(50); // let the PLL relock before reading back
+  dumpCamRegs(); // always report what actually landed
+}
+
 bool prepCam() {
   // initialise camera depending on model and board
   if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0]))
@@ -1020,6 +1157,7 @@ bool prepCam() {
       fb = NULL;
       res = true;
       LOG_INF("Camera model %s ready @ %uMHz", camModel, xclkMhz);
+      if (PID == OV5640_PID) dumpCamRegs(); // baseline clock tree in every boot log
       if (timeLapseOn) dashCamOn = 0;
       if (dashCamOn) {
         timeLapseOn = useMotion = false; // disable timeLapse and motion recording
