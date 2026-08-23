@@ -131,7 +131,7 @@
 // SD write block for the AVI capture path only, kept separate from RAMSIZE because
 // iSDbuffer is double sized for the playback path - see sdWriteBuf in mjpeg2sd.cpp.
 // Must be a multiple of the SD card sector size (512 or 1024 bytes)
-#define SD_WRITE_SIZE (1024 * 16)
+#define SD_WRITE_SIZE (1024 * 32)
 #define CHUNKSIZE (1024 * 4)
 #define ISCAM // cam specific code in generic cpp files
 
