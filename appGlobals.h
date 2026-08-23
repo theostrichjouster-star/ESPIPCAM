@@ -38,6 +38,10 @@
 #define INCLUDE_RTSP false    // rtsp.cpp (RTSP Streaming). Requires additional library: ESP32-RTSPServer
 #define INCLUDE_DS18B20 false // if true, requires INCLUDE_PERIPH and additional libraries: OneWire and DallasTemperature
 #define INCLUDE_AF true       // for auto focused equipped OV5640. Requires additional library: OV5640_Auto_Focus_for_ESP32_Camera - XIAO Sense ships with an OV5640
+// Stays false. It was only needed to allow scaleFactor 4, which the built in decoder
+// rejects - but every size motion detection can reach now uses 3 or below, so there is
+// nothing to gain. esp_new_jpeg is not in the Arduino library index either (it is an
+// ESP-IDF component), so enabling this would put a manual install step on every user.
 #define INCLUDE_NEW_JPG false // true to use esp_new_jpg library, which must be installed first. Faster but uses more memory
 #define INCLUDE_I2C false     // periphsI2C.cpp (support for I2C peripherals)
 
@@ -544,6 +548,14 @@ struct frameStruct {
 // Values below are the highest measured rate that the app actually sustains with headroom
 // (busy <=75%), not the sensor ceiling. Raising the sensor PLL does not help - a sweep to
 // SYSCLK 63MHz moved VGA only 22.2 -> 22.7fps, so XCLK stays at 20MHz.
+//
+// scaleFactor is passed straight to the jpeg decoder as jpg_scale_t, which only defines
+// 0..3 (JPG_SCALE_NONE..JPG_SCALE_8X). A 4 is out of range and the decode fails outright,
+// so any size motion detection is allowed to see must be 3 or below. UXGA and P_FHD are
+// the only two within the FHD pixel cap that were set to 4, and both fit rgbBuf easily at
+// 1/8 - 90,000 and 97,200 bytes against 491,520 - so they are 3 here. The rows above the
+// cap keep 4; they are unreachable, as video recording refuses them (maxVideoFS) and
+// motion detection refuses them on pixel count.
 const frameStruct frameData[] = {
   {"96X96", 96, 96, 18, 1, 1},     // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160)
   {"QQVGA", 160, 120, 18, 1, 1},   // measured 19.7 flat out
@@ -560,14 +572,14 @@ const frameStruct frameData[] = {
   {"XGA", 1024, 768, 10, 3, 1},    // measured 9.7 @ 72% busy
   {"HD", 1280, 720, 10, 3, 1},     // PY260 | 11.4/10.9 @ 78-84% busy at 12, backed off for SD margin
   {"SXGA", 1280, 1024, 3, 3, 1},   // measured 3.0 @ 25% busy
-  {"UXGA", 1600, 1200, 3, 4, 1},   // PY260 | measured 2.8 @ 66% busy
+  {"UXGA", 1600, 1200, 3, 3, 1},   // PY260 | measured 2.8 @ 66% busy | scale 3 not 4, see below
   {"FHD", 1920, 1080, 4, 3, 1},    // 3MP Sensors only // PY260 | measured 3.0 @ 29% busy
   {"P_HD", 720, 1280, 6, 3, 1},    // measured 5.0 @ 19% busy
   {"P_3MP", 864, 1536, 4, 3, 1},   // OV3660 only - not selectable on this sensor, set by analogy
   {"QXGA", 2048, 1536, 3, 4, 1},   // measured 2.9 @ 67% busy
   {"QHD", 2560, 1440, 2, 4, 1},    // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin
   {"WQXGA", 2560, 1600, 2, 4, 1},  // measured 2.8 @ 85% busy at req 3, backed off
-  {"P_FHD", 1080, 1920, 4, 4, 1},  // measured 4.0 @ 37% busy
+  {"P_FHD", 1080, 1920, 4, 3, 1},  // measured 4.0 @ 37% busy | scale 3 not 4, see below
   {"QSXGA", 2560, 1920, 2, 4, 1},  // measured 2.0 @ 59% busy
   {"5MP", 2592, 1944, 4, 4, 1}     // PY260 only - unreachable on OV5640, left as inherited
 };
