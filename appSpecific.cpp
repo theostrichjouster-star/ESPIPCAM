@@ -831,7 +831,7 @@ responseTimeoutSecs~10~2~N~Server response timeout (secs)
 tlSecsBetweenFrames~600~1~N~Timelapse interval (secs)
 tlDurationMins~720~1~N~Timelapse duration (mins)
 tlPlaybackFPS~1~1~N~Timelapse playback FPS
-maxFrames~5000~1~N~Max frames in recording
+maxFrames~10000~1~N~Max frames in recording
 dashCamOn~0~98~~na
 moveStartChecks~5~1~N~Checks per second for start motion
 moveStopSecs~2~1~N~Non movement to stop recording (secs)

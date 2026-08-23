@@ -110,18 +110,36 @@ static size_t moviSize[2];
 static size_t audSize;      // running total of interleaved audio bytes
 static size_t audChunkCnt;  // number of 01wb chunks written
 static size_t indexLen[2];
+// what was actually allocated. maxFrames is user editable at runtime but the buffer is
+// only allocated once, so every bounds test must use this and not recompute from
+// maxFrames - otherwise raising maxFrames lets the index run off the end of the buffer
+static size_t idxBufBytes[2] = {0, 0};
 
 static size_t idxBufSize(bool isTL) {
-  // motion capture interleaves one audio chunk per video frame, so it needs two index
-  // entries per frame, plus one more for the chunk written when the recording closes.
-  // Timelapse has no audio and needs one per frame. Both include space for the index
-  // header. The spare entries matter - overflowing this reboots the device mid recording
-  return (isTL ? maxFrames + 2 : (2 * maxFrames) + 8) * IDX_ENTRY;
+  // motion capture needs one entry per video frame plus one per audio chunk. Audio is
+  // written every AUD_CHUNK_MIN bytes, so above 4fps that is well under one per frame -
+  // 1.5 per frame covers the usual rates with headroom. Below 4fps audio does need an
+  // entry per frame, and the recording is then closed early by aviIndexNearFull().
+  // Timelapse has no audio and needs one per frame. Both include the index header
+  return (isTL ? maxFrames + 2 : ((maxFrames * 3) / 2) + 8) * IDX_ENTRY;
+}
+
+bool aviIndexNearFull(bool isTL) {
+  // called after each frame is saved. Leaves room for the video and audio entries of one
+  // more frame plus the audio chunk closeAvi() appends, so the recording can always be
+  // closed cleanly rather than running the index off the end of its buffer
+  return idxPtr[isTL] + (4 * IDX_ENTRY) > idxBufBytes[isTL];
 }
 
 void prepAviIndex(bool isTL) {
   // prep buffer to store index data, gets appended to end of file
-  if (idxBuf[isTL] == NULL) idxBuf[isTL] = (uint8_t*)ps_malloc(idxBufSize(isTL));
+  if (idxBuf[isTL] == NULL) {
+    size_t wanted = idxBufSize(isTL);
+    idxBuf[isTL] = (uint8_t*)ps_malloc(wanted);
+    // stays 0 on failure, so aviIndexNearFull() reports full and nothing is written
+    idxBufBytes[isTL] = idxBuf[isTL] == NULL ? 0 : wanted;
+    if (idxBuf[isTL] == NULL) LOG_ERR("Failed to allocate %u bytes for AVI index", wanted);
+  }
   memcpy(idxBuf[isTL], idx1Buf, 4); // index header
   idxPtr[isTL] = CHUNK_HDR;  // leave 4 bytes for index size
   moviSize[isTL] = indexLen[isTL] = 0;
@@ -181,7 +199,13 @@ void buildAviIdx(size_t dataSize, bool isVid, bool isTL) {
   // build AVI video index into buffer - 16 bytes per frame
   // called from saveFrame() for each frame
   moviSize[isTL] += dataSize;
-  if (idxPtr[isTL] + IDX_ENTRY > idxBufSize(isTL)) doRestart("Need to reboot if max frames changed");
+  if (idxPtr[isTL] + IDX_ENTRY > idxBufBytes[isTL]) {
+    // unreachable in normal operation - processFrame() closes the recording on
+    // aviIndexNearFull() well before this. Kept as a backstop that drops the entry
+    // instead of writing past the buffer, and never as a reason to reboot the device
+    LOG_ERR("AVI index full, dropping entry - recording should already have closed");
+    return;
+  }
   if (isVid) memcpy(idxBuf[isTL]+idxPtr[isTL], dcBuf, 4);
   else {
     memcpy(idxBuf[isTL]+idxPtr[isTL], wbBuf, 4);

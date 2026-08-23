@@ -90,7 +90,7 @@
 // bumped to 40: the peripheral, RC, servo, photogrammetry, lamp and machine learning
 // config rows were removed (none of their code is compiled in), and wakeUse / teleInterval
 // moved group, so an existing configs.txt must be regenerated
-#define CFG_VER 41
+#define CFG_VER 42
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -145,12 +145,19 @@
 #define TELETEMP "/current.csv"
 #define SRTTEMP "/current.srt"
 
-#define DMA_BUFF_LEN 512 // used for I2S buffer size
+// 800 samples is one whole read per video frame at 20fps (16000/20), and a whole number
+// of reads at 10, 5, 4, 2 and 1 fps - the rates frameData uses. 512 divided none of them,
+// which is what produced the ragged 1024/2048 byte audio chunks
+#define DMA_BUFF_LEN 800 // used for I2S buffer size
 #define DMA_BUFF_CNT 4
 // PSRAM accumulator holding audio awaiting interleave into the AVI, one per ping pong half.
-// 16kB is 0.5 secs at 16kHz 16 bit mono. It is drained once per video frame, so it only has
-// to cover an SD write stall, not a whole recording
-#define AUD_CHUNK_SIZE (1024 * 16)
+// Drained at most once per video frame, so it has to hold one frame period of audio plus
+// slack for an SD write stall. 48kB is 1.5 secs at 16kHz 16 bit mono, which covers even
+// FPS 1 (32000 bytes per frame) with room to spare
+#define AUD_CHUNK_SIZE (1024 * 48)
+// audio accumulated before a chunk is written, 250ms at 16kHz. Above 4fps this means
+// fewer audio chunks than video frames, so the index needs well under 2 entries per frame
+#define AUD_CHUNK_MIN 8000
 #define MIC_GAIN_CENTER 3 // mid point
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3 
@@ -236,7 +243,8 @@ float* getMPUdata();
 int getInputPeripheral(uint8_t cmd);
 mjpegStruct getNextFrame(bool firstCall = false);
 bool getPIRval();
-size_t getAudioChunk(uint8_t** buf);
+size_t getAudioChunk(uint8_t** buf, size_t minLen);
+bool aviIndexNearFull(bool isTL = false);
 bool identifyBMx();
 bool identifyMPU(char* _mpuModel);
 void intercom();

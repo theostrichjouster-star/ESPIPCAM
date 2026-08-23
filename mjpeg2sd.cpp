@@ -25,9 +25,10 @@ bool forceRecord = false; // Recording enabled by rec button
 // motion detection parameters
 int moveStartChecks = 5; // checks per second for start motion
 int moveStopSecs = 2; // secs between each check for stop, also determines post motion time
-// each frame now also writes an audio chunk, so the index needs 2 entries per frame.
-// 5000 keeps the index buffer at 160kB, half what 20000 video only entries used
-int maxFrames = 5000; // maximum number of frames in video before auto close
+// audio chunks are written every AUD_CHUNK_MIN bytes rather than every frame, so above
+// 4fps the index needs well under 2 entries per frame. Overflowing it now closes the
+// recording rather than rebooting, so this is a target rather than a hard ceiling
+int maxFrames = 10000; // maximum number of frames in video before auto close
 
 // record timelapse avi independently of motion capture, file name has same format as avi except ends with T
 int tlSecsBetweenFrames; // too short interval will interfere with other activities
@@ -278,13 +279,13 @@ static void bufferedAviWrite(const uint8_t* data, size_t len) {
 }
 
 #if INCLUDE_AUDIO
-static uint32_t writeAudioChunk() {
-  // append the audio captured since the last video frame as an 01wb chunk, and return
-  // the ms spent writing it so the caller can include it in the SD storage total.
+static uint32_t writeAudioChunk(size_t minLen) {
+  // append accumulated audio as an 01wb chunk once there is at least minLen of it, and
+  // return the ms spent writing it so the caller can include it in the SD storage total.
   // Interleaving here replaces the temporary WAV file that used to be read back off
   // SD and rewritten into the AVI when the recording closed
   uint8_t* audBuf = NULL;
-  size_t audLen = getAudioChunk(&audBuf);
+  size_t audLen = getAudioChunk(&audBuf, minLen);
   if (!audLen) return 0;
   haveWav = true;
   // align end of chunk on 4 byte boundary for AVI
@@ -325,7 +326,7 @@ static void saveFrame(camera_fb_t* fb) {
   vidSize += jpegSize + CHUNK_HDR;
   frameCnt++;
 #if INCLUDE_AUDIO
-  wTime += writeAudioChunk(); // audio is an SD write too, so count it as storage time
+  wTime += writeAudioChunk(AUD_CHUNK_MIN); // audio is an SD write too, count it as storage time
 #endif
   wTimeTot += wTime;
   LOG_VRB("SD storage time %lu ms", wTime);
@@ -347,7 +348,7 @@ static bool closeAvi() {
   // stop the mic, then append whatever audio is still pending as a final 01wb chunk.
   // Must happen before the write buffer is flushed below
   finishAudioRecord(true);
-  writeAudioChunk();
+  writeAudioChunk(0); // 0 forces out the last partial chunk
 #endif
   // write remaining frame content to SD
   aviFile.write(sdWriteBuf, highPoint);
@@ -519,12 +520,17 @@ static boolean processFrame() {
     if (frameCnt < frameLimit) {
       dTimeTot += millis() - dTime;
       saveFrame(fb);
-      if (frameCnt >= frameLimit) {
+      // the index buffer is the real ceiling - below 4fps audio needs an entry per frame,
+      // so it can fill before frameLimit. Closing here yields a valid file, where
+      // overflowing it used to reboot the device in the middle of a recording
+      bool indexFull = aviIndexNearFull();
+      if (frameCnt >= frameLimit || indexFull) {
         // stop saving frames for this avi as limit reached
         isCapturing = forceRecord = false;
         if (!dashCamOn) {
           logLine();
-          LOG_WRN("Auto closed recording after %u frames", frameLimit);
+          if (indexFull) LOG_WRN("Auto closed recording after %u frames - AVI index full", frameCnt);
+          else LOG_WRN("Auto closed recording after %u frames", frameLimit);
         }
       }
     }

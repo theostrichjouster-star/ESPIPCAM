@@ -180,18 +180,25 @@ size_t updateWavHeader() {
 
 #ifdef ISCAM
 
-size_t getAudioChunk(uint8_t** buf) {
-  // called from saveFrame() in mjpeg2sd.cpp once per video frame.
-  // hands over whatever audio has accumulated since the last call and starts
-  // filling the other half of the ping pong pair
+size_t getAudioChunk(uint8_t** buf, size_t minLen) {
+  // called from saveFrame() in mjpeg2sd.cpp once per video frame, and again from
+  // closeAvi() with minLen 0 to force out whatever is left.
+  // Hands over the accumulated audio once there is at least minLen of it and starts
+  // filling the other half of the ping pong pair. Below minLen nothing is swapped, so
+  // the same half keeps filling and several video frames share one audio chunk
   if (audioChunk[0] == NULL) return 0;
   xSemaphoreTake(audioChunkMutex, portMAX_DELAY);
   uint8_t full = audioActive;
+  size_t len = audioChunkLen[full];
+  if (!len || len < minLen) {
+    xSemaphoreGive(audioChunkMutex);
+    return 0;
+  }
   audioActive ^= 1;
   audioChunkLen[audioActive] = 0; // the audio task starts appending here
   xSemaphoreGive(audioChunkMutex);
   *buf = audioChunk[full];
-  return audioChunkLen[full];
+  return len;
 }
 
 void startAudioRecord() {
