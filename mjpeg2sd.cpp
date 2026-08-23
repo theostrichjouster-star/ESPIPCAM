@@ -567,8 +567,11 @@ static void readSD() {
   uint32_t rTime = millis();
   // read to interim dram before copying to psram
   readLen = 0;
-  if (!stopPlayback) {
-    readLen = playbackFile.read(iSDbuffer + RAMSIZE + CHUNK_HDR, RAMSIZE);
+  if (!stopPlayback && playbackFile) {
+    // File::read() returns (size_t)-1 on an invalid file, which would reach
+    // memcpy() as a length of SIZE_MAX, so clamp it rather than trusting it
+    size_t bytesRead = playbackFile.read(iSDbuffer + RAMSIZE + CHUNK_HDR, RAMSIZE);
+    readLen = (bytesRead > RAMSIZE) ? 0 : bytesRead;
     LOG_VRB("SD read time %lu ms", millis() - rTime);
   }
   wTimeTot += millis() - rTime;
@@ -585,6 +588,13 @@ void openSDfile(const char* streamFile) {
     strcpy(aviFileName, streamFile);
     LOG_INF("Playing %s", aviFileName);
     playbackFile = STORAGE.open(aviFileName, FILE_READ);
+    if (!playbackFile) {
+      // eg a folder shortcut or deleted file was selected. Must bail out here -
+      // File::read() on an invalid file returns (size_t)-1, which readSD() would
+      // hand to memcpy() as a length
+      LOG_WRN("Playback refused - cannot open %s", aviFileName);
+      return;
+    }
     playbackFile.seek(AVI_HEADER_LEN, SeekSet); // skip over header
     playbackFPS(aviFileName);
     isPlaying = true; //playback status

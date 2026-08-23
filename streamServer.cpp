@@ -52,13 +52,21 @@ static void showPlayback(httpd_req_t* req) {
   esp_err_t res = ESP_OK; 
   stopPlaying();
   forcePlayback = true;
+  // doPlayback is a global already set by the sfile handler, so both failure paths
+  // below must clear it - otherwise a stale true falls through to openSDfile() with
+  // a file that cannot be opened, and File::read() then returns (size_t)-1
   if (STORAGE.exists(inFileName)) {
-    if (stopPlayback) LOG_WRN("Playback refused - capture in progress");
-    else {
+    if (stopPlayback) {
+      LOG_WRN("Playback refused - capture in progress");
+      doPlayback = false;
+    } else {
       LOG_INF("Playback enabled (SD file selected)");
       doPlayback = true;
     }
-  } else LOG_WRN("File %s doesn't exist when Playback requested", inFileName);
+  } else {
+    LOG_WRN("File %s doesn't exist when Playback requested", inFileName);
+    doPlayback = false;
+  }
 
   if (doPlayback) {
     // playback mjpeg from SD
