@@ -90,7 +90,7 @@
 // bumped to 40: the peripheral, RC, servo, photogrammetry, lamp and machine learning
 // config rows were removed (none of their code is compiled in), and wakeUse / teleInterval
 // moved group, so an existing configs.txt must be regenerated
-#define CFG_VER 42
+#define CFG_VER 43
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -245,6 +245,7 @@ mjpegStruct getNextFrame(bool firstCall = false);
 bool getPIRval();
 size_t getAudioChunk(uint8_t** buf, size_t minLen);
 bool aviIndexNearFull(bool isTL = false);
+bool videoSizeAllowed(uint8_t fsize);
 bool identifyBMx();
 bool identifyMPU(char* _mpuModel);
 void intercom();
@@ -354,6 +355,7 @@ extern uint8_t vidStreams;
 
 #ifndef AUXILIARY
 extern framesize_t maxFS;
+extern framesize_t maxVideoFS; // AVI recording cap, stills and time lapse are not capped
 #endif
 
 // buffers

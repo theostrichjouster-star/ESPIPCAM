@@ -227,6 +227,8 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     else {
       fsizePtr = intVal;
       if (fsizePtr > FRAMESIZE_SXGA) LOG_WRN("Motion detection not available as frame size %s too large", frameData[fsizePtr].frameSizeStr);
+      if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills and time lapse only, no AVI recording",
+        frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
 
       if (s) {
         res = s->set_framesize(s, (framesize_t)fsizePtr);

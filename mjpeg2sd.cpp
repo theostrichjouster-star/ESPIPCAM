@@ -97,7 +97,12 @@ bool timeLapseOn = false;
 int dashCamOn = 0; // whether to use / duration of dashcam style continuous recording
 
 #ifndef AUXILIARY
-framesize_t maxFS = FRAMESIZE_SVGA; // default
+framesize_t maxFS = FRAMESIZE_SVGA; // default, sizes the camera frame buffers
+// AVI recording is capped here, but the frame size setting itself is not - there is only
+// one global fsizePtr, and stills and time lapse read the same live frame, so capping the
+// setting would cap them too. Above this cap you still get full resolution stills and
+// time lapse, just no motion or forced AVI recording
+framesize_t maxVideoFS = FRAMESIZE_FHD;
 
 /**************** timers & ISRs ************************/
 
@@ -250,6 +255,14 @@ static void timeLapse(camera_fb_t* fb, bool tlStop = false) {
       }
     }
   } else frameCntTL = intervalCnt = 0;
+}
+
+bool videoSizeAllowed(uint8_t fsize) {
+  // framesize_t is not ordered by pixel count - P_HD (0.92MP), P_3MP (1.33MP) and P_FHD
+  // (2.07MP) all have higher enum values than FHD yet are no larger than it. Comparing
+  // enum indexes would wrongly block all three, so compare pixels
+  return (uint32_t)frameData[fsize].frameWidth * frameData[fsize].frameHeight
+      <= (uint32_t)frameData[maxVideoFS].frameWidth * frameData[maxVideoFS].frameHeight;
 }
 
 void keepFrame(camera_fb_t* fb) {
@@ -499,6 +512,13 @@ static boolean processFrame() {
   // recording status
   bool prevCapture = isCapturing;
   isCapturing = haveMotion | forceRecord;
+  if (isCapturing && !videoSizeAllowed(fsizePtr)) {
+    // refuse the recording, but leave stills and time lapse running at this size.
+    // If a recording was already open this closes it cleanly via the branch below
+    if (!prevCapture) LOG_WRN("Video recording unavailable at %s, above the %s cap - stills and time lapse are unaffected",
+      frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
+    isCapturing = forceRecord = false;
+  }
   if (isCapturing && !prevCapture) {
     // new movement has occurred or record button pressed, start recording
     stopPlaying(); // terminate any playback
