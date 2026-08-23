@@ -230,7 +230,7 @@ enum stepperModel {BYJ_48, BIPOLAR_8mm};
 // global app specific functions
 
 void appShutdown();
-void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL = false);
+void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL = false, uint32_t durationMs = 0);
 void buildAviIdx(size_t dataSize, bool isVid = true, bool isTL = false);
 void buzzerAlert(bool buzzerOn);
 bool checkAccelMove();

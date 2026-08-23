@@ -149,18 +149,35 @@ void prepAviIndex(bool isTL) {
   if (!isTL) audSize = audChunkCnt = 0;
 }
 
-void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL) {
+void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL, uint32_t durationMs) {
   // update AVI header template with file specific details
   size_t audCnt = isTL ? 0 : audChunkCnt; // timelapse never has audio
   size_t chunkCnt = frameCnt + audCnt;    // every chunk has a header and an index entry
   size_t aviSize = moviSize[isTL] + AVI_HEADER_LEN + ((CHUNK_HDR+IDX_ENTRY) * chunkCnt); // AVI content size
   // update aviHeader with relevant stats
   memcpy(aviHeader+4, &aviSize, 4);
-  uint32_t usecs = (uint32_t)round(1000000.0f / FPS); // usecs_per_frame
-  memcpy(aviHeader+0x20, &usecs, 4);
+  // Video timebase. dwScale and dwRate at 0x80 / 0x84 express the frame rate as a
+  // rational, so a capture that actually ran at eg 9.7fps is written as 9.7 rather than
+  // rounded to 10 and left to drift against the audio clock, which is exact at
+  // SAMPLE_RATE. Rounding cost up to 7% - 17 secs of drift over a 4 minute UXGA file.
+  // Timelapse keeps the integer form: its rate is chosen, not measured, so already exact
+  uint32_t usecs, dwScale, dwRate;
+  if (!isTL && durationMs && frameCnt) {
+    dwScale = durationMs;
+    dwRate = (uint32_t)frameCnt * 1000;
+    usecs = (uint32_t)(((uint64_t)durationMs * 1000) / frameCnt);
+  } else {
+    dwScale = 1;
+    dwRate = FPS;
+    usecs = (uint32_t)round(1000000.0f / FPS);
+  }
+  memcpy(aviHeader+0x20, &usecs, 4); // usecs_per_frame
   memcpy(aviHeader+0x30, &frameCnt, 2);
   memcpy(aviHeader+0x8C, &frameCnt, 2);
-  memcpy(aviHeader+0x84, &FPS, 1);
+  // both are 4 byte fields - the old code wrote a single byte of dwRate and never
+  // touched dwScale, which is what limited the rate to whole frames per second
+  memcpy(aviHeader+0x80, &dwScale, 4);
+  memcpy(aviHeader+0x84, &dwRate, 4);
   uint32_t dataSize = moviSize[isTL] + (chunkCnt * CHUNK_HDR) + 4;
   memcpy(aviHeader+0x12E, &dataSize, 4); // data size
 

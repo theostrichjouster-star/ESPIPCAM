@@ -363,7 +363,8 @@ static bool closeAvi() {
   float actualFPS = (1000.0f * (float)frameCnt) / ((float)vidDuration);
   uint8_t actualFPSint = (uint8_t)(lround(actualFPS));
   xSemaphoreTake(aviMutex, portMAX_DELAY);
-  buildAviHdr(actualFPSint, fsizePtr, frameCnt);
+  // pass the measured duration so the header carries the exact rate, not the rounded one
+  buildAviHdr(actualFPSint, fsizePtr, frameCnt, false, vidDuration);
   xSemaphoreGive(aviMutex);
   aviFile.seek(0, SeekSet); // start of file
   aviFile.write(aviHeader, AVI_HEADER_LEN);
