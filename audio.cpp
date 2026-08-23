@@ -84,7 +84,17 @@ static const char* micLabels[2] = {"PDM", "I2S"};
 #define psramMax (ONEMEG * 2)
 #endif
 #ifdef ISCAM
-static File wavFile;
+// Recorded audio is accumulated here and interleaved into the AVI as 01wb chunks by
+// saveFrame(), so no temporary WAV file is written to SD.
+// Ping pong pair: the audio task only ever appends to audioChunk[audioActive], and
+// getAudioChunk() flips which half that is before handing the full one to the capture
+// task. With a single consumer that is enough - the consumer has always finished with
+// the previous half before it asks for the next one, so no copy is needed under the lock
+static uint8_t* audioChunk[2] = {NULL, NULL};
+static size_t audioChunkLen[2] = {0, 0};
+static uint8_t audioActive = 0;
+static SemaphoreHandle_t audioChunkMutex = NULL;
+static size_t audioDropped = 0;
 #endif
 static uint8_t wavHeader[WAV_HDR_LEN] = { // WAV header template
   0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6D, 0x74, 0x20,
@@ -170,34 +180,44 @@ size_t updateWavHeader() {
 
 #ifdef ISCAM
 
+size_t getAudioChunk(uint8_t** buf) {
+  // called from saveFrame() in mjpeg2sd.cpp once per video frame.
+  // hands over whatever audio has accumulated since the last call and starts
+  // filling the other half of the ping pong pair
+  if (audioChunk[0] == NULL) return 0;
+  xSemaphoreTake(audioChunkMutex, portMAX_DELAY);
+  uint8_t full = audioActive;
+  audioActive ^= 1;
+  audioChunkLen[audioActive] = 0; // the audio task starts appending here
+  xSemaphoreGive(audioChunkMutex);
+  *buf = audioChunk[full];
+  return audioChunkLen[full];
+}
+
 void startAudioRecord() {
   // called from openAvi() in mjpeg2sd.cpp
-  // start audio recording and write recorded audio to SD card as WAV file 
-  // combined into AVI file as PCM channel on FTP upload or browser download
-  // so can be read by media players
-  if (micUse && micGain) {
-      wavFile = STORAGE.open(WAVTEMP, FILE_WRITE);
-      wavFile.write(wavHeader, WAV_HDR_LEN); 
-      micRecording = true;
-      totalSamples = 0;
+  // recorded audio is accumulated in PSRAM and interleaved into the AVI as it is
+  // written, so media players can read it without any post processing
+  if (micUse && micGain && audioChunk[0] != NULL) {
+    audioChunkLen[0] = audioChunkLen[1] = 0;
+    audioDropped = 0;
+    totalSamples = 0;
+    micRecording = true;
   } else {
     micRecording = false;
-    LOG_WRN("No ESP mic defined or mic is off");
+    if (micUse && micGain) LOG_WRN("No audio buffer allocated");
+    else LOG_WRN("No ESP mic defined or mic is off");
   }
 }
 
 void finishAudioRecord(bool isValid) {
-  // called from closeAvi() in mjpeg2sd.cpp
+  // called from closeAvi() in mjpeg2sd.cpp, which then drains the last pending
+  // audio into the AVI - so only stop the accumulation here, don't discard it
   if (micRecording) {
-    // finish a recording and save if valid
-    micRecording = false; 
+    micRecording = false;
     if (isValid) {
-      size_t dataBytes = updateWavHeader();
-      wavFile.seek(0, SeekSet); // start of file
-      wavFile.write(wavHeader, WAV_HDR_LEN); // overwrite default header
-      wavFile.close();  
       LOG_INF("Captured %d audio samples with gain factor %i", totalSamples, micGain - MIC_GAIN_CENTER);
-      LOG_INF("Saved %s to SD for %s", fmtSize(dataBytes + WAV_HDR_LEN), WAVTEMP);
+      if (audioDropped) LOG_WRN("Dropped %s of audio - capture could not keep up", fmtSize(audioDropped));
     }
   }
 }
@@ -209,9 +229,14 @@ static void camActions() {
     if (micRecording || !audioBytes || spkrRem) bytesRead = espMicInput(); // load sampleBuffer
     if (bytesRead) {
       if (micRecording) {
-        // record mic input to SD
-        wavFile.write((uint8_t*)sampleBuffer, bytesRead);
-        totalSamples += bytesRead / sampleWidth; 
+        // accumulate mic input for the next AVI audio chunk
+        xSemaphoreTake(audioChunkMutex, portMAX_DELAY);
+        if (audioChunkLen[audioActive] + bytesRead <= AUD_CHUNK_SIZE) {
+          memcpy(audioChunk[audioActive] + audioChunkLen[audioActive], sampleBuffer, bytesRead);
+          audioChunkLen[audioActive] += bytesRead;
+          totalSamples += bytesRead / sampleWidth;
+        } else audioDropped += bytesRead; // capture task stalled, audio will drift ahead of video
+        xSemaphoreGive(audioChunkMutex);
       }
       if (!audioBytes && audioBuffer) {
         // fill audioBuffer to send to NVR
@@ -299,6 +324,19 @@ void prepAudio() {
   wsBufferLen = 0;
   // Audio task only needed for esp microphone
   if (!micUse) return;
+  // must exist before the audio task starts appending to the accumulators
+  if (audioChunkMutex == NULL) audioChunkMutex = xSemaphoreCreateMutex();
+  if (audioChunk[0] == NULL && psramFound()) {
+    audioChunk[0] = (uint8_t*)ps_malloc(AUD_CHUNK_SIZE);
+    audioChunk[1] = (uint8_t*)ps_malloc(AUD_CHUNK_SIZE);
+    if (audioChunk[0] == NULL || audioChunk[1] == NULL) {
+      // both or neither - startAudioRecord() tests audioChunk[0]
+      free(audioChunk[0]);
+      free(audioChunk[1]);
+      audioChunk[0] = audioChunk[1] = NULL;
+      LOG_WRN("Unable to allocate audio buffers, recording will have no sound");
+    }
+  }
 #endif
   if (audioHandle == NULL) xTaskCreateWithCaps(audioTask, "audioTask", AUDIO_STACK_SIZE, NULL, AUDIO_PRI, &audioHandle, STACK_MEM);
 #ifdef ISCAM

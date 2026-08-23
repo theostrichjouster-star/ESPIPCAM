@@ -6,14 +6,16 @@ s60sc 2020, 2022
 */
 
 /* AVI file format:
+Video and audio chunks are interleaved, one audio chunk following each video frame,
+holding the audio captured while that frame was being written.
 header:
  310 bytes
 per jpeg:
  4 byte 00dc marker
  4 byte jpeg size
  jpeg frame content
-0-3 bytes filler to align on DWORD boundary
-per PCM (audio file)
+ 0-3 bytes filler to align on DWORD boundary
+per PCM (audio captured since the previous frame)
  4 byte 01wb marker
  4 byte pcm size
  pcm content
@@ -105,32 +107,44 @@ static const frameSizeStruct frameSizeData[] = {
 static size_t idxPtr[2];
 static size_t idxOffset[2];
 static size_t moviSize[2];
-static size_t audSize;
+static size_t audSize;      // running total of interleaved audio bytes
+static size_t audChunkCnt;  // number of 01wb chunks written
 static size_t indexLen[2];
-static File wavFile;
-bool haveSoundFile = false;
+
+static size_t idxBufSize(bool isTL) {
+  // motion capture interleaves one audio chunk per video frame, so it needs two index
+  // entries per frame, plus one more for the chunk written when the recording closes.
+  // Timelapse has no audio and needs one per frame. Both include space for the index
+  // header. The spare entries matter - overflowing this reboots the device mid recording
+  return (isTL ? maxFrames + 2 : (2 * maxFrames) + 8) * IDX_ENTRY;
+}
 
 void prepAviIndex(bool isTL) {
   // prep buffer to store index data, gets appended to end of file
-  if (idxBuf[isTL] == NULL) idxBuf[isTL] = (uint8_t*)ps_malloc((maxFrames+2)*IDX_ENTRY); // include space for header & audio index 
+  if (idxBuf[isTL] == NULL) idxBuf[isTL] = (uint8_t*)ps_malloc(idxBufSize(isTL));
   memcpy(idxBuf[isTL], idx1Buf, 4); // index header
   idxPtr[isTL] = CHUNK_HDR;  // leave 4 bytes for index size
   moviSize[isTL] = indexLen[isTL] = 0;
   idxOffset[isTL] = 4; // 4 byte offset
+  // audio only applies to motion capture, and timelapse can start midway through
+  // a motion recording, so leave the audio totals alone for isTL
+  if (!isTL) audSize = audChunkCnt = 0;
 }
 
 void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL) {
   // update AVI header template with file specific details
-  size_t aviSize = moviSize[isTL] + AVI_HEADER_LEN + ((CHUNK_HDR+IDX_ENTRY) * (frameCnt+(haveSoundFile?1:0))); // AVI content size 
+  size_t audCnt = isTL ? 0 : audChunkCnt; // timelapse never has audio
+  size_t chunkCnt = frameCnt + audCnt;    // every chunk has a header and an index entry
+  size_t aviSize = moviSize[isTL] + AVI_HEADER_LEN + ((CHUNK_HDR+IDX_ENTRY) * chunkCnt); // AVI content size
   // update aviHeader with relevant stats
   memcpy(aviHeader+4, &aviSize, 4);
-  uint32_t usecs = (uint32_t)round(1000000.0f / FPS); // usecs_per_frame 
-  memcpy(aviHeader+0x20, &usecs, 4); 
+  uint32_t usecs = (uint32_t)round(1000000.0f / FPS); // usecs_per_frame
+  memcpy(aviHeader+0x20, &usecs, 4);
   memcpy(aviHeader+0x30, &frameCnt, 2);
   memcpy(aviHeader+0x8C, &frameCnt, 2);
   memcpy(aviHeader+0x84, &FPS, 1);
-  uint32_t dataSize = moviSize[isTL] + ((frameCnt+(haveSoundFile?1:0)) * CHUNK_HDR) + 4; 
-  memcpy(aviHeader+0x12E, &dataSize, 4); // data size 
+  uint32_t dataSize = moviSize[isTL] + (chunkCnt * CHUNK_HDR) + 4;
+  memcpy(aviHeader+0x12E, &dataSize, 4); // data size
 
   // apply video framesize to avi header
   memcpy(aviHeader+0x40, frameSizeData[frameType].frameWidth, 2);
@@ -138,13 +152,15 @@ void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL) {
   memcpy(aviHeader+0x44, frameSizeData[frameType].frameHeight, 2);
   memcpy(aviHeader+0xAC, frameSizeData[frameType].frameHeight, 2);
 
+  // aviHeader is a template reused by every recording, so the stream count must be
+  // written on each pass - otherwise a silent file that follows one with audio
+  // inherits its 2 and declares an audio stream that isn't there
+  uint8_t numAviStreams = 1;
 #if INCLUDE_AUDIO
-  uint8_t withAudio = 2; // increase number of streams for audio
-  if (isTL) memcpy(aviHeader+0x100, zeroBuf, 4); // no audio for timelapse
-  else {
-    if (haveSoundFile) memcpy(aviHeader+0x38, &withAudio, 1); 
-    memcpy(aviHeader+0x100, &audSize, 4); // audio data size
-  }
+  if (audCnt) numAviStreams = 2;
+  // dwSampleSize for the audio stream is 2 and dwScale is 1, so dwLength is in samples
+  uint32_t audSamples = audCnt ? audSize / 2 : 0;
+  memcpy(aviHeader+0x100, &audSamples, 4);
   // apply audio details to avi header
   memcpy(aviHeader+0xF8, &SAMPLE_RATE, 4);
   uint32_t bytesPerSec = SAMPLE_RATE * 2;
@@ -154,6 +170,7 @@ void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL) {
 #else
   memcpy(aviHeader+0x100, zeroBuf, 4);
 #endif
+  memcpy(aviHeader+0x38, &numAviStreams, 1);
 
   // reset state for next recording
   moviSize[isTL] = idxPtr[isTL] = 0;
@@ -164,9 +181,15 @@ void buildAviIdx(size_t dataSize, bool isVid, bool isTL) {
   // build AVI video index into buffer - 16 bytes per frame
   // called from saveFrame() for each frame
   moviSize[isTL] += dataSize;
-  if (idxPtr[isTL] + IDX_ENTRY > (maxFrames+2)*IDX_ENTRY) doRestart("Need to reboot if max frames changed");
+  if (idxPtr[isTL] + IDX_ENTRY > idxBufSize(isTL)) doRestart("Need to reboot if max frames changed");
   if (isVid) memcpy(idxBuf[isTL]+idxPtr[isTL], dcBuf, 4);
-  else memcpy(idxBuf[isTL]+idxPtr[isTL], wbBuf, 4);
+  else {
+    memcpy(idxBuf[isTL]+idxPtr[isTL], wbBuf, 4);
+    if (!isTL) {
+      audSize += dataSize;
+      audChunkCnt++;
+    }
+  }
   memcpy(idxBuf[isTL]+idxPtr[isTL]+4, zeroBuf, 4);
   memcpy(idxBuf[isTL]+idxPtr[isTL]+8, &idxOffset[isTL], 4); 
   memcpy(idxBuf[isTL]+idxPtr[isTL]+12, &dataSize, 4); 
@@ -195,48 +218,9 @@ size_t writeAviIndex(byte* clientBuf, size_t buffSize, bool isTL) {
   
 void finalizeAviIndex(uint16_t frameCnt, bool isTL) {
   // update index with size
-  uint32_t sizeOfIndex = (frameCnt+(haveSoundFile?1:0))*IDX_ENTRY;
+  uint32_t sizeOfIndex = (frameCnt + (isTL ? 0 : audChunkCnt)) * IDX_ENTRY;
   memcpy(idxBuf[isTL]+4, &sizeOfIndex, 4); // size of index 
   indexLen[isTL] = sizeOfIndex + CHUNK_HDR;
   idxPtr[isTL] = 0; // pointer to index buffer
 }
 
-bool haveWavFile(bool isTL) {
-  haveSoundFile = false;
-  audSize = 0;
-#if INCLUDE_AUDIO
-  if (isTL) return false;
-  // check if wave file exists
-  if (!STORAGE.exists(WAVTEMP)) return false; 
-  // open it and get its size
-  wavFile = STORAGE.open(WAVTEMP, FILE_READ);
-  if (wavFile) {
-    // add sound file index
-    audSize = wavFile.size() - WAV_HDR_LEN;
-    buildAviIdx(audSize, false); 
-    // add sound file header    
-    wavFile.seek(WAV_HDR_LEN, SeekSet); // skip over header
-    haveSoundFile = true;
-  } 
-#endif
-  return haveSoundFile;
-}
-
-size_t writeWavFile(byte* clientBuf, size_t buffSize) {
-  // read in wav file and write to avi file
-  // called repeatedly from closeAvi() until return 0
-  static size_t offsetWav = CHUNK_HDR;
-  if (offsetWav) {
-    // add sound file header
-    memcpy(clientBuf, wbBuf, 4);
-    memcpy(clientBuf+4, &audSize, 4); 
-  } 
-  size_t readLen = wavFile.read(clientBuf+offsetWav, buffSize-offsetWav) + offsetWav; 
-  offsetWav = 0;
-  if (readLen) return readLen; 
-  // get here if finished
-  wavFile.close();
-  STORAGE.remove(WAVTEMP);
-  offsetWav = CHUNK_HDR;
-  return 0;
-}

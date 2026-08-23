@@ -25,7 +25,9 @@ bool forceRecord = false; // Recording enabled by rec button
 // motion detection parameters
 int moveStartChecks = 5; // checks per second for start motion
 int moveStopSecs = 2; // secs between each check for stop, also determines post motion time
-int maxFrames = 20000; // maximum number of frames in video before auto close
+// each frame now also writes an audio chunk, so the index needs 2 entries per frame.
+// 5000 keeps the index buffer at 160kB, half what 20000 video only entries used
+int maxFrames = 5000; // maximum number of frames in video before auto close
 
 // record timelapse avi independently of motion capture, file name has same format as avi except ends with T
 int tlSecsBetweenFrames; // too short interval will interfere with other activities
@@ -41,6 +43,7 @@ bool doRecording = true; // whether to capture to SD or not
 uint8_t xclkMhz = 20; // camera clock rate MHz
 bool doKeepFrame = false;
 static bool haveSrt = false;
+static bool haveWav = false; // set once an audio chunk has been interleaved, drives the _S name suffix
 char camModel[11];
 static int siodGpio = SIOD_GPIO_NUM;
 static int siocGpio = SIOC_GPIO_NUM;
@@ -148,6 +151,7 @@ static void openAvi() {
   // initialisation of counters
   startTime = millis();
   frameCnt = fTimeTot = wTimeTot = dTimeTot = vidSize = 0;
+  haveWav = false;
   highPoint = AVI_HEADER_LEN; // allot space for AVI header
   prepAviIndex();
 }
@@ -255,6 +259,51 @@ void keepFrame(camera_fb_t* fb) {
   }
 }
 
+static const uint8_t zeroFiller[3] = {0, 0, 0}; // DWORD alignment padding for AVI chunks
+
+static void bufferedAviWrite(const uint8_t* data, size_t len) {
+  // append to the SD write buffer, flushing whenever a full SD_WRITE_SIZE block is ready.
+  // every aviFile.write() is therefore SD_WRITE_SIZE and lands on a SD_WRITE_SIZE boundary,
+  // as openAvi() reserves the AVI header space inside the first buffer
+  while (len >= SD_WRITE_SIZE - highPoint) {
+    size_t take = SD_WRITE_SIZE - highPoint;
+    memcpy(sdWriteBuf + highPoint, data, take);
+    aviFile.write(sdWriteBuf, SD_WRITE_SIZE);
+    data += take;
+    len -= take;
+    highPoint = 0;
+  }
+  memcpy(sdWriteBuf + highPoint, data, len);
+  highPoint += len;
+}
+
+#if INCLUDE_AUDIO
+static uint32_t writeAudioChunk() {
+  // append the audio captured since the last video frame as an 01wb chunk, and return
+  // the ms spent writing it so the caller can include it in the SD storage total.
+  // Interleaving here replaces the temporary WAV file that used to be read back off
+  // SD and rewritten into the AVI when the recording closed
+  uint8_t* audBuf = NULL;
+  size_t audLen = getAudioChunk(&audBuf);
+  if (!audLen) return 0;
+  haveWav = true;
+  // align end of chunk on 4 byte boundary for AVI
+  uint16_t filler = (4 - (audLen & 0x00000003)) & 0x00000003;
+  size_t chunkLen = audLen + filler;
+  uint8_t hdrBuf[CHUNK_HDR];
+  memcpy(hdrBuf, wbBuf, 4);
+  memcpy(hdrBuf + 4, &chunkLen, 4);
+  uint32_t aTime = millis();
+  bufferedAviWrite(hdrBuf, CHUNK_HDR);
+  bufferedAviWrite(audBuf, audLen);
+  if (filler) bufferedAviWrite(zeroFiller, filler);
+  aTime = millis() - aTime;
+  buildAviIdx(chunkLen, false); // save avi index for audio chunk
+  vidSize += chunkLen + CHUNK_HDR;
+  return aTime;
+}
+#endif
+
 static void saveFrame(camera_fb_t* fb) {
   // save frame on SD card
   uint32_t fTime = millis();
@@ -262,36 +311,24 @@ static void saveFrame(camera_fb_t* fb) {
   uint16_t filler = (4 - (fb->len & 0x00000003)) & 0x00000003;
   size_t jpegSize = fb->len + filler;
   // add avi frame header
-  memcpy(sdWriteBuf + highPoint, dcBuf, 4);
-  memcpy(sdWriteBuf + highPoint + 4, &jpegSize, 4);
-  highPoint += CHUNK_HDR;
-  if (highPoint >= SD_WRITE_SIZE) {
-    // marker overflows buffer
-    highPoint -= SD_WRITE_SIZE;
-    aviFile.write(sdWriteBuf, SD_WRITE_SIZE);
-    // push overflow to buffer start
-    memcpy(sdWriteBuf, sdWriteBuf + SD_WRITE_SIZE, highPoint);
-  }
+  uint8_t hdrBuf[CHUNK_HDR];
+  memcpy(hdrBuf, dcBuf, 4);
+  memcpy(hdrBuf + 4, &jpegSize, 4);
+  bufferedAviWrite(hdrBuf, CHUNK_HDR);
   // add frame content
-  size_t jpegRemain = jpegSize;
   uint32_t wTime = millis();
-  while (jpegRemain >= SD_WRITE_SIZE - highPoint) {
-    // write to SD when SD_WRITE_SIZE is filled in buffer
-    memcpy(sdWriteBuf + highPoint, fb->buf + jpegSize - jpegRemain, SD_WRITE_SIZE - highPoint);
-    aviFile.write(sdWriteBuf, SD_WRITE_SIZE);
-    jpegRemain -= SD_WRITE_SIZE - highPoint;
-    highPoint = 0;
-  }
+  bufferedAviWrite(fb->buf, fb->len);
+  if (filler) bufferedAviWrite(zeroFiller, filler);
   wTime = millis() - wTime;
-  wTimeTot += wTime;
-  LOG_VRB("SD storage time %lu ms", wTime);
-  // whats left or small frame
-  memcpy(sdWriteBuf + highPoint, fb->buf + jpegSize - jpegRemain, jpegRemain);
-  highPoint += jpegRemain;
 
-  buildAviIdx(jpegSize); // save avi index for frame
+  buildAviIdx(jpegSize); // index the video frame before the audio chunk that follows it
   vidSize += jpegSize + CHUNK_HDR;
   frameCnt++;
+#if INCLUDE_AUDIO
+  wTime += writeAudioChunk(); // audio is an SD write too, so count it as storage time
+#endif
+  wTimeTot += wTime;
+  LOG_VRB("SD storage time %lu ms", wTime);
   fTime = millis() - fTime - wTime;
   fTimeTot += fTime;
   LOG_VRB("Frame processing time %lu ms", fTime);
@@ -306,21 +343,15 @@ static bool closeAvi() {
   LOG_VRB("Capture time %lu, min seconds: %u ", vidDurationSecs, minSeconds);
 
   cTime = millis();
+#if INCLUDE_AUDIO
+  // stop the mic, then append whatever audio is still pending as a final 01wb chunk.
+  // Must happen before the write buffer is flushed below
+  finishAudioRecord(true);
+  writeAudioChunk();
+#endif
   // write remaining frame content to SD
   aviFile.write(sdWriteBuf, highPoint);
   size_t readLen = 0;
-  bool haveWav = false;
-#if INCLUDE_AUDIO
-  // add wav file if exists
-  finishAudioRecord(true);
-  haveWav = haveWavFile();
-  if (haveWav) {
-    do {
-      readLen = writeWavFile(iSDbuffer, RAMSIZE);
-      aviFile.write(iSDbuffer, readLen);
-    } while (readLen > 0);
-  }
-#endif
   // save avi index
   finalizeAviIndex(frameCnt);
   do {

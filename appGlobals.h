@@ -90,7 +90,7 @@
 // bumped to 40: the peripheral, RC, servo, photogrammetry, lamp and machine learning
 // config rows were removed (none of their code is compiled in), and wakeUse / teleInterval
 // moved group, so an existing configs.txt must be regenerated
-#define CFG_VER 40
+#define CFG_VER 41
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -140,7 +140,6 @@
 #define SRT_EXT "srt"
 #define AVI_HEADER_LEN 310 // AVI header length
 #define CHUNK_HDR 8 // bytes per jpeg hdr in AVI 
-#define WAVTEMP "/current.wav"
 #define AVITEMP "/current.avi"
 #define TLTEMP "/current.tl"
 #define TELETEMP "/current.csv"
@@ -148,6 +147,10 @@
 
 #define DMA_BUFF_LEN 512 // used for I2S buffer size
 #define DMA_BUFF_CNT 4
+// PSRAM accumulator holding audio awaiting interleave into the AVI, one per ping pong half.
+// 16kB is 0.5 secs at 16kHz 16 bit mono. It is drained once per video frame, so it only has
+// to cover an SD write stall, not a whole recording
+#define AUD_CHUNK_SIZE (1024 * 16)
 #define MIC_GAIN_CENTER 3 // mid point
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3 
@@ -233,8 +236,7 @@ float* getMPUdata();
 int getInputPeripheral(uint8_t cmd);
 mjpegStruct getNextFrame(bool firstCall = false);
 bool getPIRval();
-
-bool haveWavFile(bool isTL = false);
+size_t getAudioChunk(uint8_t** buf);
 bool identifyBMx();
 bool identifyMPU(char* _mpuModel);
 void intercom();
@@ -284,7 +286,6 @@ void trackSteeering(int controlVal, bool steering);
 size_t updateWavHeader();
 size_t writeAviIndex(byte* clientBuf, size_t buffSize, bool isTL = false);
 bool writeUart(uint8_t cmd, uint32_t outputData);
-size_t writeWavFile(byte* clientBuf, size_t buffSize);
 
 #ifndef AUXILIARY
 bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly = false);
