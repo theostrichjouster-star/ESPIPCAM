@@ -649,11 +649,13 @@ mjpegStruct getNextFrame(bool firstCall) {
   static uint32_t hTime;
   static size_t remainingFrame;
   static size_t buffLen;
+  static bool skippingAudio; // stepping over an interleaved audio chunk
   const uint32_t dcVal = 0x63643030; // value of 00dc marker
+  const uint32_t wbVal = 0x62773130; // value of 01wb marker
   if (firstCall) {
     sTime = millis();
     hTime = millis();
-    remainingBuff = completedPlayback = false;
+    remainingBuff = completedPlayback = skippingAudio = false;
     frameCnt = remainingFrame = vidSize = buffOffset = 0;
     wTimeTot = fTimeTot = hTimeTot = tTimeTot = 1; // avoid divide by 0
   }
@@ -683,39 +685,53 @@ mjpegStruct getNextFrame(bool firstCall) {
     }
     mTime = millis();
     if (!remainingFrame) {
-      // at start of jpeg frame marker
+      // at start of a chunk marker - either a video frame or an interleaved audio chunk
       uint32_t inVal;
       memcpy(&inVal, iSDbuffer + buffOffset, 4);
-      if (inVal != dcVal) {
-        // reached end of frames to stream
+      if (inVal != dcVal && inVal != wbVal) {
+        // reached end of chunks to stream
         mjpegData.buffLen = buffOffset; // remainder of final jpeg
         mjpegData.buffOffset = 0; // from start of buff
         mjpegData.jpegSize = 0;
         stopPlayback = completedPlayback = true;
         return mjpegData;
       } else {
-        // get jpeg frame size
-        uint32_t jpegSize;
-        memcpy(&jpegSize, iSDbuffer + buffOffset + 4, 4);
-        remainingFrame = jpegSize;
-        vidSize += jpegSize;
+        // get chunk size
+        uint32_t chunkSize;
+        memcpy(&chunkSize, iSDbuffer + buffOffset + 4, 4);
+        remainingFrame = chunkSize;
+        vidSize += chunkSize; // all bytes read off SD, for the read speed stat
         buffOffset += CHUNK_HDR; // skip over marker
-        mjpegData.jpegSize = jpegSize; // signal start of jpeg to webServer
-        mTime = millis();
-        // wait on playbackSemaphore for rate control
-        xSemaphoreTake(playbackSemaphore, portMAX_DELAY);
-        LOG_VRB("frame timer wait %lu ms", millis() - mTime);
-        tTimeTot += millis() - mTime;
-        frameCnt++;
-        showProgress();
+        skippingAudio = (inVal == wbVal);
+        if (skippingAudio) mjpegData.jpegSize = 0; // audio is stepped over, never sent on
+        else {
+          mjpegData.jpegSize = chunkSize; // signal start of jpeg to webServer
+          mTime = millis();
+          // wait on playbackSemaphore for rate control. Video frames only - letting an
+          // audio chunk take a frame's worth of delay would halve the playback rate
+          xSemaphoreTake(playbackSemaphore, portMAX_DELAY);
+          LOG_VRB("frame timer wait %lu ms", millis() - mTime);
+          tTimeTot += millis() - mTime;
+          frameCnt++;
+          showProgress();
+        }
       }
     } else mjpegData.jpegSize = 0; // within frame,
     // determine amount of data to send to webServer
-    if (buffOffset > RAMSIZE) mjpegData.buffLen = 0; // special case
-    else mjpegData.buffLen = (remainingFrame > buffLen - buffOffset) ? buffLen - buffOffset : remainingFrame;
+    size_t chunkPart;
+    if (buffOffset > RAMSIZE) chunkPart = 0; // special case
+    else chunkPart = (remainingFrame > buffLen - buffOffset) ? buffLen - buffOffset : remainingFrame;
     mjpegData.buffOffset = buffOffset; // from here
-    remainingFrame -= mjpegData.buffLen;
-    buffOffset += mjpegData.buffLen;
+    remainingFrame -= chunkPart;
+    buffOffset += chunkPart;
+    mjpegData.buffLen = skippingAudio ? 0 : chunkPart;
+    if (skippingAudio) {
+      // showPlayback() ends playback on (buffLen == 0 && buffOffset == 0), and a cluster
+      // loaded part way through an audio chunk sets buffOffset to 0 - so substitute a non
+      // zero value, which the caller never dereferences while buffLen is 0
+      if (!mjpegData.buffOffset) mjpegData.buffOffset = CHUNK_HDR;
+      if (!remainingFrame) skippingAudio = false; // whole chunk stepped over
+    }
     if (buffOffset >= buffLen) remainingBuff = false;
   } else {
     // finished, close SD file used for streaming
