@@ -60,7 +60,11 @@ static uint32_t sTime; // file streaming time
 static uint32_t frameInterval; // units of us between frames
 
 // SD card storage
+// iSDbuffer is used by the playback path, which treats the upper half as a double
+// buffer, so it must stay at (RAMSIZE + CHUNK_HDR) * 2. The AVI capture path has its
+// own single buffer so the write block can be enlarged without paying twice for it.
 uint8_t iSDbuffer[(RAMSIZE + CHUNK_HDR) * 2];
+static uint8_t sdWriteBuf[SD_WRITE_SIZE + CHUNK_HDR];
 static size_t highPoint;
 static File aviFile;
 static char aviFileName[FILE_NAME_LEN];
@@ -258,31 +262,31 @@ static void saveFrame(camera_fb_t* fb) {
   uint16_t filler = (4 - (fb->len & 0x00000003)) & 0x00000003;
   size_t jpegSize = fb->len + filler;
   // add avi frame header
-  memcpy(iSDbuffer + highPoint, dcBuf, 4);
-  memcpy(iSDbuffer + highPoint + 4, &jpegSize, 4);
+  memcpy(sdWriteBuf + highPoint, dcBuf, 4);
+  memcpy(sdWriteBuf + highPoint + 4, &jpegSize, 4);
   highPoint += CHUNK_HDR;
-  if (highPoint >= RAMSIZE) {
+  if (highPoint >= SD_WRITE_SIZE) {
     // marker overflows buffer
-    highPoint -= RAMSIZE;
-    aviFile.write(iSDbuffer, RAMSIZE);
+    highPoint -= SD_WRITE_SIZE;
+    aviFile.write(sdWriteBuf, SD_WRITE_SIZE);
     // push overflow to buffer start
-    memcpy(iSDbuffer, iSDbuffer + RAMSIZE, highPoint);
+    memcpy(sdWriteBuf, sdWriteBuf + SD_WRITE_SIZE, highPoint);
   }
   // add frame content
   size_t jpegRemain = jpegSize;
   uint32_t wTime = millis();
-  while (jpegRemain >= RAMSIZE - highPoint) {
-    // write to SD when RAMSIZE is filled in buffer
-    memcpy(iSDbuffer + highPoint, fb->buf + jpegSize - jpegRemain, RAMSIZE - highPoint);
-    aviFile.write(iSDbuffer, RAMSIZE);
-    jpegRemain -= RAMSIZE - highPoint;
+  while (jpegRemain >= SD_WRITE_SIZE - highPoint) {
+    // write to SD when SD_WRITE_SIZE is filled in buffer
+    memcpy(sdWriteBuf + highPoint, fb->buf + jpegSize - jpegRemain, SD_WRITE_SIZE - highPoint);
+    aviFile.write(sdWriteBuf, SD_WRITE_SIZE);
+    jpegRemain -= SD_WRITE_SIZE - highPoint;
     highPoint = 0;
   }
   wTime = millis() - wTime;
   wTimeTot += wTime;
   LOG_VRB("SD storage time %lu ms", wTime);
   // whats left or small frame
-  memcpy(iSDbuffer + highPoint, fb->buf + jpegSize - jpegRemain, jpegRemain);
+  memcpy(sdWriteBuf + highPoint, fb->buf + jpegSize - jpegRemain, jpegRemain);
   highPoint += jpegRemain;
 
   buildAviIdx(jpegSize); // save avi index for frame
@@ -303,7 +307,7 @@ static bool closeAvi() {
 
   cTime = millis();
   // write remaining frame content to SD
-  aviFile.write(iSDbuffer, highPoint);
+  aviFile.write(sdWriteBuf, highPoint);
   size_t readLen = 0;
   bool haveWav = false;
 #if INCLUDE_AUDIO

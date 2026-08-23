@@ -128,6 +128,10 @@
 // image being handed to Update.begin(), which would brick the running partition
 #define MIN_OTA_IMAGE_SIZE (64 * 1024)
 #define RAMSIZE (1024 * 8) // set this to multiple of SD card sector size (512 or 1024 bytes)
+// SD write block for the AVI capture path only, kept separate from RAMSIZE because
+// iSDbuffer is double sized for the playback path - see sdWriteBuf in mjpeg2sd.cpp.
+// Must be a multiple of the SD card sector size (512 or 1024 bytes)
+#define SD_WRITE_SIZE (1024 * 16)
 #define CHUNKSIZE (1024 * 4)
 #define ISCAM // cam specific code in generic cpp files
 
