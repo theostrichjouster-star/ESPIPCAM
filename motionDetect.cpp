@@ -208,7 +208,7 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   }
   size_t RESIZE_DIM_SQ = (RESIZE_DIM * RESIZE_DIM); // pixels in bitmap
   
-  if (fsizePtr > FRAMESIZE_SXGA) return false;
+  if (!motionSizeAllowed(fsizePtr)) return false; // pixel count, not enum index
   uint32_t dTime = millis();
   uint32_t lux = 0;
   static uint32_t motionCnt = 0;
@@ -216,7 +216,11 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   static uint8_t scaling, downsize;
   static uint16_t reducer;
   static int sampleWidth = 0, sampleHeight = 0;
-  static uint8_t* rgbBuf = (uint8_t*)heap_caps_aligned_calloc(16, 1, frameData[FRAMESIZE_SXGA].frameWidth * frameData[FRAMESIZE_SXGA].frameHeight * RGB888_BYTES / 8, MALLOC_CAP_SPIRAM); // must be 16 byte aligned. Max size, no need to free
+  // sized from the pixel cap, not from a framesize index. The old expression was SXGA
+  // pixels * 3 / 8, which over allocated by 8x - that accident was the only thing making
+  // frames above SXGA safe to decode. Deriving it from the cap is correct by construction
+  // and frees ~432kB of PSRAM (491,520 down to 49,344). 16 byte aligned, no need to free
+  static uint8_t* rgbBuf = (uint8_t*)heap_caps_aligned_calloc(16, 1, MOTION_RGB_BUF_SIZE, MALLOC_CAP_SPIRAM);
  #if INCLUDE_NEW_JPG
   static struct esp_jpeg_stream jpegHandle = {0};
   static uint8_t* jpgBuf = (uint8_t*)ps_malloc(RESIZE_DIM_SQ * RGB888_BYTES);
@@ -231,12 +235,24 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
     stride = (colorDepth == RGB888_BYTES) ? GRAYSCALE_BYTES : RGB888_BYTES; // stride is inverse of colorDepth
     sampleWidth = frameData[fsizePtr].frameWidth / downsize;
     sampleHeight = frameData[fsizePtr].frameHeight / downsize;
+    // the decoder writes straight into rgbBuf, so refuse rather than overflow it. Must
+    // test the MCU padded dimensions, not the nominal ones - FHD writes 240x136 while
+    // frameData says 1920x1080, and checking the nominal 240x135 misses the overrun
+    size_t padW = ((frameData[fsizePtr].frameWidth + MOTION_MCU_PX - 1) / MOTION_MCU_PX * MOTION_MCU_PX) / downsize;
+    size_t padH = ((frameData[fsizePtr].frameHeight + MOTION_MCU_PX - 1) / MOTION_MCU_PX * MOTION_MCU_PX) / downsize;
+    if (padW * padH * RGB888_BYTES > MOTION_RGB_BUF_SIZE) {
+      LOG_WRN("Motion bitmap %ux%u for %s needs %u bytes, buffer is %u - detection disabled, lower its scaleFactor",
+        (unsigned)padW, (unsigned)padH, frameData[fsizePtr].frameSizeStr,
+        (unsigned)(padW * padH * RGB888_BYTES), (unsigned)MOTION_RGB_BUF_SIZE);
+      sampleWidth = sampleHeight = 0;
+    }
 #if INCLUDE_NEW_JPG
     jpg2rgbClose(&jpegHandle);
     jpgReduce(fb->width, fb->height, downsize, &sampleWidth, &sampleHeight);
     if (!jpg2rgbOpen(&jpegHandle, sampleWidth, sampleHeight)) return motionStatus;
 #endif
   }
+  if (!sampleWidth || !sampleHeight) return motionStatus; // refused by the size check above
 #if INCLUDE_NEW_JPG
   if (!jpg2rgb(&jpegHandle, fb->buf, fb->len, rgbBuf)) return motionStatus;
 #else

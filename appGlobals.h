@@ -162,6 +162,29 @@
 // audio accumulated before a chunk is written, 250ms at 16kHz. Above 4fps this means
 // fewer audio chunks than video frames, so the index needs well under 2 entries per frame
 #define AUD_CHUNK_MIN 8000
+
+// Largest frame motion detection will process, as a pixel count rather than a framesize_t
+// index - framesize_t is not ordered by size, so an index test blocks P_HD (0.92MP)
+// despite it being smaller than SXGA.
+// The value is HD, and it is set by measurement not by preference. Decoding a frame at or
+// above roughly 1.3MP hard hangs the board - no HTTP, no ping, no serial, no panic, no
+// reboot - intermittently. FHD survived 153 checks once and died in under 10 another time.
+// Ruled out: heap and PSRAM exhaustion, duty cycle (VGA runs 1.28x over its frame interval
+// and is fine), check duration (P_HD takes 331ms and is fine), and the frame buffer leak
+// fixed in processFrame(). Root cause is still unknown. Every size at or below this ran
+// hundreds of checks without incident, so the cap stays here until that is understood.
+// This is lower than the maxVideoFS video cap on purpose: recording a size and running
+// motion detection on it are separate permissions.
+#define MOTION_MAX_PIXELS 921600UL
+// rgbBuf holds the decoded motion bitmap. Sizing this from the nominal frame dimensions
+// is wrong: the decoder pads width and height up to the 16 pixel MCU grid before scaling,
+// so SVGA 800x600 becomes 800x608 and decodes at 1/8 to 100x76, not 100x75. The margin
+// below covers that padding, and checkMotion() range checks the padded dimensions too.
+// MOTION_MAX_PIXELS/64 is the 1/8 case; sizes that use a smaller scaleFactor decode a
+// larger fraction of a smaller frame and still land well under it. Worst case across
+// everything within the cap is HD and P_HD at 160x90 and 90x160, 43,200 bytes of 49,344
+#define MOTION_MCU_PX 16 // jpeg minimum coded unit, 4:2:0
+#define MOTION_RGB_BUF_SIZE (((MOTION_MAX_PIXELS / 64) + 2048) * RGB888_BYTES)
 #define MIC_GAIN_CENTER 3 // mid point
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3 
@@ -250,6 +273,8 @@ bool getPIRval();
 size_t getAudioChunk(uint8_t** buf, size_t minLen);
 bool aviIndexNearFull(bool isTL = false);
 bool videoSizeAllowed(uint8_t fsize);
+bool motionSizeAllowed(uint8_t fsize);
+void dumpMotionStats();
 bool identifyBMx();
 bool identifyMPU(char* _mpuModel);
 void intercom();
@@ -551,11 +576,14 @@ struct frameStruct {
 //
 // scaleFactor is passed straight to the jpeg decoder as jpg_scale_t, which only defines
 // 0..3 (JPG_SCALE_NONE..JPG_SCALE_8X). A 4 is out of range and the decode fails outright,
-// so any size motion detection is allowed to see must be 3 or below. UXGA and P_FHD are
-// the only two within the FHD pixel cap that were set to 4, and both fit rgbBuf easily at
-// 1/8 - 90,000 and 97,200 bytes against 491,520 - so they are 3 here. The rows above the
-// cap keep 4; they are unreachable, as video recording refuses them (maxVideoFS) and
-// motion detection refuses them on pixel count.
+// so any size motion detection is allowed to see must be 3 or below. Every row at or below
+// the MOTION_MAX_PIXELS cap is 3 or below, so no reachable decode can fail that way.
+// UXGA and P_FHD are 3 rather than 4 as a leftover from when the motion cap was FHD. They
+// now sit above the motion cap but below the video cap, so they can be recorded but never
+// decoded, and their scaleFactor is unused - left at 3 so the rows stay correct if the cap
+// is ever raised. Note they would NOT fit rgbBuf at 1/8 (90,000 and 97,200 bytes against
+// 49,344), which is what motionSizeAllowed() and the padded range check in checkMotion()
+// are there to prevent. The rows above the video cap keep 4 and are unreachable entirely.
 const frameStruct frameData[] = {
   {"96X96", 96, 96, 18, 1, 1},     // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160)
   {"QQVGA", 160, 120, 18, 1, 1},   // measured 19.7 flat out

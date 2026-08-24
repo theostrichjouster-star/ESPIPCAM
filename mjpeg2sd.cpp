@@ -56,6 +56,12 @@ static uint32_t vidSize; // total video size
 static uint16_t frameCnt;
 static uint32_t startTime; // total overall time
 static uint32_t dTimeTot; // total frame decode/monitor time
+// dTimeTot starts before esp_camera_fb_get(), so it bundles the wait for a frame in with
+// the motion check and cannot be used to size detection cost - a stalled sensor or SD
+// card shows up there as "monitoring time". These isolate the checkMotion() call itself
+static uint32_t mTimeTot;  // time actually spent in motion checks, in microseconds
+static uint32_t mCheckCnt; // number of motion checks performed
+static uint32_t badFrameCnt; // frames rejected as zero length or oversized
 static uint32_t fTimeTot; // total frame buffering time
 static uint32_t wTimeTot; // total SD write time
 static uint32_t oTime; // file opening time
@@ -265,6 +271,37 @@ bool videoSizeAllowed(uint8_t fsize) {
       <= (uint32_t)frameData[maxVideoFS].frameWidth * frameData[maxVideoFS].frameHeight;
 }
 
+bool motionSizeAllowed(uint8_t fsize) {
+  // was fsizePtr > FRAMESIZE_SXGA, which blocked P_HD (0.92MP) even though it is smaller
+  // than SXGA (1.31MP) - framesize_t is ordered by neither width nor pixel count. Same
+  // pixel limit as video, so anything that can be recorded can also be detected on
+  return (uint32_t)frameData[fsize].frameWidth * frameData[fsize].frameHeight <= MOTION_MAX_PIXELS;
+}
+
+void dumpMotionStats() {
+  // on demand, so the idle (not recording) cost can be measured - that is the steady
+  // state load, and it is when doMonitor() runs checks most often
+  uint16_t checkRate = FPS / moveStartChecks;
+  if (!checkRate) checkRate = 1;
+  float perSec = (float)FPS / checkRate;
+  LOG_INF("******** Motion detection stats ********");
+  LOG_INF("Frame size: %s (%ux%u), app FPS %u, enabled: %s", frameData[fsizePtr].frameSizeStr,
+    frameData[fsizePtr].frameWidth, frameData[fsizePtr].frameHeight, FPS,
+    motionSizeAllowed(fsizePtr) ? "yes" : "no - above pixel cap");
+  LOG_INF("moveStartChecks %d -> check every %u frame(s) = %0.1f checks/sec", moveStartChecks, checkRate, perSec);
+  if (mCheckCnt) {
+    float perCheck = (float)mTimeTot / mCheckCnt / 1000.0f; // us -> ms
+    LOG_INF("%lu checks, %lu ms total, %0.2f ms per check", mCheckCnt, mTimeTot / 1000, perCheck);
+    LOG_INF("Detection duty cycle: %0.1f%% of wall clock", perCheck * perSec / 10.0f);
+  } else LOG_WRN("No checks recorded - motion off, night gated, or size above cap");
+  LOG_INF("Light level %u, night %s (lswitch %u)", lightLevel, nightTime ? "yes" : "no", nightSwitch);
+  // any nonzero count here used to leak a frame buffer permanently, FB_CNT of them
+  // being enough to wedge the capture task
+  LOG_INF("Bad frames discarded: %lu (of %d buffers)", badFrameCnt, FB_CNT);
+  LOG_INF("***************************************");
+  mTimeTot = mCheckCnt = badFrameCnt = 0; // reset the measurement window
+}
+
 void keepFrame(camera_fb_t* fb) {
   // keep required frame for external server alert
   if (fb->len < maxAlertBuffSize && alertBuffer != NULL) {
@@ -463,7 +500,18 @@ static boolean processFrame() {
   uint32_t dTime = millis();
 
   camera_fb_t* fb = esp_camera_fb_get();
-  if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) return false;
+  if (fb == NULL) return false;
+  if (!fb->len || fb->len > maxFrameBuffSize) {
+    // Must hand the buffer back even when rejecting the frame. There are only FB_CNT of
+    // them and the driver never reclaims one that is still checked out, so a handful of
+    // bad frames leaves esp_camera_fb_get() with nothing to return and the capture task
+    // wedges for good. Bad frames get more likely at large frame sizes, where a slow
+    // motion check holds a buffer for longer than the sensor's frame interval
+    badFrameCnt++;
+    LOG_VRB("Discarded bad frame, len %u", fb->len);
+    esp_camera_fb_return(fb);
+    return false;
+  }
   timeLapse(fb);
 
   for (int i = 0; i < vidStreams; i++) {
@@ -482,8 +530,11 @@ static boolean processFrame() {
   int reasonId = 0;
   bool prevMotion = haveMotion;
   if (doMonitor(doRecording ? isCapturing : dbgMotion ? false : true)) {
+    uint32_t mTime = micros(); // micros, as a check can be only a few ms
     if (useMotion && checkMotion(fb, isCapturing)) reasonId = 1; // check 1 in N frames
     if (!useMotion) checkMotion(fb, false, true); // calc light level only
+    mTimeTot += micros() - mTime;
+    mCheckCnt++;
 #if INCLUDE_PERIPH
     if (pirUse && getPIRval()) reasonId = 2;
 #endif

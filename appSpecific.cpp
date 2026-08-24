@@ -220,13 +220,14 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   // camera settings
   // diagnostics - no config row, so nothing is persisted and CFG_VER is unaffected
   else if (!strcmp(variable, "dumpCam")) dumpCamRegs();
+  else if (!strcmp(variable, "motionStats")) dumpMotionStats();
   else if (!strcmp(variable, "camPll")) setCamPll(value);
   else if (!strcmp(variable, "xclkMhz")) xclkMhz = intVal;
   else if (!strcmp(variable, "framesize")) {
     if (intVal > maxFS && fromUser) LOG_WRN("Frame size %s too large for %s PSRAM ", frameData[intVal].frameSizeStr, fmtSize(ESP.getPsramSize()));
     else {
       fsizePtr = intVal;
-      if (fsizePtr > FRAMESIZE_SXGA) LOG_WRN("Motion detection not available as frame size %s too large", frameData[fsizePtr].frameSizeStr);
+      if (!motionSizeAllowed(fsizePtr)) LOG_WRN("Motion detection not available as frame size %s too large", frameData[fsizePtr].frameSizeStr);
       if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills and time lapse only, no AVI recording",
         frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
 
