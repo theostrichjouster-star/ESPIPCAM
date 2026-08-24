@@ -30,11 +30,6 @@ int moveStopSecs = 2; // secs between each check for stop, also determines post 
 // recording rather than rebooting, so this is a target rather than a hard ceiling
 int maxFrames = 10000; // maximum number of frames in video before auto close
 
-// record timelapse avi independently of motion capture, file name has same format as avi except ends with T
-int tlSecsBetweenFrames; // too short interval will interfere with other activities
-int tlDurationMins; // a new file starts when previous ends
-int tlPlaybackFPS;  // rate to playback the timelapse, min 1
-
 // status & control fields
 uint8_t FPS = 0;
 bool nightTime = false;
@@ -99,15 +94,14 @@ SemaphoreHandle_t aviMutex = NULL;
 static volatile bool isPlaying = false; // controls playback on app
 bool isCapturing = false;
 bool stopPlayback = false; // controls if playback allowed
-bool timeLapseOn = false;
 int dashCamOn = 0; // whether to use / duration of dashcam style continuous recording
 
 #ifndef AUXILIARY
 framesize_t maxFS = FRAMESIZE_SVGA; // default, sizes the camera frame buffers
 // AVI recording is capped here, but the frame size setting itself is not - there is only
-// one global fsizePtr, and stills and time lapse read the same live frame, so capping the
-// setting would cap them too. Above this cap you still get full resolution stills and
-// time lapse, just no motion or forced AVI recording
+// one global fsizePtr, and stills read the same live frame, so capping the setting would
+// cap them too. Above this cap you still get full resolution stills, just no motion or
+// forced AVI recording
 framesize_t maxVideoFS = FRAMESIZE_FHD;
 
 /**************** timers & ISRs ************************/
@@ -176,91 +170,6 @@ static inline bool doMonitor(bool capturing) {
   if (!checkRate) checkRate = 1;
   if (++motionCnt / checkRate) motionCnt = 0; // time to check for motion
   return !(bool)motionCnt;
-}
-
-static void timeLapse(camera_fb_t* fb, bool tlStop = false) {
-  // record a time lapse avi
-  // Note that if FPS changed during time lapse recording,
-  //  the time lapse counters wont be modified
-  static int frameCntTL, requiredFrames, intervalCnt = 0;
-  static int intervalMark = tlSecsBetweenFrames * saveFPS;
-  static File tlFile;
-  static char TLname[FILE_NAME_LEN];
-  if (tlStop) {
-    // force save of file on controlled shutdown
-    intervalCnt = 0;
-    requiredFrames = frameCntTL - 1;
-  }
-  if (timeLapseOn) {
-    if (timeSynchronized) {
-      if (!frameCntTL) {
-        // initialise time lapse avi
-        requiredFrames = tlDurationMins * 60 / tlSecsBetweenFrames;
-        if (requiredFrames > maxFrames) {
-          LOG_WRN("Frames required for timelapse %u reduced to max frame limit %u", requiredFrames, maxFrames);
-          requiredFrames = maxFrames;
-        }
-        dateFormat(partName, sizeof(partName), true);
-        STORAGE.mkdir(partName); // make date folder if not present
-        dateFormat(partName, sizeof(partName), false);
-        int tlen = snprintf(TLname, FILE_NAME_LEN - 1, "%s_%s_%u_%u_T.%s",
-                            partName, frameData[fsizePtr].frameSizeStr, tlPlaybackFPS, tlDurationMins, AVI_EXT);
-        if (tlen > FILE_NAME_LEN - 1) LOG_WRN("file name truncated");
-        if (STORAGE.exists(TLTEMP)) STORAGE.remove(TLTEMP);
-        tlFile = STORAGE.open(TLTEMP, FILE_WRITE);
-        tlFile.write(aviHeader, AVI_HEADER_LEN); // space for header
-        prepAviIndex(true);
-        LOG_INF("Started time lapse file %s, duration %u mins, for %u frames",  TLname, tlDurationMins, requiredFrames);
-        frameCntTL++; // to stop re-entering
-      }
-      // switch on light before capture frame if nightTime
-#if INCLUDE_PERIPH
-      if (nightTime && intervalCnt == intervalMark - (saveFPS / 2)) setLamp(lampLevel);
-#endif
-      if (intervalCnt > intervalMark) {
-        // save this frame to time lapse avi
-#if INCLUDE_PERIPH
-        if (!lampNight) setLamp(0);
-#endif
-        uint8_t hdrBuff[CHUNK_HDR];
-        memcpy(hdrBuff, dcBuf, 4);
-        // align end of jpeg on 4 byte boundary for AVI
-        uint16_t filler = (4 - (fb->len & 0x00000003)) & 0x00000003;
-        uint32_t jpegSize = fb->len + filler;
-        memcpy(hdrBuff + 4, &jpegSize, 4);
-        tlFile.write(hdrBuff, CHUNK_HDR); // jpeg frame details
-        tlFile.write(fb->buf, jpegSize);
-        buildAviIdx(jpegSize, true, true); // save avi index for frame
-        frameCntTL++;
-        intervalCnt = 0;
-        intervalMark = tlSecsBetweenFrames * saveFPS;  // recalc in case FPS changed
-      }
-      intervalCnt++;
-      if (frameCntTL > requiredFrames) {
-        // finish timelapse recording
-        xSemaphoreTake(aviMutex, portMAX_DELAY);
-        buildAviHdr(tlPlaybackFPS, fsizePtr, --frameCntTL, true);
-        xSemaphoreGive(aviMutex);
-        // add index
-        finalizeAviIndex(frameCntTL, true);
-        size_t idxLen = 0;
-        do {
-          idxLen = writeAviIndex(iSDbuffer, RAMSIZE, true);
-          tlFile.write(iSDbuffer, idxLen);
-        } while (idxLen > 0);
-        // add header
-        tlFile.seek(0, SeekSet); // start of file
-        tlFile.write(aviHeader, AVI_HEADER_LEN);
-        tlFile.close();
-        STORAGE.rename(TLTEMP, TLname);
-        frameCntTL = intervalCnt = 0;
-        LOG_INF("Finished time lapse: %s", TLname);
-#if INCLUDE_FTP_HFS
-        if (autoUpload) fsStartTransfer(TLname); // Transfer it to remote ftp server if requested
-#endif
-      }
-    }
-  } else frameCntTL = intervalCnt = 0;
 }
 
 bool videoSizeAllowed(uint8_t fsize) {
@@ -414,7 +323,7 @@ static bool closeAvi() {
   uint8_t actualFPSint = (uint8_t)(lround(actualFPS));
   xSemaphoreTake(aviMutex, portMAX_DELAY);
   // pass the measured duration so the header carries the exact rate, not the rounded one
-  buildAviHdr(actualFPSint, fsizePtr, frameCnt, false, vidDuration);
+  buildAviHdr(actualFPSint, fsizePtr, frameCnt, vidDuration);
   xSemaphoreGive(aviMutex);
   aviFile.seek(0, SeekSet); // start of file
   aviFile.write(aviHeader, AVI_HEADER_LEN);
@@ -512,7 +421,6 @@ static boolean processFrame() {
     esp_camera_fb_return(fb);
     return false;
   }
-  timeLapse(fb);
 
   for (int i = 0; i < vidStreams; i++) {
     if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
@@ -564,9 +472,9 @@ static boolean processFrame() {
   bool prevCapture = isCapturing;
   isCapturing = haveMotion | forceRecord;
   if (isCapturing && !videoSizeAllowed(fsizePtr)) {
-    // refuse the recording, but leave stills and time lapse running at this size.
+    // refuse the recording, but leave stills running at this size.
     // If a recording was already open this closes it cleanly via the branch below
-    if (!prevCapture) LOG_WRN("Video recording unavailable at %s, above the %s cap - stills and time lapse are unaffected",
+    if (!prevCapture) LOG_WRN("Video recording unavailable at %s, above the %s cap - stills are unaffected",
       frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
     isCapturing = forceRecord = false;
   }
@@ -932,7 +840,7 @@ bool prepRecording() {
 }
 
 void appShutdown() {
-  timeLapse(NULL, true);
+  // nothing to flush on shutdown - motion recordings are closed by processFrame()
 }
 
 static void deleteTask(TaskHandle_t& thisTaskHandle) {
@@ -1297,9 +1205,8 @@ bool prepCam() {
       res = true;
       LOG_INF("Camera model %s ready @ %uMHz", camModel, xclkMhz);
       if (PID == OV5640_PID) dumpCamRegs(); // baseline clock tree in every boot log
-      if (timeLapseOn) dashCamOn = 0;
       if (dashCamOn) {
-        timeLapseOn = useMotion = false; // disable timeLapse and motion recording
+        useMotion = false; // continuous recording, so no motion detection
         frameLimit = FPS * dashCamOn * 60; // frameLimit is not changed if FPS later changed without restart
         if (frameLimit > maxFrames) {
           frameLimit = maxFrames;

@@ -94,7 +94,7 @@
 // bumped to 40: the peripheral, RC, servo, photogrammetry, lamp and machine learning
 // config rows were removed (none of their code is compiled in), and wakeUse / teleInterval
 // moved group, so an existing configs.txt must be regenerated
-#define CFG_VER 43
+#define CFG_VER 44
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -145,7 +145,6 @@
 #define AVI_HEADER_LEN 310 // AVI header length
 #define CHUNK_HDR 8 // bytes per jpeg hdr in AVI 
 #define AVITEMP "/current.avi"
-#define TLTEMP "/current.tl"
 #define TELETEMP "/current.csv"
 #define SRTTEMP "/current.srt"
 
@@ -257,13 +256,13 @@ enum stepperModel {BYJ_48, BIPOLAR_8mm};
 // global app specific functions
 
 void appShutdown();
-void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL = false, uint32_t durationMs = 0);
-void buildAviIdx(size_t dataSize, bool isVid = true, bool isTL = false);
+void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, uint32_t durationMs = 0);
+void buildAviIdx(size_t dataSize, bool isVid = true);
 void buzzerAlert(bool buzzerOn);
 bool checkAccelMove();
 void currentStackUsage();
 void displayAudioLed(int16_t audioSample);
-void finalizeAviIndex(uint16_t frameCnt, bool isTL = false);
+void finalizeAviIndex(uint16_t frameCnt);
 void finishAudioRecord(bool isValid);
 float* getBMx280();
 float* getMPUdata();
@@ -271,7 +270,7 @@ int getInputPeripheral(uint8_t cmd);
 mjpegStruct getNextFrame(bool firstCall = false);
 bool getPIRval();
 size_t getAudioChunk(uint8_t** buf, size_t minLen);
-bool aviIndexNearFull(bool isTL = false);
+bool aviIndexNearFull();
 bool videoSizeAllowed(uint8_t fsize);
 bool motionSizeAllowed(uint8_t fsize);
 void dumpMotionStats();
@@ -283,7 +282,7 @@ void laserLevel() ;
 void motorSpeed(int speedVal, bool leftMotor = true);
 void openSDfile(const char* streamFile);
 void prepAudio();
-void prepAviIndex(bool isTL = false);
+void prepAviIndex();
 bool prepCam();
 bool checkForUpdate();
 bool startOtaUpdate();
@@ -322,7 +321,7 @@ void storeSensorData(bool fromStream);
 void takePhotos(bool startPhotos);
 void trackSteeering(int controlVal, bool steering);
 size_t updateWavHeader();
-size_t writeAviIndex(byte* clientBuf, size_t buffSize, bool isTL = false);
+size_t writeAviIndex(byte* clientBuf, size_t buffSize);
 bool writeUart(uint8_t cmd, uint32_t outputData);
 
 #ifndef AUXILIARY
@@ -344,12 +343,7 @@ extern int detectStartBand;
 extern int detectEndBand; // inclusive
 extern int detectChangeThreshold; // min difference in pixel comparison to indicate a change
 
-// record timelapse avi independently of motion capture, file name has same format as avi except ends with T
-extern int tlSecsBetweenFrames; // too short interval will interfere with other activities
-extern int tlDurationMins; // a new file starts when previous ends
-extern int tlPlaybackFPS;  // rate to playback the timelapse, min 1 
-
-// status & control fields 
+// status & control fields
 extern const char* appConfig;
 extern bool autoUpload;
 extern bool dbgMotion;
@@ -369,7 +363,6 @@ extern bool nightTime;
 extern bool stopPlayback;
 extern bool useMotion; // whether to use camera for motion detection (with motionDetect.cpp)  
 extern uint8_t colorDepth;
-extern bool timeLapseOn; // enable time lapse recording
 extern int dashCamOn; // enable continuous recording, with given interval
 extern int maxFrames;
 extern uint8_t xclkMhz;
@@ -384,7 +377,7 @@ extern uint8_t vidStreams;
 
 #ifndef AUXILIARY
 extern framesize_t maxFS;
-extern framesize_t maxVideoFS; // AVI recording cap, stills and time lapse are not capped
+extern framesize_t maxVideoFS; // AVI recording cap, stills are not capped
 #endif
 
 // buffers

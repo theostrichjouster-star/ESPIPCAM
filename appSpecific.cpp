@@ -57,14 +57,10 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     useMotion = (intVal) ? true : false; 
     LOG_INF("%s motion detection by camera", useMotion ? "Enabling" : "Disabling");
   }
-  else if (!strcmp(variable, "timeLapseOn")) timeLapseOn = intVal;
   else if (!strcmp(variable, "dashCamOn")) {
     dashCamOn = intVal;
     if (dashCamOn == 0) forceRecord = false;
   }
-  else if (!strcmp(variable, "tlSecsBetweenFrames")) tlSecsBetweenFrames = intVal;
-  else if (!strcmp(variable, "tlDurationMins")) tlDurationMins = intVal;
-  else if (!strcmp(variable, "tlPlaybackFPS")) tlPlaybackFPS = intVal; 
 #if !INCLUDE_RTSP 
   else if (!strcmp(variable, "streamVid")) streamVid = (bool)intVal; 
   else if (!strcmp(variable, "streamAud")) streamAud = (bool)intVal; 
@@ -228,7 +224,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     else {
       fsizePtr = intVal;
       if (!motionSizeAllowed(fsizePtr)) LOG_WRN("Motion detection not available as frame size %s too large", frameData[fsizePtr].frameSizeStr);
-      if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills and time lapse only, no AVI recording",
+      if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills only, no AVI recording",
         frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
 
       if (s) {
@@ -809,7 +805,6 @@ saturation~0~98~~na
 sharpness~0~98~~na
 denoise~0~98~~na
 special_effect~0~98~~na
-timeLapseOn~0~98~~na
 timezone~GMT0~98~~na
 vflip~0~98~~na
 wb_mode~0~98~~na
@@ -831,9 +826,6 @@ ntpServer~pool.ntp.org~0~T~NTP Server address
 alarmHour~1~2~N~Hour of day for daily actions
 refreshVal~5~2~N~Web page refresh rate (secs)
 responseTimeoutSecs~10~2~N~Server response timeout (secs)
-tlSecsBetweenFrames~600~1~N~Timelapse interval (secs)
-tlDurationMins~720~1~N~Timelapse duration (mins)
-tlPlaybackFPS~1~1~N~Timelapse playback FPS
 maxFrames~10000~1~N~Max frames in recording
 dashCamOn~0~98~~na
 moveStartChecks~5~1~N~Checks per second for start motion

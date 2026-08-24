@@ -973,7 +973,7 @@
                       <label for="framesize">Resolution</label>
                       <select id="framesize" class="selectField">
                         <!-- sizes above the FHD pixel count cannot be recorded to AVI, but are
-                             still available for stills and time lapse - see maxVideoFS in mjpeg2sd.cpp.
+                             still available for stills - see maxVideoFS in mjpeg2sd.cpp.
                              The trailing note is safe: showView() matches /(\d+)x(\d+)/ and prefix
                              matches the size name, so neither is affected by text after the bracket -->
                         <option class="PY260 hidden" value="24">5MP(2592x1944) - stills only</option>
@@ -1231,13 +1231,6 @@
                     <input title="Set night switch sensitivity" type="range" id="lswitch" min="0" max="100" value="10">
                   </div>
                   <div class="vsep"></div>
-                  <div class="input-group" id="tlapse-group">
-                    <label for="timeLapseOn">Time Lapse</label>
-                    <div class="switch">
-                      <input id="timeLapseOn" type="checkbox">
-                      <label title="Enable time lapse recording" class="slider" for="timeLapseOn"></label>
-                    </div>
-                  </div>
                   <div class="input-group" id="dcam-group">
                     <label for="dashCamOn">DashCam</label>
                     <input title="Enable continuous recording with file duration in minutes" type="range" id="dashCamOn" min="0" max="5" value="0">

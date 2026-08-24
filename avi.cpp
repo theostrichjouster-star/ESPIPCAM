@@ -42,7 +42,7 @@ const uint8_t dcBuf[4] = {0x30, 0x30, 0x64, 0x63};   // 00dc
 const uint8_t wbBuf[4] = {0x30, 0x31, 0x77, 0x62};   // 01wb
 static const uint8_t idx1Buf[4] = {0x69, 0x64, 0x78, 0x31}; // idx1
 static const uint8_t zeroBuf[4] = {0x00, 0x00, 0x00, 0x00}; // 0000
-static uint8_t* idxBuf[2] = {NULL, NULL};
+static uint8_t* idxBuf = NULL;
 
 uint8_t aviHeader[AVI_HEADER_LEN] = { // AVI header template
   0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x41, 0x56, 0x49, 0x20, 0x4C, 0x49, 0x53, 0x54,
@@ -103,66 +103,62 @@ static const frameSizeStruct frameSizeData[] = {
 
 #define IDX_ENTRY 16 // bytes per index entry
 
-// separate index for motion capture and timelapse
-static size_t idxPtr[2];
-static size_t idxOffset[2];
-static size_t moviSize[2];
+static size_t idxPtr;
+static size_t idxOffset;
+static size_t moviSize;
 static size_t audSize;      // running total of interleaved audio bytes
 static size_t audChunkCnt;  // number of 01wb chunks written
-static size_t indexLen[2];
+static size_t indexLen;
 // what was actually allocated. maxFrames is user editable at runtime but the buffer is
 // only allocated once, so every bounds test must use this and not recompute from
 // maxFrames - otherwise raising maxFrames lets the index run off the end of the buffer
-static size_t idxBufBytes[2] = {0, 0};
+static size_t idxBufBytes = 0;
 
-static size_t idxBufSize(bool isTL) {
-  // motion capture needs one entry per video frame plus one per audio chunk. Audio is
-  // written every AUD_CHUNK_MIN bytes, so above 4fps that is well under one per frame -
-  // 1.5 per frame covers the usual rates with headroom. Below 4fps audio does need an
-  // entry per frame, and the recording is then closed early by aviIndexNearFull().
-  // Timelapse has no audio and needs one per frame. Both include the index header
-  return (isTL ? maxFrames + 2 : ((maxFrames * 3) / 2) + 8) * IDX_ENTRY;
+static size_t idxBufSize() {
+  // one entry per video frame plus one per audio chunk. Audio is written every
+  // AUD_CHUNK_MIN bytes, so above 4fps that is well under one per frame - 1.5 per frame
+  // covers the usual rates with headroom. Below 4fps audio does need an entry per frame,
+  // and the recording is then closed early by aviIndexNearFull(). Includes index header
+  return (((maxFrames * 3) / 2) + 8) * IDX_ENTRY;
 }
 
-bool aviIndexNearFull(bool isTL) {
+bool aviIndexNearFull() {
   // called after each frame is saved. Leaves room for the video and audio entries of one
   // more frame plus the audio chunk closeAvi() appends, so the recording can always be
   // closed cleanly rather than running the index off the end of its buffer
-  return idxPtr[isTL] + (4 * IDX_ENTRY) > idxBufBytes[isTL];
+  return idxPtr + (4 * IDX_ENTRY) > idxBufBytes;
 }
 
-void prepAviIndex(bool isTL) {
+void prepAviIndex() {
   // prep buffer to store index data, gets appended to end of file
-  if (idxBuf[isTL] == NULL) {
-    size_t wanted = idxBufSize(isTL);
-    idxBuf[isTL] = (uint8_t*)ps_malloc(wanted);
+  if (idxBuf == NULL) {
+    size_t wanted = idxBufSize();
+    idxBuf = (uint8_t*)ps_malloc(wanted);
     // stays 0 on failure, so aviIndexNearFull() reports full and nothing is written
-    idxBufBytes[isTL] = idxBuf[isTL] == NULL ? 0 : wanted;
-    if (idxBuf[isTL] == NULL) LOG_ERR("Failed to allocate %u bytes for AVI index", wanted);
+    idxBufBytes = idxBuf == NULL ? 0 : wanted;
+    if (idxBuf == NULL) LOG_ERR("Failed to allocate %u bytes for AVI index", wanted);
   }
-  memcpy(idxBuf[isTL], idx1Buf, 4); // index header
-  idxPtr[isTL] = CHUNK_HDR;  // leave 4 bytes for index size
-  moviSize[isTL] = indexLen[isTL] = 0;
-  idxOffset[isTL] = 4; // 4 byte offset
-  // audio only applies to motion capture, and timelapse can start midway through
-  // a motion recording, so leave the audio totals alone for isTL
-  if (!isTL) audSize = audChunkCnt = 0;
+  memcpy(idxBuf, idx1Buf, 4); // index header
+  idxPtr = CHUNK_HDR;  // leave 4 bytes for index size
+  moviSize = indexLen = 0;
+  idxOffset = 4; // 4 byte offset
+  audSize = audChunkCnt = 0;
 }
 
-void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL, uint32_t durationMs) {
+void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, uint32_t durationMs) {
   // update AVI header template with file specific details
-  size_t audCnt = isTL ? 0 : audChunkCnt; // timelapse never has audio
-  size_t chunkCnt = frameCnt + audCnt;    // every chunk has a header and an index entry
-  size_t aviSize = moviSize[isTL] + AVI_HEADER_LEN + ((CHUNK_HDR+IDX_ENTRY) * chunkCnt); // AVI content size
+  size_t audCnt = audChunkCnt;
+  size_t chunkCnt = frameCnt + audCnt; // every chunk has a header and an index entry
+  size_t aviSize = moviSize + AVI_HEADER_LEN + ((CHUNK_HDR+IDX_ENTRY) * chunkCnt); // AVI content size
   // update aviHeader with relevant stats
   memcpy(aviHeader+4, &aviSize, 4);
   // Video timebase. dwScale and dwRate at 0x80 / 0x84 express the frame rate as a
   // rational, so a capture that actually ran at eg 9.7fps is written as 9.7 rather than
   // rounded to 10 and left to drift against the audio clock, which is exact at
   // SAMPLE_RATE. Rounding cost up to 7% - 17 secs of drift over a 4 minute UXGA file.
-  // Timelapse keeps the integer form: its rate is chosen, not measured, so already exact
+  // The integer fallback is only reached if the duration or frame count is unknown
   uint32_t usecs, dwScale, dwRate;
-  if (!isTL && durationMs && frameCnt) {
+  if (durationMs && frameCnt) {
     dwScale = durationMs;
     dwRate = (uint32_t)frameCnt * 1000;
     usecs = (uint32_t)(((uint64_t)durationMs * 1000) / frameCnt);
@@ -178,7 +174,7 @@ void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL, u
   // touched dwScale, which is what limited the rate to whole frames per second
   memcpy(aviHeader+0x80, &dwScale, 4);
   memcpy(aviHeader+0x84, &dwRate, 4);
-  uint32_t dataSize = moviSize[isTL] + (chunkCnt * CHUNK_HDR) + 4;
+  uint32_t dataSize = moviSize + (chunkCnt * CHUNK_HDR) + 4;
   memcpy(aviHeader+0x12E, &dataSize, 4); // data size
 
   // apply video framesize to avi header
@@ -208,60 +204,58 @@ void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, bool isTL, u
   memcpy(aviHeader+0x38, &numAviStreams, 1);
 
   // reset state for next recording
-  moviSize[isTL] = idxPtr[isTL] = 0;
-  idxOffset[isTL] = 4; // 4 byte offset
+  moviSize = idxPtr = 0;
+  idxOffset = 4; // 4 byte offset
 }
 
-void buildAviIdx(size_t dataSize, bool isVid, bool isTL) {
+void buildAviIdx(size_t dataSize, bool isVid) {
   // build AVI video index into buffer - 16 bytes per frame
   // called from saveFrame() for each frame
-  moviSize[isTL] += dataSize;
-  if (idxPtr[isTL] + IDX_ENTRY > idxBufBytes[isTL]) {
+  moviSize += dataSize;
+  if (idxPtr + IDX_ENTRY > idxBufBytes) {
     // unreachable in normal operation - processFrame() closes the recording on
     // aviIndexNearFull() well before this. Kept as a backstop that drops the entry
     // instead of writing past the buffer, and never as a reason to reboot the device
     LOG_ERR("AVI index full, dropping entry - recording should already have closed");
     return;
   }
-  if (isVid) memcpy(idxBuf[isTL]+idxPtr[isTL], dcBuf, 4);
+  if (isVid) memcpy(idxBuf+idxPtr, dcBuf, 4);
   else {
-    memcpy(idxBuf[isTL]+idxPtr[isTL], wbBuf, 4);
-    if (!isTL) {
-      audSize += dataSize;
-      audChunkCnt++;
-    }
+    memcpy(idxBuf+idxPtr, wbBuf, 4);
+    audSize += dataSize;
+    audChunkCnt++;
   }
-  memcpy(idxBuf[isTL]+idxPtr[isTL]+4, zeroBuf, 4);
-  memcpy(idxBuf[isTL]+idxPtr[isTL]+8, &idxOffset[isTL], 4); 
-  memcpy(idxBuf[isTL]+idxPtr[isTL]+12, &dataSize, 4); 
-  idxOffset[isTL] += dataSize + CHUNK_HDR;
-  idxPtr[isTL] += IDX_ENTRY; 
+  memcpy(idxBuf+idxPtr+4, zeroBuf, 4);
+  memcpy(idxBuf+idxPtr+8, &idxOffset, 4);
+  memcpy(idxBuf+idxPtr+12, &dataSize, 4);
+  idxOffset += dataSize + CHUNK_HDR;
+  idxPtr += IDX_ENTRY;
 }
 
-size_t writeAviIndex(byte* clientBuf, size_t buffSize, bool isTL) {
+size_t writeAviIndex(byte* clientBuf, size_t buffSize) {
   // write completed index to avi file
   // called repeatedly from closeAvi() until return 0
-  if (idxPtr[isTL] < indexLen[isTL]) {
-    if (indexLen[isTL]-idxPtr[isTL] > buffSize) {
-      memcpy(clientBuf, idxBuf[isTL]+idxPtr[isTL], buffSize);
-      idxPtr[isTL] += buffSize;
+  if (idxPtr < indexLen) {
+    if (indexLen-idxPtr > buffSize) {
+      memcpy(clientBuf, idxBuf+idxPtr, buffSize);
+      idxPtr += buffSize;
       return buffSize;
     } else {
       // final part of index
-      size_t final = indexLen[isTL]-idxPtr[isTL];
-      memcpy(clientBuf, idxBuf[isTL]+idxPtr[isTL], final);
-      idxPtr[isTL] = indexLen[isTL];
+      size_t final = indexLen-idxPtr;
+      memcpy(clientBuf, idxBuf+idxPtr, final);
+      idxPtr = indexLen;
       return final;
     }
   }
-  return idxPtr[isTL] = 0;
+  return idxPtr = 0;
 }
-  
-void finalizeAviIndex(uint16_t frameCnt, bool isTL) {
+
+void finalizeAviIndex(uint16_t frameCnt) {
   // update index with size
-  uint32_t sizeOfIndex = (frameCnt + (isTL ? 0 : audChunkCnt)) * IDX_ENTRY;
-  memcpy(idxBuf[isTL]+4, &sizeOfIndex, 4); // size of index 
-  indexLen[isTL] = sizeOfIndex + CHUNK_HDR;
-  idxPtr[isTL] = 0; // pointer to index buffer
+  uint32_t sizeOfIndex = (frameCnt + audChunkCnt) * IDX_ENTRY;
+  memcpy(idxBuf+4, &sizeOfIndex, 4); // size of index
+  indexLen = sizeOfIndex + CHUNK_HDR;
+  idxPtr = 0; // pointer to index buffer
 }
 

@@ -52,7 +52,7 @@ The onboard user LED on GPIO 21 is **not** driven. Upstream's lamp driver (`setu
 Enabled by default:
 
 * **Motion detection by camera** — see [Motion detection](#motion-detection)
-* **Continuous recording** — time-lapse or dashcam style
+* **Continuous recording** — dashcam style
 * **Audio recording** from the onboard PDM microphone, muxed into the AVI as WAV
 * **OV5640 autofocus**
 * Live MJPEG streaming to browser, and still capture
@@ -136,7 +136,7 @@ If the device is reachable from the internet, see [Port forwarding](#port-forwar
 Most behaviour is changed from the main web page, which is largely self-explanatory. Settings persist only after pressing **Save**; network and peripheral changes need a reboot via **Reboot ESP**.
 
 * **Access Settings** — WiFi, hostname and mDNS, time zone, FTP/HTTPS, SMTP, authentication, HTTPS toggles, and firmware update
-* **Motion Detect & Recording** — motion sensitivity, time lapse, dashcam length, minimum frames
+* **Motion Detect & Recording** — motion sensitivity, dashcam length, minimum frames
 * **Edit Config → Network / Motion / Streaming / Other** — detection tuning, stream enables, SD management, MQTT, Telegram, heartbeat, night-time deep sleep
 * Recording parameters: `Resolution`, `Frame Rate`, `Quality`
 
@@ -148,7 +148,7 @@ Logs are viewable under the **Show Log** tab, held in RTC RAM (7 KB cyclic, defa
 
 ## How recording works
 
-Frames are buffered in PSRAM and written to SD in sector-aligned chunks to minimise write count. Recordings are named `YYYYMMDD_HHMMSS` plus frame size, frame rate and duration — e.g. `20200130_201015_VGA_15_60.avi` — and stored in a per-day `YYYYMMDD` folder. Suffixes mark the type: `_S` audio, `_M` telemetry, `_T` time lapse, `_C` continuous.
+Frames are buffered in PSRAM and written to SD in sector-aligned chunks to minimise write count. Recordings are named `YYYYMMDD_HHMMSS` plus frame size, frame rate and duration — e.g. `20200130_201015_VGA_15_60.avi` — and stored in a per-day `YYYYMMDD` folder. Suffixes mark the type: `_S` audio, `_M` telemetry, `_C` continuous.
 
 Saving a set of JPEGs as one AVI is faster than writing individual files and replays at the correct frame rate in ordinary media players. Throughput depends heavily on SD card quality — a genuine name-brand card can be several times faster than a no-name card with the same class marking.
 
