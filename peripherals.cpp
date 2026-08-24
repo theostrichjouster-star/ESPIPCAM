@@ -31,7 +31,7 @@
 bool pirUse; // true to use PIR for motion detection
 bool ledBarUse; // true to use led bar
 uint8_t lampLevel; // brightness of on board lamp led 
-bool lampAuto = false; // if true in conjunction with pirUse and accelUse, switch on lamp when PIR or accelerometer activated at night
+bool lampAuto = false; // if true in conjunction with pirUse, switch on lamp when PIR activated at night
 bool lampNight; // if true, lamp comes on at night (not used)
 int lampType; // how lamp is used
 bool voltUse; // true to report on ADC pin eg for for battery
@@ -456,9 +456,6 @@ static void stickTask (void *pvParameter) {
       int motorCycle = (yPos > CENTER_ADC + yOffset) ? map(yPos, CENTER_ADC + yOffset, MAX_ADC, 0, 0 - maxDutyCycle)
         : map(yPos, 0, CENTER_ADC + yOffset, maxDutyCycle, 0); 
       if (abs(motorCycle) < minDutyCycle) motorCycle = 0; // deadzone
-#if INCLUDE_MCPWM
-      motorSpeed(motorCycle);
-#endif
       if (lightsChanged != lightsStatus) setLightsRC(lightsChanged);
       lightsStatus = lightsChanged;
       LOG_VRB("Xpos %d, Ypos %d, button %d", xPos, yPos, lightsStatus);

@@ -2148,9 +2148,14 @@
       function customWsMsg(data) {}
 
       function customInit() {
-        // nothing to disable - every control still on this page is backed by code that
-        // is actually compiled in. The servo, lamp and RC controls were removed rather
-        // than disabled, since INCLUDE_PERIPH is false and none of them could ever work
+        // Most controls on this page are backed by compiled in code, but not all.
+        // The FTP / HTTPS settings block, the SMTP settings block, and the Use HTTPS
+        // and Check Certs toggles belong to subsystems this build does not compile
+        // (INCLUDE_FTP_HFS, INCLUDE_SMTP, INCLUDE_CERTS are all false). They are left
+        // in place so enabling a flag needs no UI work, but until then they accept
+        // input and do nothing. Use HTTPS is additionally force reset to false at boot.
+        // The servo, lamp, RC, photogrammetry and Camera Hub controls were removed
+        // outright rather than left inert.
         closedTab(false);
       }
 

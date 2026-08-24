@@ -122,7 +122,6 @@ bool checkAlarm();
 bool checkAuth(httpd_req_t* req);
 bool checkDataFiles();
 bool checkFreeStorage();
-bool checkI2Cdevice(const char* devName);
 void checkMemory(const char* source = "");
 uint32_t checkStackUse(TaskHandle_t thisTask, int taskIdx);
 void debugMemory(const char* caller);
@@ -166,7 +165,6 @@ void logSetup();
 void OTAprereq();
 bool parseJson(int rxSize);
 bool pathIsSafe(const char* path);
-bool prepI2C();
 void prepPeripherals();
 void prepSMTP();
 bool prepTelegram();
@@ -230,7 +228,6 @@ bool sendTgramPhoto(uint8_t* photoData, size_t photoSize, const char* caption);
 bool sendTgramFile(const char* fileName, const char* contentType, const char* caption);
 void tgramAlert(const char* subject, const char* message);
 // externalHeartbeat.cpp
-void sendExternalHeartbeat();
 
 /******************** Global utility declarations *******************/
 
@@ -353,8 +350,6 @@ extern int sdFreeSpaceMode; // 0 - No Check, 1 - Delete oldest dir, 2 - Upload t
 extern bool formatIfMountFailed ; // Auto format the file system if mount failed. Set to false to not auto format.
 
 // I2C pins
-extern int I2Csda;
-extern int I2Cscl;
 
 #define HTTP_METHOD_STRING(method) \
   (method == HTTP_DELETE) ? "DELETE" : \

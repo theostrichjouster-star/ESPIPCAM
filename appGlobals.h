@@ -29,10 +29,7 @@
 #define INCLUDE_HASIO false   // mqtt.cpp (Send home assistant discovery messages). Needs INCLUDE_MQTT true
 
 #define INCLUDE_CERTS false   // certificates.cpp (https and server certificate checking)
-#define INCLUDE_UART false    // uart.cpp (use another esp32 as Auxiliary connected via UART)
 #define INCLUDE_WEBDAV false  // webDav.cpp (WebDAV protocol)
-#define INCLUDE_EXTHB false   // externalHeartbeat.cpp (heartbeat to remote server)
-#define INCLUDE_MCPWM false   // mcpwm.cpp (BDC motor control). Needs INCLUDE_PERIPH true
 #define INCLUDE_DS18B20 false // if true, requires INCLUDE_PERIPH and additional libraries: OneWire and DallasTemperature
 #define INCLUDE_AF true       // for auto focused equipped OV5640. Requires additional library: OV5640_Auto_Focus_for_ESP32_Camera - XIAO Sense ships with an OV5640
 // Stays false. It was only needed to allow scaleFactor 4, which the built in decoder
@@ -40,14 +37,6 @@
 // nothing to gain. esp_new_jpeg is not in the Arduino library index either (it is an
 // ESP-IDF component), so enabling this would put a manual install step on every user.
 #define INCLUDE_NEW_JPG false // true to use esp_new_jpg library, which must be installed first. Faster but uses more memory
-#define INCLUDE_I2C false     // periphsI2C.cpp (support for I2C peripherals)
-
-// if INCLUDE_I2C true, set each I2C device used to true and instal additional library if required
-#define USE_SSD1306 false  // Needs esp8266-oled-ssd1306 library
-#define USE_BMx280 false   // NMP280, BME280. Needs BMx280MI library
-#define USE_MPU false      // MPU6050, MPU9250, MPU9255. MPU9250 needs hideakitai MPU9250 library
-#define USE_DS3231 false   // Needs Makuna Rtc library
-#define USE_LCD1602 false  // none
 
 /**************************************************************************/
 
@@ -80,7 +69,7 @@
 // to determine if newer data files need to be loaded. Bump whenever a config row is
 // added, removed or moved group, so an existing configs.txt is regenerated rather than
 // leaving stale keys behind
-#define CFG_VER 46
+#define CFG_VER 47
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -101,7 +90,6 @@
 #define MAX_FRAME_WAIT 1200
 #define RGB888_BYTES 3 // number of bytes per pixel
 #define GRAYSCALE_BYTES 1 // number of bytes per pixel 
-#define EXTHB_LEN 64
 
 #define STORAGE SD_MMC
 // OTA updates are pulled from GitHub Releases on the repo below, which is
@@ -243,14 +231,10 @@ void appShutdown();
 void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, uint32_t durationMs = 0);
 void buildAviIdx(size_t dataSize, bool isVid = true);
 void buzzerAlert(bool buzzerOn);
-bool checkAccelMove();
 void currentStackUsage();
 void displayAudioLed(int16_t audioSample);
 void finalizeAviIndex(uint16_t frameCnt);
 void finishAudioRecord(bool isValid);
-float* getBMx280();
-float* getMPUdata();
-int getInputPeripheral(uint8_t cmd);
 mjpegStruct getNextFrame(bool firstCall = false);
 bool getPIRval();
 size_t getAudioChunk(uint8_t** buf, size_t minLen);
@@ -258,11 +242,8 @@ bool aviIndexNearFull();
 bool videoSizeAllowed(uint8_t fsize);
 bool motionSizeAllowed(uint8_t fsize);
 void dumpMotionStats();
-bool identifyBMx();
-bool identifyMPU(char* _mpuModel);
 void intercom();
 bool isNight(uint8_t nightSwitch);
-void motorSpeed(int speedVal, bool leftMotor = true);
 void openSDfile(const char* streamFile);
 void prepAudio();
 void prepAviIndex();
@@ -273,8 +254,6 @@ extern char otaLatestTag[];
 extern char otaStatus[];
 extern bool otaUpdateAvailable;
 bool prepRecording();
-void prepMotors();
-void prepUart();
 void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
 void dumpCamRegs();
@@ -284,21 +263,17 @@ uint8_t setFPSlookup(uint8_t val);
 void setInputPeripheral(uint8_t cmd, uint32_t controlVal);
 void setLamp(uint8_t lampVal);
 void setLightsRC(bool lightsOn);
-bool setOutputPeripheral(uint8_t cmd, uint32_t rxValue);
 void setSteering(int steerVal);
 void setStepperPin(uint8_t pinNum, uint8_t pinPos);
 void setStickTimer(bool restartTimer, uint32_t interval = 0);
-bool shareI2C(int sdaShare, int sclShare);
 void startAudioRecord();
 void startHeartbeat();
 void startSustainTasks();
 void stepperRun(float RPM, float revFraction, bool _clockwise, stepperModel thisStepper);
 void stopPlaying();
 void stopSustainTask(int taskId);
-void trackSteeering(int controlVal, bool steering);
 size_t updateWavHeader();
 size_t writeAviIndex(byte* clientBuf, size_t buffSize);
-bool writeUart(uint8_t cmd, uint32_t outputData);
 
 #ifndef AUXILIARY
 bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly = false);
@@ -370,13 +345,9 @@ extern size_t maxFrameBuffSize;
 
 // Auxiliary use
 extern bool useUart;
-extern int uartTxdPin;
-extern int uartRxdPin;
 
 // peripherals used
 extern bool pirUse; // true to use PIR or radar sensor (RCWL-0516) for motion detection
-extern bool accelUse; // true to use MPU6050 or MPU9250 accelerometer for motion detection
-extern int accelDeg; // minimum accelerometer movement for motion detection
 extern bool lampAuto; // if true in conjunction with usePir, switch on lamp when PIR activated
 extern bool lampNight;
 extern int lampType;
@@ -432,15 +403,8 @@ extern bool stepperUse;
 extern uint8_t stepINpins[];
 
 // Motors and RC
-extern bool useBDC;
-extern int motorRevPin;
-extern int motorFwdPin;
-extern int motorRevPinR;
-extern int motorFwdPinR;
-extern bool trackSteer;
 extern int servoSteerPin;
 extern int lightsRCpin;
-extern int pwmFreq;
 extern int maxSteerAngle;
 extern int maxTurnSpeed;
 extern int maxDutyCycle;
@@ -453,13 +417,6 @@ extern bool stickUse;
 extern int stickzPushPin;
 extern int stickXpin;
 extern int stickYpin;
-
-// External Heartbeat
-extern bool external_heartbeat_active;
-extern char external_heartbeat_domain[]; //External Heartbeat domain/IP  
-extern char external_heartbeat_uri[];    //External Heartbeat uri (i.e. /myesp32-cam-hub/index.php)
-extern int external_heartbeat_port;      //External Heartbeat server port to connect.  
-extern char external_heartbeat_token[];  //External Heartbeat server auth token.  
 
 // task handling
 extern TaskHandle_t battHandle;
@@ -475,7 +432,6 @@ extern TaskHandle_t servoHandle;
 extern TaskHandle_t stickHandle;
 extern TaskHandle_t sustainHandle[];
 extern TaskHandle_t telegramHandle;
-extern TaskHandle_t uartRxHandle;
 extern TaskHandle_t audioHandle;
 extern SemaphoreHandle_t frameSemaphore[];
 extern SemaphoreHandle_t motionSemaphore;

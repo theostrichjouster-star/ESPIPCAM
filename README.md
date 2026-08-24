@@ -69,7 +69,6 @@ Optional, off by default — set the corresponding `#define INCLUDE_*` to `true`
 | `INCLUDE_TGRAM` | [Telegram bot](#telegram-bot) alerts |
 | `INCLUDE_MQTT` / `INCLUDE_HASIO` | [MQTT](#mqtt) control and Home Assistant discovery |
 | `INCLUDE_WEBDAV` | [WebDAV](#webdav) access to the SD card |
-| `INCLUDE_EXTHB` | [External heartbeat](#external-heartbeat) |
 | `INCLUDE_CERTS` | [HTTPS](#https) and remote certificate checking |
 | `INCLUDE_NEW_JPG` | Faster JPEG codec, uses more memory |
 
@@ -253,14 +252,10 @@ Removing the GPIO configuration UI left several upstream features present in the
 | Feature | Flag | Why it needs a source change |
 |---|---|---|
 | Peripherals — PIR, buzzer, relay, servos, battery voltage, DS18B20, wake pin | `INCLUDE_PERIPH`, `INCLUDE_DS18B20` | All pins unassigned |
-| Auxiliary board over UART | `INCLUDE_UART` | `uartTxdPin` / `uartRxdPin` unassigned |
-| I2C devices — BMP280, MPU6050, SSD1306, etc. | `INCLUDE_I2C` | `I2Csda` / `I2Cscl` unassigned |
-| Telemetry recording | `INCLUDE_TELEM` | Depends on I2C |
-| Remote control of an RC vehicle | `INCLUDE_PERIPH`, `INCLUDE_MCPWM` | Depends on peripheral pins |
 
 Their **web UI controls and config rows have been removed**, since none of these flags is enabled and the settings therefore had no effect. The C++ is left in place behind its `#if INCLUDE_*` guards, so enabling a flag also means restoring the corresponding rows to the `appConfig` table in [`appSpecific.cpp`](appSpecific.cpp) and bumping `CFG_VER`.
 
-**Deleted outright, and not recoverable by a flag flip:** photogrammetry, machine learning (its classifier never compiled — it carried a syntax error inherited from upstream), RTSP, and the auxiliary-board *companion* mode that ran this firmware on a second cameraless ESP32.
+**Deleted outright, and not recoverable by a flag flip:** photogrammetry, machine learning (its classifier never compiled — it carried a syntax error inherited from upstream), RTSP, the SRT subtitle stream, telemetry recording, the Camera Hub, BDC motor control, I2C peripherals, the auxiliary board over UART, the external heartbeat, and the auxiliary-board *companion* mode that ran this firmware on a second cameraless ESP32.
 
 For documentation of these features as they work on upstream hardware, see the [upstream README](https://github.com/s60sc/ESP32-CAM_MJPEG2SD#readme).
 
@@ -274,8 +269,9 @@ Forked at upstream **v10.9.4**. Versioning was restarted at `1.0.0` for this pro
 | Security hardening | Authentication enforced on every endpoint, buffer bounds checks, path-traversal rejection, constant-time credential compare, token masking, OTA size sanity check |
 | GPIO UI removal | All pin configuration fields removed from the web interface |
 | Web UI | New colour palette, SVG icon set replacing emoji, mobile breakpoint with 44 px touch targets |
-| Inert control removal | Removed every UI control and config row backed by a subsystem this build does not compile — the Peripherals settings panel, the RC / Servos / Photogrammetry panels and control overlay, the lamp and pan/tilt sliders, the battery-voltage footer field, and the Machine Learning options |
+| Inert control removal | Removed the UI controls and config rows for most subsystems this build does not compile — the Peripherals settings panel, the RC / Servos / Photogrammetry panels and control overlay, the lamp and pan/tilt sliders, the battery-voltage footer field, the Machine Learning options, the RTSP rows and the external-heartbeat rows. **Still inert and deliberately left in place:** the FTP / HTTPS and SMTP settings blocks and the Use HTTPS / Check Certs toggles, so those features need no UI work if their flag is ever enabled |
 | Dead code removal | Removed unreachable macro branches, orphaned declarations, and Ethernet support entirely — around 1,800 lines, reducing flash use by roughly 86 KB |
+| Subsystem removal | Deleted eight whole source files that compiled to nothing — photogrammetry, RTSP, telemetry, BDC motor control, I2C peripherals, UART auxiliary board, external heartbeat — plus time lapse, the Camera Hub and the SRT stream. Around 3,700 lines |
 | Autofocus and audio | Both enabled by default for this hardware |
 | OTA | Added update checking and installation from GitHub Releases |
 

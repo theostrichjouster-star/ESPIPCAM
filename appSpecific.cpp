@@ -14,7 +14,7 @@ static char value[FILE_NAME_LEN];
 static char alertCaption[100];
 static bool alertReady = false;
 static bool depthColor = true;
-bool useUart = false; // no longer settable - kept false for the INCLUDE_UART / INCLUDE_MCPWM paths
+bool useUart = false; // auxiliary board support removed; kept for the INCLUDE_PERIPH heartbeat test
 volatile audioAction THIS_ACTION = PASS_ACTION;
 static void stopRC();
 
@@ -115,12 +115,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "buzzerDuration")) buzzerDuration = intVal;
   else if (!strcmp(variable, "ds18b20Pin")) ds18b20Pin = intVal;
 #endif
-#if INCLUDE_I2C
-  else if (!strcmp(variable, "I2Csda")) I2Csda = intVal;
-  else if (!strcmp(variable, "I2Cscl")) I2Cscl = intVal;
-  else if (!strcmp(variable, "accelUse")) accelUse = (bool)intVal;
-  else if (!strcmp(variable, "accelDeg")) accelDeg = intVal;
-#endif
 #if INCLUDE_AUDIO
   else if (!strcmp(variable, "spkrRem")) {
     spkrRem = (bool)intVal;
@@ -136,22 +130,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "mampSdIo")) mampSdIo = intVal;
 #endif
   else if (!strcmp(variable, "wakeUse")) wakeUse = (bool)intVal;
-#if INCLUDE_MCPWM
-  else if (!strcmp(variable, "motorRevPin")) motorRevPin = intVal;
-  else if (!strcmp(variable, "motorFwdPin")) motorFwdPin = intVal;
-  else if (!strcmp(variable, "motorRevPinR")) motorRevPinR = intVal;
-  else if (!strcmp(variable, "motorFwdPinR")) {
-    motorFwdPinR = intVal;
-    if (motorFwdPinR > 0) trackSteer = true; // use track steering if pin defined
-  }
-  else if (!strcmp(variable, "pwmFreq")) pwmFreq = intVal;
-#endif
 #if INCLUDE_PERIPH
   else if (!strcmp(variable, "RCactive")) {
     RCactive = (bool)intVal;
-#if INCLUDE_MCPWM
-    useBDC = useUart ? false : (bool)intVal;
-#endif
   }
   else if (!strcmp(variable, "heartbeatRC")) heartbeatRC = intVal;
   else if (!strcmp(variable, "maxSteerAngle")) maxSteerAngle = intVal;  
@@ -167,20 +148,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "stickYpin")) stickYpin = intVal; 
   else if (!strcmp(variable, "stickzPushPin")) stickzPushPin = intVal; 
 #endif // INCLUDE_PERIPH
-
-#if INCLUDE_EXTHB
-  // External Heartbeat
-  else if (!strcmp(variable, "external_heartbeat_active")) external_heartbeat_active = (bool)intVal;
-  else if (!strcmp(variable, "external_heartbeat_domain")) snprintf(external_heartbeat_domain, MAX_HOST_LEN, "%s", value);
-  else if (!strcmp(variable, "external_heartbeat_uri")) snprintf(external_heartbeat_uri, FILE_NAME_LEN, "%s", value);
-  else if (!strcmp(variable, "external_heartbeat_port")) external_heartbeat_port = intVal;
-  else if (!strcmp(variable, "external_heartbeat_token")) snprintf(external_heartbeat_token, EXTHB_LEN, "%s", value);
-#endif
-
-#if INCLUDE_UART
-  else if (!strcmp(variable, "uartTxdPin")) uartTxdPin = intVal;
-  else if (!strcmp(variable, "uartRxdPin")) uartRxdPin = intVal;
-#endif
 
 #ifndef AUXILIARY
   // camera settings
@@ -301,18 +268,6 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
 static bool setPeripheral(char cmd, int controlVal, bool fromUart) {
   bool res = true;
   switch (cmd) {
-#if INCLUDE_MCPWM
-    case 'M': 
-      // motor speed
-      if (trackSteer) trackSteeering(controlVal, false);
-      else motorSpeed(controlVal); 
-    break;
-    case 'D':
-      // steering
-      if (trackSteer) trackSteeering(controlVal, true);
-      else setSteering(controlVal);
-    break;
-#endif
 #if INCLUDE_PERIPH
     case 'L':
       // lights
@@ -399,16 +354,6 @@ char* buildAppJsonString(bool filter) {
 #if INCLUDE_PERIPH
   p += sprintf(p, "\"SVactive\":\"%d\",", SVactive);
 #endif
-#if INCLUDE_MCPWM
-  p += sprintf(p, "\"maxSteerAngle\":\"%d\",", maxSteerAngle);
-  p += sprintf(p, "\"maxDutyCycle\":\"%d\",", maxDutyCycle);
-  p += sprintf(p, "\"minDutyCycle\":\"%d\",", minDutyCycle);
-  p += sprintf(p, "\"allowReverse\":\"%d\",", allowReverse);
-  p += sprintf(p, "\"autoControl\":\"%d\",", autoControl);
-  p += sprintf(p, "\"waitTime\":\"%d\",", waitTime);
-  p += sprintf(p, "\"RCactive\":\"%d\",", RCactive);
-  p += sprintf(p, "\"heartbeatRC\":\"%d\",", heartbeatRC);
-#endif
   p += sprintf(p, "\"sustainId\":\"%u\",", sustainId);
   // Extend info
 #ifndef AUXILIARY
@@ -465,25 +410,6 @@ void setInputPeripheral(uint8_t cmd, uint32_t controlVal) {
   //if ((char)cmd == 'I') memcpy(&pirVal, &controlVal, sizeof(pirVal));  // set PIR status
 }
 
-int getInputPeripheral(uint8_t cmd) {
-  // auxiliary get data from input peripheral, for return to client
-  // not used
-  int inputVal = -1;
-  if ((char)cmd == 'I') {
-     // get PIR status
-    bool pirVal = getPIRval();
-    memcpy(&inputVal, &pirVal, sizeof(pirVal)); 
-  }
-  return inputVal;
-}
-
-bool setOutputPeripheral(uint8_t cmd, uint32_t rxValue) {
-  // auxiliary sends data to output peripheral
-  int controlValue;
-  memcpy(&controlValue, &rxValue, sizeof(controlValue));
-  return setPeripheral((char)cmd, controlValue, true);
-}
-
 bool appDataFiles() {
   // callback from setupAssist.cpp, for any app specific files 
   return true;
@@ -494,7 +420,7 @@ void currentStackUsage() {
 #if INCLUDE_SMTP
   checkStackUse(emailHandle, 2);
 #endif
-#if INCLUDE_FTP
+#if INCLUDE_FTP_HFS
   checkStackUse(fsHandle, 3);
 #endif
   checkStackUse(logHandle, 4);
@@ -518,9 +444,6 @@ void currentStackUsage() {
 #if INCLUDE_TGRAM
   checkStackUse(telegramHandle, 11);
 #endif
-#if INCLUDE_UART
-  checkStackUse(uartRxHandle, 13);
-#endif
   // 16: http webserver
   for (int i=0; i < numStreams; i++) checkStackUse(sustainHandle[i], 17 + i);
 }
@@ -529,10 +452,6 @@ static void stopRC() {
   // stop RC movement if connection lost
 #if INCLUDE_PERIPH
   setLightsRC(false);
-#endif
-#if INCLUDE_MCPWM
-  if (motorFwdPin > 0) motorSpeed(0, true);
-  if (motorFwdPinR > 0) motorSpeed(0, false); 
 #endif
 }
 
@@ -597,9 +516,6 @@ void doAppPing(bool timeSynced) {
 #endif
     LOG_INF("Daily rollover");
   }
-#if INCLUDE_EXTHB
-  if (external_heartbeat_active) sendExternalHeartbeat();
-#endif
   // check for night time actions
   static bool atNight = false;
   if (wakeUse && wakePin < 0 && deepSleepTimer == 0 && timeSynced) getNocturnal();
@@ -640,6 +556,10 @@ void tgramAlert(const char* subject, const char* message) {
   } else LOG_WRN("Unable to send motion alert");
 }
 
+#if INCLUDE_TGRAM
+// calls into telegram.cpp, so it must be gated the same way as its only caller.
+// It compiled before only because it is static and provably unreferenced, so GCC
+// dropped it before the linker ever saw the undefined sendTgram* symbols
 static bool downloadAvi(const char* userCmd) {
   char* pos = strchr(userCmd, '_'); // if contains '_', assume filename
   if (pos != NULL) {
@@ -654,6 +574,7 @@ static bool downloadAvi(const char* userCmd) {
   }
   return (bool)pos;
 }
+#endif
 
 void appSpecificTelegramTask(void* p) {
 #if INCLUDE_TGRAM
@@ -804,11 +725,6 @@ mqtt_port~1883~2~N~Mqtt server port
 mqtt_user~~2~T~Mqtt user name
 mqtt_user_Pass~~2~T~Mqtt user password
 mqtt_topic_prefix~homeassistant/~2~T~Mqtt topic path prefix
-external_heartbeat_active~0~2~C~External Heartbeat Server enabled
-external_heartbeat_domain~~2~T~Heartbeat receiver domain or IP (eg. www.espsee.com)
-external_heartbeat_uri~~2~T~Heartbeat receiver URI (eg. /heartbeat/)
-external_heartbeat_port~443~2~N~Heartbeat receiver port
-external_heartbeat_token~~2~T~Heartbeat receiver auth token
 usePing~1~0~C~Use ping
 tgramUse~0~2~C~Use Telegram Bot
 tgramToken~~2~T~Telegram Bot token

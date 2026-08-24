@@ -27,23 +27,14 @@ void setup() {
 #if INCLUDE_FTP_HFS
     prepUpload();
 #endif
-#if INCLUDE_UART
-    prepUart();
-#endif
 #if INCLUDE_PERIPH
     prepPeripherals();
-  #if INCLUDE_MCPWM 
-    prepMotors();
-  #endif
 #endif
 #if INCLUDE_AUDIO
     prepAudio(); 
 #endif
 #if INCLUDE_TGRAM
     prepTelegram();
-#endif
-#if INCLUDE_I2C
-    prepI2C();
 #endif
 #if INCLUDE_PERIPH
     startHeartbeat();

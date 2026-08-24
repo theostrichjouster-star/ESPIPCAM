@@ -439,9 +439,6 @@ static boolean processFrame() {
 #if INCLUDE_PERIPH
     if (pirUse && getPIRval()) reasonId = 2;
 #endif
-#if INCLUDE_I2C && USE_MPU
-    if (accelUse && checkAccelMove()) reasonId = 3;
-#endif
     haveMotion = (reasonId) ? true : false;
   }
 
@@ -819,9 +816,6 @@ bool prepRecording() {
       LOG_INF("- raise pin %u to 3.3V", pirPin);
     }
 #endif
-#if INCLUDE_I2C
-    if (accelUse) LOG_INF("- accelerometer movement");
-#endif
     if (useMotion) LOG_INF("- move in front of camera");
   }
   logLine();
@@ -1061,13 +1055,6 @@ bool prepCam() {
   if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0]))
     LOG_ERR("framesize_t entries %d != frameData entries %d", FRAMESIZE_INVALID, sizeof(frameData) / sizeof(frameData[0]));
   if (!camPower()) return false;
-#if INCLUDE_I2C
-  if (shareI2C(SIOD_GPIO_NUM, SIOC_GPIO_NUM)) {
-    // if shared, set camera to use shared
-    siodGpio = -1;
-    siocGpio = -1;
-  }
-#endif
 
   bool res = false;
   // buffer sizing depends on psram size (2M, 4M or 8M)

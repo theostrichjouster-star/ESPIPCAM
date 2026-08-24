@@ -42,7 +42,6 @@ static bool isSensitiveKey(const std::string& key) {
   // browser in plaintext - the "_Pass" suffixed keys plus any other secret tokens
   if (key.length() >= 5 && key.compare(key.length() - 5, 5, "_Pass") == 0) return true;
   if (key == "tgramToken") return true;
-  if (key == "external_heartbeat_token") return true;
   return false;
 }
 
