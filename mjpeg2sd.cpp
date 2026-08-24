@@ -259,8 +259,15 @@ void setSensorSize(framesize_t newFS) {
 
 static void settleSensor() {
   // keep the sensor, and the frame timer, matched to whatever state the device is in.
-  // Skipped during playback, which borrows FPS for its own pacing and restores it itself
-  if (doPlayback) return;
+  // Skipped while playback is actually running, because playback borrows the global FPS for
+  // its own pacing (playbackFPS() sets it, setFPS(saveFPS) restores it) and retuning the
+  // timer underneath it would break that.
+  // Must be isPlaying, not doPlayback. doPlayback means "a playable file is selected" - it
+  // is set just by picking a file in the browser, and stopPlaying() only clears it inside
+  // if (isPlaying), so a selection that never plays leaves it true indefinitely. Guarding on
+  // it froze sensorFS for the rest of the session: the sensor stopped following fsizePtr and
+  // stopped returning to MOTION_DETECT_FS
+  if (isPlaying) return;
   framesize_t want = desiredSensorFS();
   if (want != sensorFS) setSensorSize(want);
   else if (FPS != desiredFPS(want)) {
@@ -324,6 +331,12 @@ void dumpMotionStats() {
   // frames caught at the old size after a sensor switch. Nonzero is normal and healthy -
   // it means the guard is keeping them out of recordings and streams
   LOG_INF("Stale frames flushed after switch: %lu", staleFrameCnt);
+  // settleSensor() should have reconciled these on the last frame, so a lasting mismatch
+  // means it is not running - which is how a stuck guard silently froze the sensor once
+  // already. Every symptom of that bug was "sensorFS is not what the state implies", and
+  // nothing asserted it
+  if (!isPlaying && sensorFS != desiredSensorFS()) LOG_WRN("Sensor is %s but state wants %s - settleSensor not reconciling",
+    frameData[sensorFS].frameSizeStr, frameData[desiredSensorFS()].frameSizeStr);
   LOG_INF("***************************************");
   mTimeTot = mCheckCnt = badFrameCnt = staleFrameCnt = 0; // reset the measurement window
 }
