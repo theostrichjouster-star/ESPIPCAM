@@ -286,7 +286,6 @@ Full detail is in the commit history.
 * **[s60sc](https://github.com/s60sc)** — original author of ESP32-CAM_MJPEG2SD, and of essentially all functionality in this firmware
 * [@gemi254](https://github.com/gemi254) — Home Assistant MQTT integration, and the original setup assistant
 * [@alojzjakob](https://github.com/alojzjakob) — external heartbeat
-* [@rjsachse](https://github.com/rjsachse) — shared I2C design, and the ESP32-RTSPServer library
 * [@josef2600](https://github.com/josef2600) — SD_MMC 4-line mode investigation
 * [@RedCanti](https://github.com/RedCanti) — Ethernet support (since removed from this build)
 * [@ldijkman](https://github.com/ldijkman) — installation walkthrough
