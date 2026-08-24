@@ -68,39 +68,6 @@ uint8_t aviHeader[AVI_HEADER_LEN] = { // AVI header template
   0x4C, 0x49, 0x53, 0x54, 0x00, 0x00, 0x00, 0x00, 0x6D, 0x6F, 0x76, 0x69,
 };
 
-struct frameSizeStruct {
-  uint8_t frameWidth[2];
-  uint8_t frameHeight[2];
-};
-// indexed by frame type - needs to be consistent with sensor.h framesize_t enum
-static const frameSizeStruct frameSizeData[] = {
-  {{0x60, 0x00}, {0x60, 0x00}}, // 96X96
-  {{0xA0, 0x00}, {0x78, 0x00}}, // qqvga 
-  {{0x80, 0x00}, {0x80, 0x00}}, // 128X128
-  {{0xB0, 0x00}, {0x90, 0x00}}, // qcif 
-  {{0xF0, 0x00}, {0xB0, 0x00}}, // hqvga 
-  {{0xF0, 0x00}, {0xF0, 0x00}}, // 240X240
-  {{0x40, 0x01}, {0xF0, 0x00}}, // qvga 
-  {{0x40, 0x01}, {0x40, 0x01}}, // 320X320
-  {{0x90, 0x01}, {0x28, 0x01}}, // cif 
-  {{0xE0, 0x01}, {0x40, 0x01}}, // hvga 
-  {{0x80, 0x02}, {0xE0, 0x01}}, // vga 
-  {{0x20, 0x03}, {0x58, 0x02}}, // svga 
-  {{0x00, 0x04}, {0x00, 0x03}}, // xga 
-  {{0x00, 0x05}, {0xD0, 0x02}}, // hd
-  {{0x00, 0x05}, {0x00, 0x04}}, // sxga
-  {{0x40, 0x06}, {0xB0, 0x04}}, // uxga 
-  {{0x98, 0x03}, {0x38, 0x04}}, // FHD
-  {{0xD0, 0x02}, {0x00, 0x05}}, // P_HD
-  {{0x60, 0x03}, {0x00, 0x06}}, // P_3MP
-  {{0x00, 0x08}, {0x00, 0x06}}, // QXGA
-  {{0x00, 0x0A}, {0xA0, 0x05}}, // QHD
-  {{0x00, 0x0A}, {0x40, 0x06}}, // WQXGA
-  {{0x38, 0x04}, {0x80, 0x07}}, // P_FHD
-  {{0x00, 0x0A}, {0x80, 0x07}}, // QSXGA
-  {{0x20, 0x0A}, {0x98, 0x07}}  // 5MP
-};
-
 #define IDX_ENTRY 16 // bytes per index entry
 
 static size_t idxPtr;
@@ -177,11 +144,19 @@ void buildAviHdr(uint8_t FPS, uint8_t frameType, uint16_t frameCnt, uint32_t dur
   uint32_t dataSize = moviSize + (chunkCnt * CHUNK_HDR) + 4;
   memcpy(aviHeader+0x12E, &dataSize, 4); // data size
 
-  // apply video framesize to avi header
-  memcpy(aviHeader+0x40, frameSizeData[frameType].frameWidth, 2);
-  memcpy(aviHeader+0xA8, frameSizeData[frameType].frameWidth, 2);
-  memcpy(aviHeader+0x44, frameSizeData[frameType].frameHeight, 2);
-  memcpy(aviHeader+0xAC, frameSizeData[frameType].frameHeight, 2);
+  // Apply video framesize to avi header, derived from frameData rather than from a second
+  // hand encoded table. The old frameSizeData[] duplicated all 25 rows as little endian
+  // byte pairs and its FHD row read {0x98, 0x03} = 920, not 0x0780 = 1920 - so every FHD
+  // recording ever made by this firmware declared 920x1080. ffprobe does not surface it,
+  // because the MJPEG decoder reports the real frame dimensions and overrides the
+  // container. Deriving from the one table that is already the source of truth removes the
+  // whole class rather than the single wrong row
+  uint16_t hdrWidth = frameData[frameType].frameWidth;
+  uint16_t hdrHeight = frameData[frameType].frameHeight;
+  memcpy(aviHeader+0x40, &hdrWidth, 2);
+  memcpy(aviHeader+0xA8, &hdrWidth, 2);
+  memcpy(aviHeader+0x44, &hdrHeight, 2);
+  memcpy(aviHeader+0xAC, &hdrHeight, 2);
 
   // aviHeader is a template reused by every recording, so the stream count must be
   // written on each pass - otherwise a silent file that follows one with audio
