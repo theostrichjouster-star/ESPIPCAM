@@ -32,10 +32,14 @@
 #define INCLUDE_WEBDAV false  // webDav.cpp (WebDAV protocol)
 #define INCLUDE_DS18B20 false // if true, requires INCLUDE_PERIPH and additional libraries: OneWire and DallasTemperature
 #define INCLUDE_AF true       // for auto focused equipped OV5640. Requires additional library: OV5640_Auto_Focus_for_ESP32_Camera - XIAO Sense ships with an OV5640
-// Stays false. It was only needed to allow scaleFactor 4, which the built in decoder
-// rejects - but every size motion detection can reach now uses 3 or below, so there is
-// nothing to gain. esp_new_jpeg is not in the Arduino library index either (it is an
-// ESP-IDF component), so enabling this would put a manual install step on every user.
+// Stays false, and this is now a measured decision rather than a convenience one.
+// It was originally wanted for scaleFactor 4, which the built in decoder rejects - but
+// every size motion detection can reach uses 3 or below, so there is nothing to gain
+// there. The remaining argument was decode speed, and that argument is weak: picking the
+// right scaleFactor took a motion check at VGA to 36.5 ms and 18% duty cycle with the
+// built in decoder (see the frameData notes below). esp_new_jpeg would have to beat that
+// by a wide margin to be worth it, because it is not in the Arduino library index - it is
+// an ESP-IDF component, so enabling this puts a manual install step on every user.
 #define INCLUDE_NEW_JPG false // true to use esp_new_jpg library, which must be installed first. Faster but uses more memory
 
 /**************************************************************************/
@@ -475,6 +479,20 @@ struct frameStruct {
 // is ever raised. Note they would NOT fit rgbBuf at 1/8 (90,000 and 97,200 bytes against
 // 49,344), which is what motionSizeAllowed() and the padded range check in checkMotion()
 // are there to prevent. The rows above the video cap keep 4 and are unreachable entirely.
+//
+// scaleFactor dominates motion detection cost, and NOT in the direction pixel count
+// suggests. Measured on hardware, three 45 second windows each, recording active:
+//   QVGA 320x240 @ scaleFactor 2 (/4)  ->  80x60 bitmap  ->  59.9 ms per check
+//   VGA  640x480 @ scaleFactor 3 (/8)  ->  80x60 bitmap  ->  36.5 ms per check
+//   QVGA 320x240 @ scaleFactor 3 (/8)  ->  40x30 bitmap  ->  17.5 ms per check
+// QVGA at /4 is 65% MORE expensive than VGA despite having a quarter of the pixels,
+// because /8 lets the decoder take the DC only fast path - one coefficient per 8x8
+// block - while /4 needs a real partial IDCT. Four times the blocks at near zero cost
+// each beats a quarter of the blocks at full IDCT cost. VGA is the smallest row in this
+// table that uses /8, which makes it the cheapest detection size that still feeds the
+// comparator an 80x60 source. QVGA at /8 is faster still but only produces 40x30, and
+// that detail loss was judged not worth the 19 ms - checkMotion() rescales whatever it
+// decodes to a fixed 96x96 anyway, so a coarser source just means a blockier compare.
 const frameStruct frameData[] = {
   {"96X96", 96, 96, 18, 1, 1},     // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160)
   {"QQVGA", 160, 120, 18, 1, 1},   // measured 19.7 flat out
