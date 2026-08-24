@@ -1168,13 +1168,13 @@
                       <label title="Enable/disable motion detection" class="slider" for="enableMotion"></label>
                     </div>
                   </div>
-                  <div class="input-group" id="motion-group">
+                  <div class="input-group" id="motionVal-group">
                     <label for="motionVal">Motion Sensitivity</label>
                     <input title="Set motion detection sensitivity" type="range" id="motionVal" min="1" max="10" value="7">
                   </div>
-                  <div class="input-group" id="minf-group">
-                    <label for="minf">Min Seconds</label>
-                    <input title="Minimum number of frames to be captured or the file is deleted" type="range" id="minf" min="0" max="20" value="5">
+                  <div class="input-group" id="captureSecs-group">
+                    <label for="captureSecs">Capture Seconds</label>
+                    <input title="How long a motion triggered recording runs for" type="range" id="captureSecs" min="5" max="60" value="15">
                   </div>
                   <div class="input-group" id="record-group">
                       <label for="record">Save Capture</label>
@@ -1390,6 +1390,10 @@
             <div class="info-group center">
                 <label for="fw_version">Version</label>
                 <div id="fw_version" class="info displayonly">&nbsp;</div>
+            </div>
+            <div class="info-group center">
+                <label for="sensorState">Sensor</label>
+                <div id="sensorState" class="info displayonly">&nbsp;</div>
             </div>
             <div class="info-group center">
                 <label for="llevel">Ambient&nbsp;Light</label>

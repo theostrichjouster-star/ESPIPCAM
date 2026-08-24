@@ -34,10 +34,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
 #ifndef AUXILIARY
   else if (!strcmp(variable, "stopStream")) stopSustainTask(intVal);
   else if (!strcmp(variable, "stopPlaying")) stopPlaying();
-  else if (!strcmp(variable, "minf")) minSeconds = intVal; 
   else if (!strcmp(variable, "motionVal")) motionVal = intVal;
   else if (!strcmp(variable, "moveStartChecks")) moveStartChecks = intVal;
-  else if (!strcmp(variable, "moveStopSecs")) moveStopSecs = intVal;
+  else if (!strcmp(variable, "captureSecs")) captureSecs = intVal > 0 ? intVal : captureSecs;
   else if (!strcmp(variable, "maxFrames")) maxFrames = intVal > 0 ? intVal : maxFrames;
   else if (!strcmp(variable, "detectMotionFrames")) detectMotionFrames = intVal;
   else if (!strcmp(variable, "detectNightFrames")) detectNightFrames = intVal;
@@ -160,26 +159,25 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     if (intVal > maxFS && fromUser) LOG_WRN("Frame size %s too large for %s PSRAM ", frameData[intVal].frameSizeStr, fmtSize(ESP.getPsramSize()));
     else {
       fsizePtr = intVal;
-      if (!motionSizeAllowed(fsizePtr)) LOG_WRN("Motion detection not available as frame size %s too large", frameData[fsizePtr].frameSizeStr);
       if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills only, no AVI recording",
         frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
-
-      if (s) {
-        res = s->set_framesize(s, (framesize_t)fsizePtr);
-        if (res == ESP_OK) {
-          // update default FPS for this frame size
-          if (playbackHandle != NULL) {
-            setFPSlookup(fsizePtr);
-            char fpsStr[8];
-            snprintf(fpsStr, sizeof(fpsStr), "%u", FPS);
-            updateConfigVect("fps", fpsStr);
-          }
-        }
+      // Deliberately does NOT touch the sensor. settleSensor() in the capture task owns
+      // sensorFS and applies this on the next frame. Setting the hardware here behind its
+      // back leaves sensorFS stale, and checkMotion() then decodes the new, larger frame
+      // using the detection size's scaling and overruns rgbBuf - confirmed on hardware,
+      // selecting FHD left the sensor at 1920x1080 while sensorFS still said VGA
+      if (playbackHandle != NULL) {
+        // update default FPS for this frame size
+        captureFPS = frameData[fsizePtr].defaultFPS;
+        char fpsStr[8];
+        snprintf(fpsStr, sizeof(fpsStr), "%u", captureFPS);
+        updateConfigVect("fps", fpsStr);
       }
     }
   }
   else if (!strcmp(variable, "fps")) {
     FPS = intVal;
+    captureFPS = intVal; // the user's rate for the capture size, preserved across switches
     if (playbackHandle != NULL) setFPS(FPS);
   }
   else if (s) {
@@ -239,8 +237,10 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     httpd_resp_sendstr(req, jsonBuff);
   } 
   else if (!strcmp(variable, "updateFPS")) {
-    // requires response with updated default fps
-    sprintf(jsonBuff, "{\"fps\":\"%u\"}", setFPSlookup(fsizePtr));
+    // Report the capture resolution's default rate for the slider. Must not go through
+    // setFPSlookup(), which calls setFPS() and so retunes the live frame timer - a UI poll
+    // while idle at MOTION_DETECT_FS would otherwise yank the timer to the capture rate
+    sprintf(jsonBuff, "{\"fps\":\"%u\"}", frameData[fsizePtr].defaultFPS);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   } 
@@ -254,7 +254,10 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
       httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
       httpd_resp_send(req, (const char*)alertBuffer, alertBufferSize);
       uint32_t jpegTime = millis() - startTime;
-      LOG_INF("%s JPEG: %uB in %lums", frameData[fsizePtr].frameSizeStr, alertBufferSize, jpegTime);
+      // report the size actually delivered. While motion detection is armed the sensor
+      // sits at MOTION_DETECT_FS, so a still is that size, not the capture resolution -
+      // naming fsizePtr here would confidently report a size that was never captured
+      LOG_INF("%s JPEG: %uB in %lums", frameData[sensorFS].frameSizeStr, alertBufferSize, jpegTime);
       alertBufferSize = 0;
     } else LOG_WRN("Failed to get still");
   } 
@@ -357,6 +360,8 @@ char* buildAppJsonString(bool filter) {
   p += sprintf(p, "\"sustainId\":\"%u\",", sustainId);
   // Extend info
 #ifndef AUXILIARY
+  // the sensor changes size on its own now, and nothing else in the UI reports that
+  p += sprintf(p, "\"sensorState\":\"%s\",", sensorStateStr());
   uint8_t cardType = 99; // not MMC
   if ((fs::SDMMCFS*)&STORAGE == &SD_MMC) cardType = SD_MMC.cardType();
   if (cardType == CARD_NONE) p += sprintf(p, "\"card\":\"%s\",", "NO card");
@@ -670,7 +675,6 @@ hmirror~0~98~~na
 lenc~1~98~~na
 lswitch~10~98~~na
 micGain~5~98~~na
-minf~5~98~~na
 motionVal~8~98~~na
 quality~12~98~~na
 raw_gma~1~98~~na
@@ -703,7 +707,7 @@ responseTimeoutSecs~10~2~N~Server response timeout (secs)
 maxFrames~10000~1~N~Max frames in recording
 dashCamOn~0~98~~na
 moveStartChecks~5~1~N~Checks per second for start motion
-moveStopSecs~2~1~N~Non movement to stop recording (secs)
+captureSecs~15~1~N~Motion recording length (secs)
 detectMotionFrames~5~1~N~Num changed frames to start motion
 detectNightFrames~10~1~N~Min dark frames to indicate night
 detectNumBands~10~1~N~Total num of detection bands

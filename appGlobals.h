@@ -73,7 +73,7 @@
 // to determine if newer data files need to be loaded. Bump whenever a config row is
 // added, removed or moved group, so an existing configs.txt is regenerated rather than
 // leaving stale keys behind
-#define CFG_VER 47
+#define CFG_VER 48
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -160,6 +160,17 @@
 // everything within the cap is HD and P_HD at 160x90 and 90x160, 43,200 bytes of 49,344
 #define MOTION_MCU_PX 16 // jpeg minimum coded unit, 4:2:0
 #define MOTION_RGB_BUF_SIZE (((MOTION_MAX_PIXELS / 64) + 2048) * RGB888_BYTES)
+// The size the sensor is held at while armed and idle, so motion detection never decodes
+// the user's capture resolution. Fixed, not user exposed.
+// VGA is chosen by measurement, not by pixel count. Three 45s windows each, recording active:
+//   QVGA 320x240 @ scaleFactor 2 (/4)  ->  80x60 bitmap  ->  59.9 ms per check
+//   VGA  640x480 @ scaleFactor 3 (/8)  ->  80x60 bitmap  ->  36.5 ms per check
+//   QVGA 320x240 @ scaleFactor 3 (/8)  ->  40x30 bitmap  ->  17.5 ms per check
+// /8 lets the decoder take its DC only fast path, one coefficient per 8x8 block, while /4
+// needs a real partial IDCT - so QVGA at /4 costs 65% more than VGA despite carrying a
+// quarter of the pixels. VGA is the smallest row in frameData using scaleFactor 3, and it
+// yields the same 80x60 comparator source that QVGA at /4 does, for less time.
+#define MOTION_DETECT_FS FRAMESIZE_VGA
 #define MIC_GAIN_CENTER 3 // mid point
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3 
@@ -282,13 +293,18 @@ size_t writeAviIndex(byte* clientBuf, size_t buffSize);
 #ifndef AUXILIARY
 bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly = false);
 void keepFrame(camera_fb_t* fb);
+void setSensorSize(framesize_t newFS);
+uint16_t jpegWidth(const uint8_t* buf, size_t len); // width from the JPEG SOF, not fb->width
+bool viewerActive(); // a browser or NVR video stream is connected
+bool nvrActive(); // an NVR video stream is connected
+const char* sensorStateStr();
 #endif
 
 /******************** Global app declarations *******************/
 
 // motion detection parameters
 extern int moveStartChecks; // checks per second for start motion
-extern int moveStopSecs; // secs between each check for stop, also determines post motion time
+extern int captureSecs; // fixed duration of a motion triggered recording
 
 // motion recording parameters
 extern int detectMotionFrames; // min sequence of changed frames to confirm motion 
@@ -306,12 +322,12 @@ extern bool doPlayback;
 extern bool doRecording; // whether to capture to SD or not
 extern bool forceRecord; // Recording enabled by rec button or dashcam slider
 extern uint8_t FPS;
+extern uint8_t captureFPS; // user's chosen rate for the capture resolution
 extern uint8_t fsizePtr; // index to frameData[] for record
 extern bool isCapturing;
 extern uint8_t lightLevel;  
 extern uint8_t lampLevel;  
 extern int micGain;
-extern uint8_t minSeconds; // default min video length (includes moveStopSecs time)
 extern float motionVal;  // motion sensitivity setting - min percentage of changed pixels that constitute a movement
 extern uint8_t nightSwitch; // initial white level % for night/day switching
 extern bool nightTime; 
@@ -332,6 +348,10 @@ extern uint8_t vidStreams;
 #ifndef AUXILIARY
 extern framesize_t maxFS;
 extern framesize_t maxVideoFS; // AVI recording cap, stills are not capped
+// what the sensor is set to right now, which is not the same thing as fsizePtr. fsizePtr
+// stays the user's chosen capture resolution; sensorFS drops to MOTION_DETECT_FS whenever
+// the device is armed and idle, so nothing decodes a large frame
+extern framesize_t sensorFS;
 #endif
 
 // buffers

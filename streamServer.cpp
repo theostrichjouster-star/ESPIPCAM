@@ -196,6 +196,18 @@ void stopSustainTask(int taskId) {
   isStreaming[taskId] = false;
 }
 
+bool viewerActive() {
+  // a live video consumer is attached, so the sensor must stay at the capture resolution
+  // for the whole session rather than switching under it. Slot 0 is the browser live
+  // stream, slot 1 the NVR video stream - slot 2 is audio, which has no bearing on the
+  // sensor. showPlayback() uses doPlayback and does not set isStreaming[0]
+  return isStreaming[0] || isStreaming[1];
+}
+
+bool nvrActive() {
+  return isStreaming[1];
+}
+
 static void sustainTask(void* p) {
   // process sustained http(s) requests as a separate task 
   while (true) {

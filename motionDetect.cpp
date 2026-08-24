@@ -149,11 +149,24 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   }
   size_t RESIZE_DIM_SQ = (RESIZE_DIM * RESIZE_DIM); // pixels in bitmap
   
-  if (!motionSizeAllowed(fsizePtr)) return false; // pixel count, not enum index
+  // keyed off sensorFS, the size the sensor is actually at, not fsizePtr - the capture
+  // resolution the user picked is never what gets decoded here
+  if (!motionSizeAllowed(sensorFS)) return false; // pixel count, not enum index
+  // The sensor has to actually be at the size sensorFS claims. Anything that changes the
+  // frame size without going through setSensorSize() leaves this stale, and the scaling
+  // below would then be derived from the wrong size - decoding a large frame into a buffer
+  // sized for the detection frame. Cheap to check, and it fails a check instead of
+  // overrunning rgbBuf
+  uint16_t encodedW = jpegWidth((const uint8_t*)fb->buf, fb->len);
+  if (encodedW && encodedW != frameData[sensorFS].frameWidth) {
+    LOG_WRN("Frame encodes %u wide but sensorFS says %s - check skipped", encodedW,
+      frameData[sensorFS].frameSizeStr);
+    return motionStatus;
+  }
   uint32_t dTime = millis();
   uint32_t lux = 0;
   static uint32_t motionCnt = 0;
-  static uint8_t fsizePtrPrev = 255; // initially invalid to force setup on first call
+  static uint8_t sensorFSprev = 255; // initially invalid to force setup on first call
   static uint8_t scaling, downsize;
   static uint16_t reducer;
   static int sampleWidth = 0, sampleHeight = 0;
@@ -168,22 +181,22 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
 #endif  
 
   // calculate parameters for sample size when resolution changes
-  if (fsizePtr != fsizePtrPrev) {
-    fsizePtrPrev = fsizePtr;
-    scaling = frameData[fsizePtr].scaleFactor; 
-    reducer = frameData[fsizePtr].sampleRate;
+  if (sensorFS != sensorFSprev) {
+    sensorFSprev = sensorFS;
+    scaling = frameData[sensorFS].scaleFactor;
+    reducer = frameData[sensorFS].sampleRate;
     downsize = pow(2, scaling) * reducer;
     stride = (colorDepth == RGB888_BYTES) ? GRAYSCALE_BYTES : RGB888_BYTES; // stride is inverse of colorDepth
-    sampleWidth = frameData[fsizePtr].frameWidth / downsize;
-    sampleHeight = frameData[fsizePtr].frameHeight / downsize;
+    sampleWidth = frameData[sensorFS].frameWidth / downsize;
+    sampleHeight = frameData[sensorFS].frameHeight / downsize;
     // the decoder writes straight into rgbBuf, so refuse rather than overflow it. Must
     // test the MCU padded dimensions, not the nominal ones - FHD writes 240x136 while
     // frameData says 1920x1080, and checking the nominal 240x135 misses the overrun
-    size_t padW = ((frameData[fsizePtr].frameWidth + MOTION_MCU_PX - 1) / MOTION_MCU_PX * MOTION_MCU_PX) / downsize;
-    size_t padH = ((frameData[fsizePtr].frameHeight + MOTION_MCU_PX - 1) / MOTION_MCU_PX * MOTION_MCU_PX) / downsize;
+    size_t padW = ((frameData[sensorFS].frameWidth + MOTION_MCU_PX - 1) / MOTION_MCU_PX * MOTION_MCU_PX) / downsize;
+    size_t padH = ((frameData[sensorFS].frameHeight + MOTION_MCU_PX - 1) / MOTION_MCU_PX * MOTION_MCU_PX) / downsize;
     if (padW * padH * RGB888_BYTES > MOTION_RGB_BUF_SIZE) {
       LOG_WRN("Motion bitmap %ux%u for %s needs %u bytes, buffer is %u - detection disabled, lower its scaleFactor",
-        (unsigned)padW, (unsigned)padH, frameData[fsizePtr].frameSizeStr,
+        (unsigned)padW, (unsigned)padH, frameData[sensorFS].frameSizeStr,
         (unsigned)(padW * padH * RGB888_BYTES), (unsigned)MOTION_RGB_BUF_SIZE);
       sampleWidth = sampleHeight = 0;
     }

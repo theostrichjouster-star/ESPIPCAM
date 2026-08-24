@@ -24,7 +24,12 @@ bool forceRecord = false; // Recording enabled by rec button
 
 // motion detection parameters
 int moveStartChecks = 5; // checks per second for start motion
-int moveStopSecs = 2; // secs between each check for stop, also determines post motion time
+// A motion triggered recording now runs for a fixed time rather than for as long as
+// movement persists. Detection is suspended while capturing - the sensor is at the user's
+// resolution then, and decoding that is what the redesign exists to avoid - so there is
+// nothing left to watch for a stop condition. Continuous movement produces a series of
+// captureSecs files rather than one long one
+int captureSecs = 15; // fixed duration of a motion triggered recording
 // audio chunks are written every AUD_CHUNK_MIN bytes rather than every frame, so above
 // 4fps the index needs well under 2 entries per frame. Overflowing it now closes the
 // recording rather than rebooting, so this is a target rather than a hard ceiling
@@ -32,9 +37,12 @@ int maxFrames = 10000; // maximum number of frames in video before auto close
 
 // status & control fields
 uint8_t FPS = 0;
+// The rate the user chose for the capture resolution. FPS itself now follows sensorFS, so
+// without this a sensor switch would silently overwrite a manually set frame rate with the
+// frame size default and never put it back
+uint8_t captureFPS = 20;
 bool nightTime = false;
-uint8_t fsizePtr; // index to frameData[]
-uint8_t minSeconds = 5; // default min video length (includes POST_MOTION_TIME)
+uint8_t fsizePtr; // index to frameData[], the user's chosen capture resolution
 bool doRecording = true; // whether to capture to SD or not
 uint8_t xclkMhz = 20; // camera clock rate MHz
 bool doKeepFrame = false;
@@ -102,6 +110,8 @@ framesize_t maxFS = FRAMESIZE_SVGA; // default, sizes the camera frame buffers
 // cap them too. Above this cap you still get full resolution stills, just no motion or
 // forced AVI recording
 framesize_t maxVideoFS = FRAMESIZE_FHD;
+// what the sensor is set to right now. Initialised by prepCam() once fsizePtr is known
+framesize_t sensorFS = MOTION_DETECT_FS;
 
 /**************** timers & ISRs ************************/
 
@@ -158,14 +168,120 @@ static void openAvi() {
   prepAviIndex();
 }
 
-static inline bool doMonitor(bool capturing) {
-  // monitor incoming frames for motion
+static inline bool doMonitor() {
+  // monitor incoming frames for motion. Only ever reached while armed and idle, so there
+  // is no separate during-capture rate any more - a recording runs for a fixed captureSecs
+  // and detection is suspended for its whole duration
   static uint16_t motionCnt = 0;
-  // ratio for monitoring stop during capture / movement prior to capture
-  uint16_t checkRate = (capturing) ? FPS * moveStopSecs : FPS / moveStartChecks;
+  uint16_t checkRate = FPS / moveStartChecks;
   if (!checkRate) checkRate = 1;
   if (++motionCnt / checkRate) motionCnt = 0; // time to check for motion
   return !(bool)motionCnt;
+}
+
+// geometry the sensor is being switched away from, so in flight frames can be recognised
+static uint16_t staleWidth = 0, staleHeight = 0;
+static uint8_t flushFrames = 0; // bounded, so an unexpected size cannot wedge the task
+static uint32_t staleFrameCnt = 0; // reported by dumpMotionStats, so this stays visible
+
+uint16_t jpegWidth(const uint8_t* buf, size_t len) {
+  // Width the encoder actually wrote, read from the JPEG SOF header.
+  // fb->width cannot be used for this: the driver fills the frame descriptor from its
+  // current configuration, so immediately after set_framesize() it reports the NEW size
+  // while the buffer still holds a frame captured at the OLD one. Measured on hardware -
+  // a 9150 byte buffer described as 1920x1080, where a real FHD frame is ~82000 bytes.
+  // Returns 0 if no SOF is found, which callers treat as "unknown, do not discard"
+  for (size_t i = 2; i + 9 < len && i < 1024; ) {
+    if (buf[i] != 0xFF) { i++; continue; }
+    uint8_t m = buf[i + 1];
+    if (m == 0xC0 || m == 0xC1 || m == 0xC2) return (buf[i + 7] << 8) | buf[i + 8];
+    if (m == 0xD8 || m == 0xD9 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+    i += 2 + ((buf[i + 2] << 8) | buf[i + 3]);
+  }
+  return 0;
+}
+
+static bool detectionActive() {
+  // armed and idle is the only state that decodes. With motion detection off the sensor
+  // stays at the user's resolution, so a still or a stream is instant rather than paying
+  // for a switch it gains nothing from
+  if (!useMotion || isCapturing || dashCamOn) return false;
+  // dbgMotion streams the detector's own bitmap to the browser, so detection has to keep
+  // running for that view to show anything at all. It is a diagnostic mode, so the live
+  // view being at the detection size is the point rather than a cost
+  if (dbgMotion) return true;
+  return !viewerActive();
+}
+
+static framesize_t desiredSensorFS() {
+  // derived from the same predicate, so the sensor is at the detection size exactly when
+  // detection runs - the two cannot drift apart
+  return detectionActive() ? MOTION_DETECT_FS : (framesize_t)fsizePtr;
+}
+
+static inline uint8_t desiredFPS(framesize_t forFS) {
+  // the detection size runs at its own default; the capture size runs at whatever the user
+  // chose, which is what captureFPS preserves across switches
+  return (forFS == MOTION_DETECT_FS) ? frameData[MOTION_DETECT_FS].defaultFPS : captureFPS;
+}
+
+void setSensorSize(framesize_t newFS) {
+  // Switch the sensor between the detection size and the user's capture size.
+  // Deliberately does not go through setFPS(): that writes saveFPS, which playback uses to
+  // restore the browser's rate, so routing every transition through it would leave a
+  // playback started while idle restoring the detection rate instead of the user's.
+  // Must only be called from the capture task with no frame checked out - it hands every
+  // queued buffer back to the driver
+  if (newFS == sensorFS) return;
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL) return;
+  uint32_t sTime = millis();
+  // Remember the geometry we are leaving. Draining the queue is not enough on its own: a
+  // frame already in flight in DMA still completes at the old size and gets queued after
+  // the reconfigure, so the first frame out can be stale. Confirmed on hardware - frame 0
+  // of an FHD recording was 640x480. processFrame() discards anything still matching this
+  staleWidth = frameData[sensorFS].frameWidth;
+  staleHeight = frameData[sensorFS].frameHeight;
+  flushFrames = FB_CNT * 2; // every buffer, plus margin for one in flight per buffer
+  // drain what the driver already holds at the old size before reconfiguring. Returning a
+  // queued frame is immediate because it is already captured, so this costs far less than
+  // reconfiguring first and then burning a frame interval per stale buffer
+  esp_camera_return_all();
+  if (s->set_framesize(s, newFS) != ESP_OK) {
+    LOG_WRN("Failed to switch sensor to %s", frameData[newFS].frameSizeStr);
+    return;
+  }
+  sensorFS = newFS;
+  FPS = desiredFPS(newFS);
+  controlFrameTimer(true);
+  LOG_VRB("Sensor -> %s @ %u fps in %lums", frameData[newFS].frameSizeStr, FPS, millis() - sTime);
+}
+
+static void settleSensor() {
+  // keep the sensor, and the frame timer, matched to whatever state the device is in.
+  // Skipped during playback, which borrows FPS for its own pacing and restores it itself
+  if (doPlayback) return;
+  framesize_t want = desiredSensorFS();
+  if (want != sensorFS) setSensorSize(want);
+  else if (FPS != desiredFPS(want)) {
+    // size is already right but the rate is not - happens after a playback restores the
+    // browser's rate while the sensor is sitting at the detection size
+    FPS = desiredFPS(want);
+    controlFrameTimer(true);
+  }
+}
+
+const char* sensorStateStr() {
+  // what the sensor is doing right now, for the web UI - it changes size on its own now,
+  // and nothing else reports that
+  static char stateBuf[32];
+  const char* fsStr = frameData[sensorFS].frameSizeStr;
+  if (isCapturing) snprintf(stateBuf, sizeof(stateBuf), "%s (%s)", dashCamOn ? "DashCam" : "Recording", fsStr);
+  else if (nvrActive()) snprintf(stateBuf, sizeof(stateBuf), "NVR - recording paused (%s)", fsStr);
+  else if (viewerActive()) snprintf(stateBuf, sizeof(stateBuf), "Live view (%s)", fsStr);
+  else if (useMotion) snprintf(stateBuf, sizeof(stateBuf), "Detecting (%s)", fsStr);
+  else snprintf(stateBuf, sizeof(stateBuf), "Idle (%s)", fsStr);
+  return stateBuf;
 }
 
 bool videoSizeAllowed(uint8_t fsize) {
@@ -190,9 +306,11 @@ void dumpMotionStats() {
   if (!checkRate) checkRate = 1;
   float perSec = (float)FPS / checkRate;
   LOG_INF("******** Motion detection stats ********");
-  LOG_INF("Frame size: %s (%ux%u), app FPS %u, enabled: %s", frameData[fsizePtr].frameSizeStr,
-    frameData[fsizePtr].frameWidth, frameData[fsizePtr].frameHeight, FPS,
-    motionSizeAllowed(fsizePtr) ? "yes" : "no - above pixel cap");
+  // report the size actually being detected on, which is sensorFS, not the capture size
+  LOG_INF("Detect size: %s (%ux%u), app FPS %u, enabled: %s", frameData[sensorFS].frameSizeStr,
+    frameData[sensorFS].frameWidth, frameData[sensorFS].frameHeight, FPS,
+    motionSizeAllowed(sensorFS) ? "yes" : "no - above pixel cap");
+  LOG_INF("Capture size: %s, state: %s", frameData[fsizePtr].frameSizeStr, sensorStateStr());
   LOG_INF("moveStartChecks %d -> check every %u frame(s) = %0.1f checks/sec", moveStartChecks, checkRate, perSec);
   if (mCheckCnt) {
     float perCheck = (float)mTimeTot / mCheckCnt / 1000.0f; // us -> ms
@@ -203,8 +321,11 @@ void dumpMotionStats() {
   // any nonzero count here used to leak a frame buffer permanently, FB_CNT of them
   // being enough to wedge the capture task
   LOG_INF("Bad frames discarded: %lu (of %d buffers)", badFrameCnt, FB_CNT);
+  // frames caught at the old size after a sensor switch. Nonzero is normal and healthy -
+  // it means the guard is keeping them out of recordings and streams
+  LOG_INF("Stale frames flushed after switch: %lu", staleFrameCnt);
   LOG_INF("***************************************");
-  mTimeTot = mCheckCnt = badFrameCnt = 0; // reset the measurement window
+  mTimeTot = mCheckCnt = badFrameCnt = staleFrameCnt = 0; // reset the measurement window
 }
 
 void keepFrame(camera_fb_t* fb) {
@@ -296,7 +417,7 @@ static bool closeAvi() {
   uint32_t vidDuration = millis() - startTime;
   uint32_t vidDurationSecs = lround(vidDuration / 1000.0);
   logLine();
-  LOG_VRB("Capture time %lu, min seconds: %u ", vidDurationSecs, minSeconds);
+  LOG_VRB("Capture time %lu secs, %u frames", vidDurationSecs, frameCnt);
 
   cTime = millis();
 #if INCLUDE_AUDIO
@@ -333,7 +454,9 @@ static bool closeAvi() {
     mqttPublishPath("record", "off");
   }
 #endif
-  if (vidDurationSecs >= minSeconds) {
+  // a motion capture now runs for a fixed captureSecs, so there is no short recording to
+  // discard - the only file worth throwing away is one with nothing in it
+  if (frameCnt) {
     // name file to include actual dateTime, FPS, duration, and frame count
     int alen = snprintf(aviFileName, FILE_NAME_LEN - 1, "%s_%s_%u_%lu%s%s.%s",
                         partName, frameData[fsizePtr].frameSizeStr, actualFPSint, vidDurationSecs,
@@ -388,9 +511,9 @@ static bool closeAvi() {
     if (!checkFreeStorage()) doRecording = forceRecord = false;
     return true;
   } else {
-    // delete too small files if exist
+    // nothing was captured, so there is no usable file to keep
     STORAGE.remove(AVITEMP);
-    LOG_INF("Insufficient capture duration: %lu secs", vidDurationSecs);
+    LOG_WRN("Discarded empty recording after %lu secs", vidDurationSecs);
     return false;
   }
 }
@@ -398,6 +521,9 @@ static bool closeAvi() {
 static boolean processFrame() {
   // get camera frame
   static bool haveMotion = false;
+  // whether the open recording was started by motion, and so runs to a fixed frame limit
+  // rather than for as long as the record button is held
+  static bool motionTriggered = false;
   bool res = true;
   uint32_t dTime = millis();
 
@@ -415,6 +541,25 @@ static boolean processFrame() {
     return false;
   }
 
+  // Drop frames left over from before a sensor switch. Tested against the geometry we
+  // switched away from rather than against the size we expect, because frameData and the
+  // sensor disagree for P_FHD (1080 vs 1088) - matching the old size exactly avoids
+  // discarding perfectly good frames on that one. Bounded by FB_CNT so an unexpected size
+  // cannot stall the capture task. Placed before the stream copy and keepFrame so a stale
+  // frame reaches neither a viewer nor a recording
+  if (flushFrames) {
+    // Tested against the encoded JPEG, not fb->width - see jpegWidth(). Compared with the
+    // width we switched away from rather than the one we expect, so P_FHD's frameData /
+    // sensor disagreement (1080 vs 1088) cannot cause good frames to be dropped
+    flushFrames--;
+    if (jpegWidth(fb->buf, fb->len) == staleWidth) {
+      staleFrameCnt++;
+      esp_camera_fb_return(fb);
+      return false;
+    }
+    flushFrames = 0; // buffer content is genuinely at the new size now
+  }
+
   for (int i = 0; i < vidStreams; i++) {
     if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
       memcpy(streamBuffer[i], fb->buf, fb->len);
@@ -427,24 +572,32 @@ static boolean processFrame() {
     doKeepFrame = false;
   }
 
-  // determine if time to check for motion change
+  // Motion detection runs only while armed and idle. Recording, live view, NVR and
+  // dashcam all skip the decode entirely, so no frame at the capture resolution ever
+  // reaches the decoder - that is what makes the large frame hang unreachable. It is also
+  // what makes turning motion detection off genuinely free: the lightLevelOnly path used
+  // to return after the decode rather than before it, so it cost the same as a real check
   int reasonId = 0;
   bool prevMotion = haveMotion;
-  if (doMonitor(doRecording ? isCapturing : dbgMotion ? false : true)) {
-    uint32_t mTime = micros(); // micros, as a check can be only a few ms
-    if (useMotion && checkMotion(fb, isCapturing)) reasonId = 1; // check 1 in N frames
-    if (!useMotion) checkMotion(fb, false, true); // calc light level only
-    mTimeTot += micros() - mTime;
-    mCheckCnt++;
+  if (detectionActive()) {
+    if (doMonitor()) {
+      uint32_t mTime = micros(); // micros, as a check can be only a few ms
+      if (checkMotion(fb, false)) reasonId = 1; // check 1 in N frames, never while capturing
+      mTimeTot += micros() - mTime;
+      mCheckCnt++;
 #if INCLUDE_PERIPH
-    if (pirUse && getPIRval()) reasonId = 2;
+      if (pirUse && getPIRval()) reasonId = 2;
 #endif
-    haveMotion = (reasonId) ? true : false;
+      haveMotion = (reasonId) ? true : false;
+    }
   }
 
   // process motion status
   if (haveMotion && !prevMotion) {
-    // start of movement detection
+    // Start of movement detection. The frame kept here is the detection frame, so the
+    // alert image is at MOTION_DETECT_FS - deliberately, since switching the sensor up
+    // just to grab a thumbnail would cost a frame interval for detail an alert image
+    // does not need. The still handler reports the real size rather than assuming fsizePtr
     keepFrame(fb);
 #if INCLUDE_PERIPH
     buzzerAlert(true); // sound buzzer if enabled
@@ -458,18 +611,37 @@ static boolean processFrame() {
 #endif
   }
 
-  // recording status
+  // Recording status. A motion triggered capture runs for a fixed captureSecs and is ended
+  // by the frame limit, not by movement stopping - detection is suspended for its whole
+  // duration, so there is no motion signal left to watch. A forced capture (record button
+  // or dashcam) still runs for as long as it is held on
+  // doRecording is the Save Capture toggle, and is also cleared when the SD card fills and
+  // when there is no card at all. It now gates motion triggered recordings, which it never
+  // actually did before: its only read was inside the doMonitor() rate expression, so
+  // turning Save Capture off still recorded, and a full card still recorded. The record
+  // button bypasses it, being an explicit user action
   bool prevCapture = isCapturing;
-  isCapturing = haveMotion | forceRecord;
+  if (!isCapturing) {
+    if ((haveMotion && doRecording) || forceRecord) {
+      isCapturing = true;
+      motionTriggered = haveMotion && !forceRecord;
+    }
+  } else if (!motionTriggered && !forceRecord) isCapturing = false;
+
   if (isCapturing && !videoSizeAllowed(fsizePtr)) {
     // refuse the recording, but leave stills running at this size.
     // If a recording was already open this closes it cleanly via the branch below
     if (!prevCapture) LOG_WRN("Video recording unavailable at %s, above the %s cap - stills are unaffected",
       frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
-    isCapturing = forceRecord = false;
+    isCapturing = forceRecord = motionTriggered = false;
   }
   if (isCapturing && !prevCapture) {
-    // new movement has occurred or record button pressed, start recording
+    // New movement has occurred or record button pressed. The frame in hand is a detection
+    // frame at MOTION_DETECT_FS, so hand it back and switch the sensor up before opening
+    // the file - nothing at the detection size is ever written into a recording. This pass
+    // saves no frame; the next notify delivers one at the capture resolution
+    esp_camera_fb_return(fb);
+    haveMotion = false; // consumed - the frame limit ends this capture now, not movement
     stopPlaying(); // terminate any playback
     stopPlayback = true; // stop any subsequent playback
     if (!dashCamOn) LOG_ALT("Capture started by %s%s%s%s", reasonId == 0 ? "Button" : "", reasonId == 1 ? "Camera " : "", reasonId == 2 ? "PIR" : "", reasonId == 3 ? "Accelerometer" : "");
@@ -481,7 +653,14 @@ static boolean processFrame() {
     }
 #endif
     wsAsyncSendJson("ustatus", "\"showRecord\":1");
+    setSensorSize((framesize_t)fsizePtr);
+    if (!dashCamOn) {
+      // FPS now follows the capture size, so derive the limit after the switch
+      frameLimit = captureSecs * FPS;
+      if (frameLimit > maxFrames) frameLimit = maxFrames;
+    }
     openAvi();
+    return true;
   }
 
   if (isCapturing) {
@@ -496,7 +675,7 @@ static boolean processFrame() {
       bool indexFull = aviIndexNearFull();
       if (frameCnt >= frameLimit || indexFull) {
         // stop saving frames for this avi as limit reached
-        isCapturing = forceRecord = false;
+        isCapturing = forceRecord = motionTriggered = false;
         if (!dashCamOn) {
           logLine();
           if (indexFull) LOG_WRN("Auto closed recording after %u frames - AVI index full", frameCnt);
@@ -516,6 +695,20 @@ static boolean processFrame() {
     wsAsyncSendJson("ustatus", "\"showRecord\":0");
     stopPlayback = false; // allow for playbacks
   }
+
+  // A connected viewer pins the sensor to the capture resolution, which suspends motion
+  // recording for as long as it stays connected. That is a big enough behaviour change to
+  // say out loud rather than leave the user wondering why nothing recorded
+  static bool prevViewer = false;
+  bool nowViewer = viewerActive();
+  if (nowViewer != prevViewer) {
+    prevViewer = nowViewer;
+    if (useMotion) LOG_ALT("%s video stream %s - motion recording %s", nvrActive() ? "NVR" : "Browser",
+      nowViewer ? "connected" : "disconnected", nowViewer ? "suspended" : "resumed");
+  }
+  // settle the sensor for whatever state we are now in. No-op when already correct, and
+  // safe here because the frame buffer has been handed back above
+  settleSensor();
   return res;
 }
 
@@ -545,7 +738,8 @@ uint8_t setFPS(uint8_t val) {
 uint8_t setFPSlookup(uint8_t val) {
   // set FPS from framesize lookup
   fsizePtr = val;
-  return setFPS(frameData[fsizePtr].defaultFPS);
+  captureFPS = frameData[fsizePtr].defaultFPS; // new capture size, so a new default rate
+  return setFPS(captureFPS);
 }
 
 /********************** plackback AVI as MJPEG ***********************/
@@ -781,9 +975,13 @@ static bool startSDtasks() {
     OTAprereq();
     return false;
   }
-  // set initial camera framesize and FPS from configs
+  // set initial camera framesize and FPS from configs. sensorFS tracks what the sensor is
+  // actually set to - processFrame() drops it to MOTION_DETECT_FS on the first frame if
+  // the device comes up armed and idle
   sensor_t * s = esp_camera_sensor_get();
   s->set_framesize(s, (framesize_t)fsizePtr);
+  sensorFS = (framesize_t)fsizePtr;
+  captureFPS = FPS; // whatever the config loaded is the user's capture rate
   setFPS(FPS);
   debugMemory("startSDtasks");
   return true;
@@ -995,7 +1193,7 @@ void dumpCamRegs() {
   float sensorFps = (hts > 0 && vts > 0) ? (float)sysClk / ((float)hts * vts) : 0.0;
 
   LOG_INF("******** OV5640 clock tree ********");
-  LOG_INF("Frame size: %s, XCLK %uMHz (fixed)", frameData[fsizePtr].frameSizeStr, xclkMhz);
+  LOG_INF("Frame size: %s, XCLK %uMHz (fixed)", frameData[sensorFS].frameSizeStr, xclkMhz);
   LOG_INF("PLL regs: 0x3034=0x%02X 0x3035=0x%02X 0x3036=%d 0x3037=0x%02X 0x3039=0x%02X",
     r34, r35, mul, r37, r39);
   LOG_INF("PCLK regs: 0x3108=0x%02X 0x3824=%d 0x460C=0x%02X 0x3103=0x%02X",
