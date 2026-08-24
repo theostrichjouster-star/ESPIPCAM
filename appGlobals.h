@@ -329,6 +329,8 @@ extern uint8_t lightLevel;
 extern uint8_t lampLevel;  
 extern int micGain;
 extern float motionVal;  // motion sensitivity setting - min percentage of changed pixels that constitute a movement
+extern int motionPeakChange; // highest changed pixel count since the last stats dump
+extern int motionThreshold; // the threshold that count was measured against
 extern uint8_t nightSwitch; // initial white level % for night/day switching
 extern bool nightTime; 
 extern bool stopPlayback;

@@ -34,8 +34,11 @@ int detectChangeThreshold = 15; // min difference in pixel comparison to indicat
 uint8_t colorDepth; // set by depthColor config
 static size_t stride;
 
-uint8_t lightLevel; // Current ambient light level 
+uint8_t lightLevel; // Current ambient light level
 uint8_t nightSwitch = 20; // initial white level % for night/day switching
+// tuning aids, reported and reset by dumpMotionStats()
+int motionPeakChange = 0; // highest changed pixel count since the last stats dump
+int motionThreshold = 0; // the threshold that count was measured against
 float motionVal = 8.0; // initial motion sensitivity setting
 uint8_t* motionJpeg = NULL;
 size_t motionJpegLen = 0;
@@ -181,8 +184,10 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
 #endif  
 
   // calculate parameters for sample size when resolution changes
+  static bool prevBuffValid = false; // prevBuff holds a comparable image at this geometry
   if (sensorFS != sensorFSprev) {
     sensorFSprev = sensorFS;
+    prevBuffValid = false; // whatever prevBuff holds was captured at the old geometry
     scaling = frameData[sensorFS].scaleFactor;
     reducer = frameData[sensorFS].sampleRate;
     downsize = pow(2, scaling) * reducer;
@@ -260,8 +265,18 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
 
   lightLevel = (lux*100)/(RESIZE_DIM_SQ*255); // light value as a %
   nightTime = isNight(nightSwitch);
-  memcpy(prevBuff, currBuff, resizeDimLen); // save image for next comparison 
+  memcpy(prevBuff, currBuff, resizeDimLen); // save image for next comparison
+  prevBuffValid = true;
   LOG_VRB("Detected %u changes, threshold %u, light level %u, in %lums", changeCount, moveThreshold, lightLevel, millis() - dTime);
+  // kept for tuning: dumpMotionStats reports the highest change count seen against the
+  // threshold it was measured against, so sensitivity can be judged from near misses too
+  // rather than only from the checks that happened to trip
+  motionThreshold = moveThreshold;
+  // Skip the first comparison after startup or a geometry change: prevBuff is either
+  // uninitialised or holds an image at the old size, so changeCount is meaningless and
+  // lands as a huge peak that makes the scene look far more active than it is. Measured
+  // 5343 against a threshold of 164 on a completely static scene
+  if (prevBuffValid && changeCount > motionPeakChange) motionPeakChange = changeCount;
   if (lightLevelOnly) return false; // no motion checking, only calc of light level
   if (dbgMotion) {
     // show motion detection during streaming for tuning
@@ -287,12 +302,30 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   } else {
     // normal motion detection
     dTime = millis();
+    // The night gate blocks detection outright, and lightLevel measures auto exposure
+    // output rather than room brightness, so it can latch in ordinary indoor light. Say so
+    // once per transition - otherwise detection silently does nothing and looks like a
+    // sensitivity problem
+    static bool warnedNight = false;
+    if (nightTime && !warnedNight) {
+      LOG_WRN("Motion detection suspended - night mode (light %u%% below lswitch %u)", lightLevel, nightSwitch);
+      warnedNight = true;
+    } else if (!nightTime && warnedNight) {
+      LOG_INF("Motion detection resumed - daylight (light %u%%)", lightLevel);
+      warnedNight = false;
+    }
     if (!nightTime && changeCount > moveThreshold) {
       LOG_VRB("### Change detected");
       motionCnt++; // number of consecutive changes
       // need minimum sequence of changes to signal valid movement
       if (!motionStatus && motionCnt >= detectMotionFrames) {
-        LOG_VRB("***** Motion - START");
+        // Logged at INF rather than VRB: verbose also emits a decode and a rescale line for
+        // every check several times a second, which buries exactly this. Not LOG_ALT, which
+        // pops a browser alert - "Capture started by Camera" already alerts when this leads
+        // to a recording, and this fires even when Save Capture is off, which is the state
+        // sensitivity is usually tuned in
+        LOG_INF("Motion detected: %d changed pixels vs threshold %d (motionVal %.0f, %d consecutive), light %u%%",
+          changeCount, moveThreshold, motionVal, motionCnt, lightLevel);
         motionStatus = true; // motion started
         dTime = millis();
 #if INCLUDE_MQTT
@@ -310,7 +343,7 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   
     if (motionStatus && !motionCnt) {
       // insufficient change or motion not classified
-      LOG_VRB("***** Motion - STOP");
+      LOG_INF("Motion ended: %d changed pixels, below threshold %d", changeCount, moveThreshold);
       motionStatus = false; // motion stopped
 #if INCLUDE_MQTT
       if (mqtt_active) {

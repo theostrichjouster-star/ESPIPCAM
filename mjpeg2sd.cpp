@@ -324,7 +324,12 @@ void dumpMotionStats() {
     LOG_INF("%lu checks, %lu ms total, %0.2f ms per check", mCheckCnt, mTimeTot / 1000, perCheck);
     LOG_INF("Detection duty cycle: %0.1f%% of wall clock", perCheck * perSec / 10.0f);
   } else LOG_WRN("No checks recorded - motion off, night gated, or size above cap");
-  LOG_INF("Light level %u, night %s (lswitch %u)", lightLevel, nightTime ? "yes" : "no", nightSwitch);
+  // for tuning motionVal: the peak is the closest any check came to tripping, so a peak
+  // well under the threshold means the sensitivity is too low to ever fire on that scene
+  LOG_INF("Sensitivity motionVal %.0f -> threshold %d changed pixels, peak seen %d",
+    motionVal, motionThreshold, motionPeakChange);
+  LOG_INF("Light level %u, night %s (lswitch %u)%s", lightLevel, nightTime ? "yes" : "no",
+    nightSwitch, nightTime ? " - DETECTION SUSPENDED" : "");
   // any nonzero count here used to leak a frame buffer permanently, FB_CNT of them
   // being enough to wedge the capture task
   LOG_INF("Bad frames discarded: %lu (of %d buffers)", badFrameCnt, FB_CNT);
@@ -338,7 +343,7 @@ void dumpMotionStats() {
   if (!isPlaying && sensorFS != desiredSensorFS()) LOG_WRN("Sensor is %s but state wants %s - settleSensor not reconciling",
     frameData[sensorFS].frameSizeStr, frameData[desiredSensorFS()].frameSizeStr);
   LOG_INF("***************************************");
-  mTimeTot = mCheckCnt = badFrameCnt = staleFrameCnt = 0; // reset the measurement window
+  mTimeTot = mCheckCnt = badFrameCnt = staleFrameCnt = motionPeakChange = 0; // reset the measurement window
 }
 
 void keepFrame(camera_fb_t* fb) {
@@ -595,7 +600,12 @@ static boolean processFrame() {
   if (detectionActive()) {
     if (doMonitor()) {
       uint32_t mTime = micros(); // micros, as a check can be only a few ms
-      if (checkMotion(fb, false)) reasonId = 1; // check 1 in N frames, never while capturing
+      // The second argument is the PREVIOUS motion state, which checkMotion() uses to find
+      // the start and stop edges - not "are we capturing". Passing a literal false made
+      // every check look like a fresh start, so the motion log repeated several times a
+      // second and MQTT republished MOTION:ON on every check, while the stop edge could
+      // never fire at all
+      if (checkMotion(fb, haveMotion)) reasonId = 1; // check 1 in N frames
       mTimeTot += micros() - mTime;
       mCheckCnt++;
 #if INCLUDE_PERIPH
