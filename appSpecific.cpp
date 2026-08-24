@@ -3,7 +3,6 @@
 // Direct access (HTTP) URLs for NVR:
 // - Video streaming: app_ip/sustain?video=1 
 // - Audio streaming: app_ip/sustain?audio=1
-// - Subtitle streaming: app_ip/sustain?srt=1
 // - Stills: app_ip/control?still=1
 //
 // s60sc 2022 - 2024
@@ -15,7 +14,6 @@ static char value[FILE_NAME_LEN];
 static char alertCaption[100];
 static bool alertReady = false;
 static bool depthColor = true;
-static bool devHub = false;
 bool useUart = false; // no longer settable - kept false for the INCLUDE_UART / INCLUDE_MCPWM paths
 volatile audioAction THIS_ACTION = PASS_ACTION;
 static void stopRC();
@@ -62,7 +60,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   }
   else if (!strcmp(variable, "streamVid")) streamVid = (bool)intVal;
   else if (!strcmp(variable, "streamAud")) streamAud = (bool)intVal;
-  else if (!strcmp(variable, "streamSrt")) streamSrt = (bool)intVal;
   else if (!strcmp(variable, "lswitch")) nightSwitch = intVal;
 #endif // AUXILIARY
 #if INCLUDE_FTP_HFS
@@ -79,7 +76,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     dbgMotion = (intVal && useMotion) ? true : false;
     doRecording = !dbgMotion;
   }
-  else if (!strcmp(variable, "devHub")) devHub = (bool)intVal;   
   // peripherals
 #if INCLUDE_PERIPH
   else if (!strcmp(variable, "pirUse")) pirUse = (bool)intVal;
@@ -139,10 +135,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "mampSwsIo")) mampSwsIo = intVal;
   else if (!strcmp(variable, "mampSdIo")) mampSdIo = intVal;
 #endif
-#if INCLUDE_TELEM
-  else if (!strcmp(variable, "teleUse")) teleUse = (bool)intVal;
-#endif
-  else if (!strcmp(variable, "teleInterval")) srtInterval = intVal;
   else if (!strcmp(variable, "wakeUse")) wakeUse = (bool)intVal;
 #if INCLUDE_MCPWM
   else if (!strcmp(variable, "motorRevPin")) motorRevPin = intVal;
@@ -285,8 +277,8 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   } 
-  else if (!strcmp(variable, "still") || !strcmp(variable, "hub")) {
-    // send single jpeg to browser (local or hub)
+  else if (!strcmp(variable, "still")) {
+    // send single jpeg to browser
     uint32_t startTime = millis();
     doKeepFrame = true;
     while (doKeepFrame && millis() - startTime < MAX_FRAME_WAIT) delay(100);
@@ -525,9 +517,6 @@ void currentStackUsage() {
 #endif
 #if INCLUDE_TGRAM
   checkStackUse(telegramHandle, 11);
-#endif
-#if INCLUDE_TELEM
-  checkStackUse(telemetryHandle, 12);
 #endif
 #if INCLUDE_UART
   checkStackUse(uartRxHandle, 13);
@@ -803,7 +792,6 @@ detectChangeThreshold~15~1~N~Pixel difference to indicate change
 depthColor~0~1~C~Color depth for motion detection: Gray <> RGB
 streamVid~0~8~C~Enable NVR Video stream: /sustain?video=1
 streamAud~0~8~C~Enable NVR Audio stream: /sustain?audio=1
-streamSrt~0~8~C~Enable NVR Subtitle stream: /sustain?srt=1
 smtpUse~0~2~C~Enable email sending
 smtpMaxEmails~10~2~N~Max daily alerts
 sdMinCardFreeSpace~100~2~N~Min free MBytes on SD before action
@@ -822,9 +810,7 @@ external_heartbeat_uri~~2~T~Heartbeat receiver URI (eg. /heartbeat/)
 external_heartbeat_port~443~2~N~Heartbeat receiver port
 external_heartbeat_token~~2~T~Heartbeat receiver auth token
 usePing~1~0~C~Use ping
-teleInterval~1~8~N~Subtitle stream interval (secs)
 tgramUse~0~2~C~Use Telegram Bot
 tgramToken~~2~T~Telegram Bot token
 tgramChatId~~2~T~Telegram chat identifier
-devHub~0~2~C~Show Camera Hub tab
 )~";

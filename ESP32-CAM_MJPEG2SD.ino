@@ -44,9 +44,6 @@ void setup() {
 #endif
 #if INCLUDE_I2C
     prepI2C();
-  #if INCLUDE_TELEM
-    prepTelemetry();
-  #endif
 #endif
 #if INCLUDE_PERIPH
     startHeartbeat();

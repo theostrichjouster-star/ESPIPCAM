@@ -812,41 +812,6 @@
       }
 
 
-      /* hub page */
-
-      #imageContainer {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(20%, 30%));
-        gap: var(--buttonSize);
-        margin-left: var(--buttonDbl);
-      }
-
-      .hubImg {
-        max-width: 100%;
-        height: auto;
-      }
-
-      .ipContainer {
-        position: relative;
-        cursor: pointer;
-      }
-
-      .ipText {
-        position: absolute;
-        bottom: var(--buttonQuart);
-        left: 50%; /* Center the overlay horizontally */
-        transform: translateX(-50%); /* Adjust for centering */
-        font-size: var(--buttonSize);
-        color: var(--pageText);
-        padding: var(--buttonQuart);
-      }
-
-      #buttonContainer {
-        margin-bottom: calc(var(--buttonSize) * 4);
-        display: flex;
-        align-items: center;
-      }
-
       .touchDisabled {
         touch-action: none;
       }
@@ -929,7 +894,6 @@
         <button class="tablinks camTab active" name="mainPage">Camera</button>
         <button class="tablinks" name="ShowLog">Show Log</button>
         <button class="tablinks" name="EditConfig">Edit Config</button>
-        <button class="tablinks" name="DeviceHub" style="display: none;">Camera Hub</button>
         <button class="tablinks" onclick="window.location.href='/web?OTA.htm'">OTA Upload</button>
       </ul>
       <section id="main">
@@ -1621,19 +1585,6 @@
       </div>
     </div>
 
-    <div id="DeviceHub" class="tabcontent">
-      <div id="buttonContainer">
-        <!-- Input field for users to enter individual IPs -->
-        <label for="ipInput">Enter IP address:&nbsp;</label>
-        <input type="text" id="ipInput" class="local">
-        <button id="addIpButton" class="local" onclick="addIP()">Add IP</button>
-        <button id="clearStorageButton" class="local" onclick="clearLocalStorage()">Delete All</button>
-        <button id="refreshAllButton" class="local" onclick="refreshAllContainers(true)">Refresh</button>
-      </div>
-      <!-- Container to hold the image elements -->
-      <div id="imageContainer"></div>
-    </div>
-
     <div class="alertMsg">
       <span id="alertText"></span>
     </div>
@@ -1708,7 +1659,6 @@
           else if (key == "get-still") getStill();
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
-          else if (key == "devHub") {value == "1" ? show($('[name="DeviceHub"]')) : hide($('[name="DeviceHub"]')); }
           else if (key == "aec") value ? hide($('#aec_value-group')) : showAec();
           else if (key == "awb_gain") value ? show($('#wb_mode-group')) : hide($('#wb_mode-group'));
           else if (key == "agc") setAgc(key, value);

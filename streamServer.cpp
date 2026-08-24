@@ -19,7 +19,6 @@
 static bool forcePlayback = false; // browser playback status
 bool streamVid = false;
 bool streamAud = false;
-bool streamSrt = false;
 static bool isStreaming[MAX_STREAMS] = {false};
 size_t streamBufferSize[MAX_STREAMS] = {0};
 byte* streamBuffer[MAX_STREAMS] = {NULL}; // buffer for stream frame
@@ -28,7 +27,6 @@ static char value[FILE_NAME_LEN];
 uint16_t sustainId = 0;
 uint8_t numStreams = 1;
 uint8_t vidStreams = 1;
-int srtInterval = 1; // subtitle interval in secs
 
 #ifndef AUXILIARY
 
@@ -194,45 +192,6 @@ static void audioStream(httpd_req_t* req, uint8_t taskNum) {
 #endif
 }
 
-static void srtStream(httpd_req_t* req, uint8_t taskNum) {
-  // generate subtitle entries for streaming, consisting of timestamp
-  // plus telemetry data if telemetry enabled
-  esp_err_t res = ESP_OK;
-  isStreaming[taskNum] = true;
-  httpd_resp_set_type(req, "text/plain");
-  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*"); 
-  int srtSeqNo = 0;
-  uint32_t srtTime = 0;
-  const uint32_t sampleInterval = 1000 * (srtInterval < 1 ? 1 : srtInterval);
-  char srtHdr[100];
-  char timeStr[10];
-  while (isStreaming[taskNum]) {
-    srtSeqNo++;
-    uint32_t startTime = millis();
-    formatElapsedTime(timeStr, srtTime, true);
-    size_t srtPtr = sprintf(srtHdr, "%d\n%s --> ", srtSeqNo, timeStr);
-    srtTime += sampleInterval;
-    formatElapsedTime(timeStr, srtTime, true);
-    srtPtr += sprintf(srtHdr + srtPtr, "%s\n", timeStr);
-    time_t currEpoch = getEpoch();
-    srtPtr += strftime(srtHdr + srtPtr, 12, "%H:%M:%S  ", localtime(&currEpoch));
-    httpd_resp_send_chunk(req, (const char*)srtHdr, srtPtr);
-#if INCLUDE_TELEM
-    // add telemetry data 
-    if (teleUse) {
-      storeSensorData(true);
-      if (srtBytes) res = httpd_resp_send_chunk(req, (const char*)srtBuffer, srtBytes);
-      srtBytes = 0;
-    }
-#endif
-    if (res == ESP_OK) res = httpd_resp_sendstr_chunk(req, "\n\n");
-    if (res != ESP_OK) isStreaming[taskNum] = false; // client connection closed
-    else while (isStreaming[taskNum] && (millis() - startTime) < sampleInterval) delay(50);
-  }
-  if (res == ESP_OK) httpd_resp_sendstr_chunk(req, NULL);
-  LOG_INF("SRT: sent %d subtitles", srtSeqNo);
-}
-
 void stopSustainTask(int taskId) {
   isStreaming[taskId] = false;
 }
@@ -249,7 +208,6 @@ static void sustainTask(void* p) {
     } 
     else if (i == 1) showStream(sustainReq[i].req, i);
     else if (i == 2) audioStream(sustainReq[i].req, i);
-    else if (i == 3) srtStream(sustainReq[i].req, i);
     // cleanup as request now complete on return
     if (httpd_req_async_handler_complete(sustainReq[i].req) != ESP_OK) LOG_ERR("Failed to free req for sustain task: %i", i);
     sustainReq[i].inUse = false; 
@@ -261,7 +219,6 @@ void startSustainTasks() {
   // start httpd sustain tasks
   if (streamVid) numStreams = vidStreams = 2;
   if (streamAud) numStreams = 3;
-  if (streamSrt) numStreams = 4;
   if (numStreams > MAX_STREAMS) {
     LOG_WRN("numStreams %d exceeds MAX_STREAMS %d", numStreams, MAX_STREAMS);
     numStreams = MAX_STREAMS;
@@ -269,7 +226,7 @@ void startSustainTasks() {
   if (maxFrameBuffSize * (vidStreams + 1) > ESP.getFreePsram()) {
     LOG_WRN("Insufficient PSRAM for NVR streams");
     vidStreams = 1;
-    streamVid = streamAud = streamSrt = false;
+    streamVid = streamAud = false;
   }
   for (int i = 0; i < vidStreams; i++)
     if (streamBuffer[i] == NULL) streamBuffer[i] = (byte*)ps_malloc(maxFrameBuffSize); 
@@ -291,14 +248,13 @@ esp_err_t appSpecificSustainHandler(httpd_req_t* req) {
     // obtain details from query string
     if (extractQueryKeyVal(req, variable, value) == ESP_OK) {
       // playback, download, web streaming uses task 0
-      // remote streaming eg video uses task 1, audio task 2, srt task 3
+      // remote streaming eg video uses task 1, audio task 2
       uint8_t taskNum = 99;
       if (!strcmp(variable, "download")) taskNum = 0;
       else if (!strcmp(variable, "playback")) taskNum = 0;
       else if (!strcmp(variable, "stream")) taskNum = 0;
       else if (!strcmp(variable, "video")) taskNum = 1;
       else if (!strcmp(variable, "audio")) taskNum = 2;
-      else if (!strcmp(variable, "srt")) taskNum = 3;
       if (taskNum < numStreams) {
         if (taskNum == 0) {
           if (req->method == HTTP_HEAD) { 

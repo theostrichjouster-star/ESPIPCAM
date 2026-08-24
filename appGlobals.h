@@ -30,7 +30,6 @@
 
 #define INCLUDE_CERTS false   // certificates.cpp (https and server certificate checking)
 #define INCLUDE_UART false    // uart.cpp (use another esp32 as Auxiliary connected via UART)
-#define INCLUDE_TELEM false   // telemetry.cpp (real time data collection). Needs INCLUDE_I2C true
 #define INCLUDE_WEBDAV false  // webDav.cpp (WebDAV protocol)
 #define INCLUDE_EXTHB false   // externalHeartbeat.cpp (heartbeat to remote server)
 #define INCLUDE_MCPWM false   // mcpwm.cpp (BDC motor control). Needs INCLUDE_PERIPH true
@@ -81,7 +80,7 @@
 // to determine if newer data files need to be loaded. Bump whenever a config row is
 // added, removed or moved group, so an existing configs.txt is regenerated rather than
 // leaving stale keys behind
-#define CFG_VER 45
+#define CFG_VER 46
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -89,7 +88,7 @@
 #define MIN_PSRAM 2
 
 #define HTTP_CLIENTS 2 // http(s), ws(s)
-#define MAX_STREAMS 4 // (web stream, playback, download), NVR, audio, subtitle
+#define MAX_STREAMS 3 // (web stream, playback, download), NVR video, NVR audio
 #define FILE_NAME_LEN 64
 #define IN_FILE_NAME_LEN (FILE_NAME_LEN * 2)
 #define JSON_BUFF_LEN (32 * 1024) // set big enough to hold all file names in a folder
@@ -132,8 +131,6 @@
 #define AVI_HEADER_LEN 310 // AVI header length
 #define CHUNK_HDR 8 // bytes per jpeg hdr in AVI 
 #define AVITEMP "/current.avi"
-#define TELETEMP "/current.csv"
-#define SRTTEMP "/current.srt"
 
 // 800 samples is one whole read per video frame at 20fps (16000/20), and a whole number
 // of reads at 10, 5, 4, 2 and 1 fps - the rates frameData uses. 512 divided none of them,
@@ -276,7 +273,6 @@ extern char otaLatestTag[];
 extern char otaStatus[];
 extern bool otaUpdateAvailable;
 bool prepRecording();
-void prepTelemetry();
 void prepMotors();
 void prepUart();
 void setCamPan(int panVal);
@@ -296,12 +292,9 @@ bool shareI2C(int sdaShare, int sclShare);
 void startAudioRecord();
 void startHeartbeat();
 void startSustainTasks();
-bool startTelemetry();
 void stepperRun(float RPM, float revFraction, bool _clockwise, stepperModel thisStepper);
 void stopPlaying();
 void stopSustainTask(int taskId);
-void stopTelemetry(const char* fileName);
-void storeSensorData(bool fromStream);
 void trackSteeering(int controlVal, bool steering);
 size_t updateWavHeader();
 size_t writeAviIndex(byte* clientBuf, size_t buffSize);
@@ -354,7 +347,6 @@ extern bool doKeepFrame;
 extern int alertMax; // too many could cause account suspension (daily emails)
 extern bool streamVid;
 extern bool streamAud;
-extern bool streamSrt;
 extern uint8_t numStreams;
 extern uint8_t vidStreams;
 
@@ -374,8 +366,6 @@ extern uint8_t* motionJpeg;
 extern size_t motionJpegLen;
 extern uint8_t* audioBuffer;
 extern size_t audioBytes;
-extern char srtBuffer[];
-extern size_t srtBytes;
 extern size_t maxFrameBuffSize;
 
 // Auxiliary use
@@ -402,8 +392,6 @@ extern bool relayMode;
 extern int pirPin; // if usePir is true
 extern int lampPin; // if useLamp is true
 extern int lightsPin;
-extern bool teleUse;
-extern int srtInterval;
 
 // Pan / Tilt Servos 
 extern int servoPanPin; 
@@ -487,7 +475,6 @@ extern TaskHandle_t servoHandle;
 extern TaskHandle_t stickHandle;
 extern TaskHandle_t sustainHandle[];
 extern TaskHandle_t telegramHandle;
-extern TaskHandle_t telemetryHandle;
 extern TaskHandle_t uartRxHandle;
 extern TaskHandle_t audioHandle;
 extern SemaphoreHandle_t frameSemaphore[];

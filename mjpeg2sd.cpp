@@ -38,7 +38,6 @@ uint8_t minSeconds = 5; // default min video length (includes POST_MOTION_TIME)
 bool doRecording = true; // whether to capture to SD or not
 uint8_t xclkMhz = 20; // camera clock rate MHz
 bool doKeepFrame = false;
-static bool haveSrt = false;
 static bool haveWav = false; // set once an audio chunk has been interleaved, drives the _S name suffix
 char camModel[11];
 static int siodGpio = SIOD_GPIO_NUM;
@@ -150,9 +149,6 @@ static void openAvi() {
   LOG_VRB("File opening time: %lums", oTime);
 #if INCLUDE_AUDIO
   startAudioRecord();
-#endif
-#if INCLUDE_TELEM
-  haveSrt = startTelemetry();
 #endif
   // initialisation of counters
   startTime = millis();
@@ -339,16 +335,13 @@ static bool closeAvi() {
 #endif
   if (vidDurationSecs >= minSeconds) {
     // name file to include actual dateTime, FPS, duration, and frame count
-    int alen = snprintf(aviFileName, FILE_NAME_LEN - 1, "%s_%s_%u_%lu%s%s%s.%s",
+    int alen = snprintf(aviFileName, FILE_NAME_LEN - 1, "%s_%s_%u_%lu%s%s.%s",
                         partName, frameData[fsizePtr].frameSizeStr, actualFPSint, vidDurationSecs,
-                        haveWav ? "_S" : "", haveSrt ? "_M" : "", dashCamOn ? "_C" : "", AVI_EXT);
+                        haveWav ? "_S" : "", dashCamOn ? "_C" : "", AVI_EXT);
     if (alen > FILE_NAME_LEN - 1) LOG_WRN("file name truncated");
     STORAGE.rename(AVITEMP, aviFileName);
     LOG_VRB("AVI close time %lu ms", millis() - hTime);
     cTime = millis() - cTime;
-#if INCLUDE_TELEM
-    stopTelemetry(aviFileName);
-#endif
     if (dashCamOn) forceRecord = true; // restart continuous recording
     else {
       // AVI stats
@@ -850,9 +843,6 @@ void endTasks() {
   for (int i = 0; i < numStreams; i++) deleteTask(sustainHandle[i]);
   deleteTask(captureHandle);
   deleteTask(playbackHandle);
-#if INCLUDE_TELEM
-  deleteTask(telemetryHandle);
-#endif
 #if INCLUDE_PERIPH
   deleteTask(DS18B20handle);
   deleteTask(servoHandle);
