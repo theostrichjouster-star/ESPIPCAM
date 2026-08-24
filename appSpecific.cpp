@@ -49,9 +49,15 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     colorDepth = depthColor ? RGB888_BYTES : GRAYSCALE_BYTES;
   }
   else if (!strcmp(variable, "enableMotion")) {
-    // Turn on/off motion detection 
-    useMotion = (intVal) ? true : false; 
+    // Turn on/off motion detection
+    useMotion = (intVal) ? true : false;
     LOG_INF("%s motion detection by camera", useMotion ? "Enabling" : "Disabling");
+    if (!useMotion && dbgMotion) {
+      // Show Motion has nothing to show without a detector running
+      dbgMotion = false;
+      LOG_WRN("Show Motion turned off - it needs motion detection");
+      wsAsyncSendJson("ustatus", "\"dbgMotion\":0");
+    }
   }
   else if (!strcmp(variable, "dashCamOn")) {
     dashCamOn = intVal;
@@ -71,9 +77,28 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "record")) doRecording = (intVal) ? true : false;   
   else if (!strcmp(variable, "forceRecord")) forceRecord = (intVal) ? true : false; 
   else if (!strcmp(variable, "dbgMotion")) {
-    // only enable show motion if motion detect enabled
-    dbgMotion = (intVal && useMotion) ? true : false;
-    doRecording = !dbgMotion;
+    // Show Motion streams the detector's own change map, so it needs detection to be
+    // running, and detection only ever runs at MOTION_DETECT_FS. Requiring the capture size
+    // to be that size too means no sensor switch ever happens while this is on, so the view
+    // is never interrupted by a recording.
+    // Refusals used to be silent - the flag was just dropped and the browser never told, so
+    // the checkbox stayed on while the stream quietly served the ordinary live view. Say
+    // why, and push the real state back so the toggle cannot lie
+    if (intVal && !useMotion) {
+      LOG_WRN("Show Motion needs motion detection enabled");
+      dbgMotion = false;
+      wsAsyncSendJson("ustatus", "\"dbgMotion\":0");
+    } else if (intVal && (framesize_t)fsizePtr != MOTION_DETECT_FS) {
+      LOG_WRN("Show Motion needs frame size %s, detection only runs at that size",
+        frameData[MOTION_DETECT_FS].frameSizeStr);
+      dbgMotion = false;
+      wsAsyncSendJson("ustatus", "\"dbgMotion\":0");
+    } else {
+      dbgMotion = (bool)intVal;
+      LOG_INF("%s Show Motion", dbgMotion ? "Enabling" : "Disabling");
+    }
+    // doRecording is deliberately left alone. At MOTION_DETECT_FS there is no sensor switch
+    // between detecting and capturing, so recording and Show Motion coexist
   }
   // peripherals
 #if INCLUDE_PERIPH
@@ -161,6 +186,14 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
       fsizePtr = intVal;
       if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills only, no AVI recording",
         frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
+      if (dbgMotion && (framesize_t)fsizePtr != MOTION_DETECT_FS) {
+        // Show Motion is only offered at the detection size, so that a recording never
+        // switches the sensor out from under it
+        dbgMotion = false;
+        LOG_WRN("Show Motion turned off - only available at frame size %s",
+          frameData[MOTION_DETECT_FS].frameSizeStr);
+        wsAsyncSendJson("ustatus", "\"dbgMotion\":0");
+      }
       // Deliberately does NOT touch the sensor. settleSensor() in the capture task owns
       // sensorFS and applies this on the next frame. Setting the hardware here behind its
       // back leaves sensorFS stale, and checkMotion() then decodes the new, larger frame

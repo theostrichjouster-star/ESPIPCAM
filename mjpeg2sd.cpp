@@ -205,7 +205,16 @@ static bool detectionActive() {
   // armed and idle is the only state that decodes. With motion detection off the sensor
   // stays at the user's resolution, so a still or a stream is instant rather than paying
   // for a switch it gains nothing from
-  if (!useMotion || isCapturing || dashCamOn) return false;
+  if (!useMotion || dashCamOn) return false;
+  if (isCapturing) {
+    // A capture normally stops detection, because the sensor is at the user's capture
+    // resolution then and decoding that is the whole thing this design avoids. That
+    // reasoning does not apply when the capture size IS the detection size: no switch
+    // happens, and the frames being written to the file are the same frames being analysed.
+    // Only taken for Show Motion - an ordinary fixed length capture gains nothing from
+    // detection and it would cost ~15% duty cycle for no benefit
+    if (!(dbgMotion && (framesize_t)fsizePtr == MOTION_DETECT_FS)) return false;
+  }
   // dbgMotion streams the detector's own bitmap to the browser, so detection has to keep
   // running for that view to show anything at all. It is a diagnostic mode, so the live
   // view being at the detection size is the point rather than a cost
