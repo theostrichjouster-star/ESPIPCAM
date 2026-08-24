@@ -579,9 +579,6 @@ static void doStep() {
     // step sequence completed
     setStickTimer(false, 0);  // stop task timer
     for (int i = 0; i < stepperPins; i++) digitalWrite(stepINpins[i], LOW); // stop unnecessary power use
-#if (INCLUDE_PGRAM && INCLUDE_PERIPH)
-    stepperDone();
-#endif
   }
 }
 

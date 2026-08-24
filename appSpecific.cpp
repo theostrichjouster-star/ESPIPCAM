@@ -17,7 +17,6 @@ static bool alertReady = false;
 static bool depthColor = true;
 static bool devHub = false;
 bool useUart = false; // no longer settable - kept false for the INCLUDE_UART / INCLUDE_MCPWM paths
-int quality; // Variable to hold quality for RTSP frame
 volatile audioAction THIS_ACTION = PASS_ACTION;
 static void stopRC();
 
@@ -31,7 +30,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
 #endif
   int intVal = atoi(value);
 #if INCLUDE_PERIPH
-  float fltVal = atof(value); // only consumed by voltLow / gearing, both INCLUDE_PERIPH gated
+  float fltVal = atof(value); // only consumed by voltLow, INCLUDE_PERIPH gated
 #endif
   if (!strcmp(variable, "custom")) return true;
 #ifndef AUXILIARY
@@ -61,11 +60,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     dashCamOn = intVal;
     if (dashCamOn == 0) forceRecord = false;
   }
-#if !INCLUDE_RTSP 
-  else if (!strcmp(variable, "streamVid")) streamVid = (bool)intVal; 
-  else if (!strcmp(variable, "streamAud")) streamAud = (bool)intVal; 
-  else if (!strcmp(variable, "streamSrt")) streamSrt = (bool)intVal; 
-#endif
+  else if (!strcmp(variable, "streamVid")) streamVid = (bool)intVal;
+  else if (!strcmp(variable, "streamAud")) streamAud = (bool)intVal;
+  else if (!strcmp(variable, "streamSrt")) streamSrt = (bool)intVal;
   else if (!strcmp(variable, "lswitch")) nightSwitch = intVal;
 #endif // AUXILIARY
 #if INCLUDE_FTP_HFS
@@ -178,25 +175,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "stickYpin")) stickYpin = intVal; 
   else if (!strcmp(variable, "stickzPushPin")) stickzPushPin = intVal; 
 #endif // INCLUDE_PERIPH
-#if (INCLUDE_PGRAM && INCLUDE_PERIPH)
-  else if (!strcmp(variable, "stepIN1pin")) setStepperPin((uint8_t)intVal, 0);
-  else if (!strcmp(variable, "stepIN2pin")) setStepperPin((uint8_t)intVal, 1);
-  else if (!strcmp(variable, "stepIN3pin")) setStepperPin((uint8_t)intVal, 2);
-  else if (!strcmp(variable, "stepIN4pin")) setStepperPin((uint8_t)intVal, 3);
-  else if (!strcmp(variable, "PGactive")) {
-    PGactive = stepperUse = (bool)intVal;
-    if (PGactive) setLamp(0);
-  }
-  else if (!strcmp(variable, "numberOfPhotos")) numberOfPhotos = intVal;
-  else if (!strcmp(variable, "gearing")) gearing = fltVal;
-  else if (!strcmp(variable, "RPM")) tRPM = intVal;
-  else if (!strcmp(variable, "clockwise")) clockWise = (bool)intVal;
-  else if (!strcmp(variable, "timeForPhoto")) timeForPhoto = intVal;
-  else if (!strcmp(variable, "timeForFocus")) timeForFocus = intVal;
-  else if (!strcmp(variable, "pinShutter")) pinShutter = intVal;
-  else if (!strcmp(variable, "pinFocus")) pinFocus = intVal;
-  else if (!strcmp(variable, "extCam")) extCam = (bool)intVal;
-#endif
 
 #if INCLUDE_EXTHB
   // External Heartbeat
@@ -246,10 +224,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     if (playbackHandle != NULL) setFPS(FPS);
   }
   else if (s) {
-    if (!strcmp(variable, "quality")) {
-      res = s->set_quality(s, intVal);
-      if (res == ESP_OK) quality = intVal;
-    }
+    if (!strcmp(variable, "quality")) res = s->set_quality(s, intVal);
     else if (!strcmp(variable, "contrast")) res = s->set_contrast(s, intVal);
     else if (!strcmp(variable, "brightness")) res = s->set_brightness(s, intVal);
     else if (!strcmp(variable, "saturation")) res = s->set_saturation(s, intVal);
@@ -360,12 +335,6 @@ static bool setPeripheral(char cmd, int controlVal, bool fromUart) {
       setCamTilt(controlVal);
     break;
 #endif
-#if INCLUDE_PGRAM
-    case 'G':
-      // photogrammetry control
-      takePhotos(bool(controlVal));
-    break;
-#endif
     case 'K':
       // cam browser conn closed
       stopRC();
@@ -437,11 +406,6 @@ char* buildAppJsonString(bool filter) {
   p += sprintf(p, "\"camModel\":\"%s\",", camModel);
 #if INCLUDE_PERIPH
   p += sprintf(p, "\"SVactive\":\"%d\",", SVactive);
- #if INCLUDE_AUDIO
- #endif
- #if (INCLUDE_PGRAM)
-  p += sprintf(p, "\"PGactive\":\"%d\",", PGactive);
- #endif
 #endif
 #if INCLUDE_MCPWM
   p += sprintf(p, "\"maxSteerAngle\":\"%d\",", maxSteerAngle);
@@ -863,16 +827,4 @@ tgramUse~0~2~C~Use Telegram Bot
 tgramToken~~2~T~Telegram Bot token
 tgramChatId~~2~T~Telegram chat identifier
 devHub~0~2~C~Show Camera Hub tab
-RTSP_Name~~8~T~RTSP Auth Username
-RTSP_Pass~~8~T~RTSP Auth Password
-rtsp00Video~0~8~C~Enable RTSP Video
-rtsp01Audio~0~8~C~Enable RTSP Audio
-rtsp02Subtitles~0~8~C~Enable RTSP Subtitles
-rtsp03Port~554~8~N~RTSP ServerPort
-rtsp04VideoPort~5430~8~N~RTSP Video Port
-rtsp05AudioPort~5432~8~N~RTSP Audio Port
-rtsp06SubtitlesPort~5434~8~N~RTSP Subtitles Port
-rtsp07Ip~239.255.0.1~8~T~RTSP Multicast IP
-rtsp08MaxC~3~8~N~RTSP Multicast Max Connections
-rtsp09TTL~1~8~N~RTSP Multicast Time-to-Live
 )~";

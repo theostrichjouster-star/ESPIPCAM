@@ -33,9 +33,7 @@
 #define INCLUDE_TELEM false   // telemetry.cpp (real time data collection). Needs INCLUDE_I2C true
 #define INCLUDE_WEBDAV false  // webDav.cpp (WebDAV protocol)
 #define INCLUDE_EXTHB false   // externalHeartbeat.cpp (heartbeat to remote server)
-#define INCLUDE_PGRAM false   // photogram.cpp (photogrammetry feature). Needs INCLUDE_PERIPH true
 #define INCLUDE_MCPWM false   // mcpwm.cpp (BDC motor control). Needs INCLUDE_PERIPH true
-#define INCLUDE_RTSP false    // rtsp.cpp (RTSP Streaming). Requires additional library: ESP32-RTSPServer
 #define INCLUDE_DS18B20 false // if true, requires INCLUDE_PERIPH and additional libraries: OneWire and DallasTemperature
 #define INCLUDE_AF true       // for auto focused equipped OV5640. Requires additional library: OV5640_Auto_Focus_for_ESP32_Camera - XIAO Sense ships with an OV5640
 // Stays false. It was only needed to allow scaleFactor 4, which the built in decoder
@@ -51,16 +49,6 @@
 #define USE_MPU false      // MPU6050, MPU9250, MPU9255. MPU9250 needs hideakitai MPU9250 library
 #define USE_DS3231 false   // Needs Makuna Rtc library
 #define USE_LCD1602 false  // none
-
-// To include Edge Impulse arduino library for additional motion detect filtering
-// Use Edge Impulse Studio to create model:
-// - Select target device: Espressif ESP-EYE
-// - Select Arduino library deployment
-// - Unzip created library into Arduino libraries folder
-// To compile app with library:
-#define INCLUDE_TINYML false  // set to true 
-#define TINY_ML_LIB "your_impulse_edge_library.h" // replace with your lib
-// To activate ML, under web page Motion tab, select Use Machine Learning option
 
 /**************************************************************************/
 
@@ -90,11 +78,10 @@
 #define HOSTNAME_GRP 99
  
 #define APP_VER "1.0.0"
-// to determine if newer data files need to be loaded
-// bumped to 40: the peripheral, RC, servo, photogrammetry, lamp and machine learning
-// config rows were removed (none of their code is compiled in), and wakeUse / teleInterval
-// moved group, so an existing configs.txt must be regenerated
-#define CFG_VER 44
+// to determine if newer data files need to be loaded. Bump whenever a config row is
+// added, removed or moved group, so an existing configs.txt is regenerated rather than
+// leaving stale keys behind
+#define CFG_VER 45
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -278,7 +265,6 @@ bool identifyBMx();
 bool identifyMPU(char* _mpuModel);
 void intercom();
 bool isNight(uint8_t nightSwitch);
-void laserLevel() ;
 void motorSpeed(int speedVal, bool leftMotor = true);
 void openSDfile(const char* streamFile);
 void prepAudio();
@@ -292,7 +278,6 @@ extern bool otaUpdateAvailable;
 bool prepRecording();
 void prepTelemetry();
 void prepMotors();
-void prepRTSP();
 void prepUart();
 void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
@@ -312,13 +297,11 @@ void startAudioRecord();
 void startHeartbeat();
 void startSustainTasks();
 bool startTelemetry();
-void stepperDone();
 void stepperRun(float RPM, float revFraction, bool _clockwise, stepperModel thisStepper);
 void stopPlaying();
 void stopSustainTask(int taskId);
 void stopTelemetry(const char* fileName);
 void storeSensorData(bool fromStream);
-void takePhotos(bool startPhotos);
 void trackSteeering(int controlVal, bool steering);
 size_t updateWavHeader();
 size_t writeAviIndex(byte* clientBuf, size_t buffSize);
@@ -489,34 +472,6 @@ extern char external_heartbeat_domain[]; //External Heartbeat domain/IP
 extern char external_heartbeat_uri[];    //External Heartbeat uri (i.e. /myesp32-cam-hub/index.php)
 extern int external_heartbeat_port;      //External Heartbeat server port to connect.  
 extern char external_heartbeat_token[];  //External Heartbeat server auth token.  
-
-// photogrammetry
-extern bool PGactive; 
-extern bool clockWise;
-extern uint8_t timeForFocus; // in secs
-extern uint8_t timeForPhoto; // in secs
-extern int pinShutter;
-extern int pinFocus;
-extern uint8_t photosDone;
-extern float gearing;
-extern uint8_t numberOfPhotos;
-extern float tRPM;
-extern bool extCam;
-
-// RTSP 
-extern int quality; // Variable to hold quality for RTSP frame
-extern bool rtspVideo;
-extern bool rtspAudio;
-extern bool rtspSubtitles;
-extern int rtspPort;
-extern uint16_t rtpVideoPort;
-extern uint16_t rtpAudioPort;
-extern uint16_t rtpSubtitlesPort;
-extern char RTP_ip[];
-extern uint8_t rtspMaxClients;
-extern uint8_t rtpTTL;
-extern char RTSP_Name[];
-extern char RTSP_Pass[];
 
 // task handling
 extern TaskHandle_t battHandle;

@@ -41,12 +41,6 @@ struct httpd_sustain_req_t {
 };
 httpd_sustain_req_t sustainReq[MAX_STREAMS];
 
-#if INCLUDE_RTSP
-static const bool includeRTSP = true;
-#else
-static const bool includeRTSP = false;
-#endif
-
 static void showPlayback(httpd_req_t* req) {
   // output playback file to browser
   esp_err_t res = ESP_OK; 
@@ -282,8 +276,7 @@ void startSustainTasks() {
 
   for (int i = 0; i < numStreams; i++) {
     sustainReq[i].taskNum = i; // so task knows its number
-    if (includeRTSP && i > 0) continue; // as RTSP tasks created in rtsp.cpp
-    xTaskCreateWithCaps(sustainTask, "sustainTask", SUSTAIN_STACK_SIZE, &sustainReq[i].taskNum, SUSTAIN_PRI, &sustainHandle[i], STACK_MEM); 
+    xTaskCreateWithCaps(sustainTask, "sustainTask", SUSTAIN_STACK_SIZE, &sustainReq[i].taskNum, SUSTAIN_PRI, &sustainHandle[i], STACK_MEM);
   }
   
   LOG_INF("Started %d sustain tasks", numStreams);
@@ -306,8 +299,6 @@ esp_err_t appSpecificSustainHandler(httpd_req_t* req) {
       else if (!strcmp(variable, "video")) taskNum = 1;
       else if (!strcmp(variable, "audio")) taskNum = 2;
       else if (!strcmp(variable, "srt")) taskNum = 3;
-      // http(s) streams not available if RTSP being used
-      if (includeRTSP && taskNum > 0) taskNum = 99;
       if (taskNum < numStreams) {
         if (taskNum == 0) {
           if (req->method == HTTP_HEAD) { 

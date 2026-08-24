@@ -1,6 +1,6 @@
 # ESPIPCAM
 
-IP camera firmware for the **Seeed Studio XIAO ESP32S3 Sense** with an OV5640 camera. Records motion-triggered or continuous video to SD card as AVI files with audio, and streams live to a browser, an NVR, or an RTSP client.
+IP camera firmware for the **Seeed Studio XIAO ESP32S3 Sense** with an OV5640 camera. Records motion-triggered or continuous video to SD card as AVI files with audio, and streams live to a browser or an NVR.
 
 ---
 
@@ -68,7 +68,6 @@ Optional, off by default — set the corresponding `#define INCLUDE_*` to `true`
 | `INCLUDE_SMTP` | Email alerts |
 | `INCLUDE_TGRAM` | [Telegram bot](#telegram-bot) alerts |
 | `INCLUDE_MQTT` / `INCLUDE_HASIO` | [MQTT](#mqtt) control and Home Assistant discovery |
-| `INCLUDE_RTSP` | [RTSP streaming](#streaming-to-an-nvr) (requires the ESP32-RTSPServer library) |
 | `INCLUDE_WEBDAV` | [WebDAV](#webdav) access to the SD card |
 | `INCLUDE_EXTHB` | [External heartbeat](#external-heartbeat) |
 | `INCLUDE_CERTS` | [HTTPS](#https) and remote certificate checking |
@@ -142,7 +141,7 @@ Most behaviour is changed from the main web page, which is largely self-explanat
 
 For time zone, use the dropdown or paste a value from the second column of [this list](https://raw.githubusercontent.com/nayarsystems/posix_tz_db/master/zones.csv).
 
-There is **no pin configuration UI** — it was removed along with multi-board support. The **Peripherals** settings panel went with it: every setting it held (PIR, buzzer, relay, servos, battery voltage, remote control, photogrammetry, telemetry, accelerometer, lamp) belongs to a subsystem this build does not compile, so toggling them only ever wrote a value to `configs.txt`. For the same reason there is no battery-voltage readout in the page footer, no lamp slider, no camera pan/tilt sliders, no RC control overlay, and no Machine Learning options under Motion.
+There is **no pin configuration UI** — it was removed along with multi-board support. The **Peripherals** settings panel went with it: every setting it held (PIR, buzzer, relay, servos, battery voltage, remote control, telemetry, accelerometer, lamp) belongs to a subsystem this build does not compile, so toggling them only ever wrote a value to `configs.txt`. For the same reason there is no battery-voltage readout in the page footer, no lamp slider, no camera pan/tilt sliders, no RC control overlay, and no Machine Learning options under Motion.
 
 Logs are viewable under the **Show Log** tab, held in RTC RAM (7 KB cyclic, default), streamed over websocket, or written to SD. SD logging can slow recording.
 
@@ -172,7 +171,7 @@ Motion detection is enabled by default and can be switched off under **Motion De
 
 The onboard PDM microphone is enabled by default and its pins are applied automatically. Audio is 16-bit mono PCM at 16 kHz, stored as WAV inside the AVI.
 
-**Microphone Gain** on the web page controls level, defaulting to 5. A value of 3 is unity gain; higher amplifies, lower attenuates. Setting it to **0 turns audio off** - recording, the NVR stream and RTSP audio are all gated on it. The speaker icon streams live microphone audio to the browser.
+**Microphone Gain** on the web page controls level, defaulting to 5. A value of 3 is unity gain; higher amplifies, lower attenuates. Setting it to **0 turns audio off** - recording and the NVR audio stream are both gated on it. The speaker icon streams live microphone audio to the browser.
 
 The intercom feature — two-way audio between the device and a browser — additionally requires an I2S amplifier, which needs a free pin and therefore a source change on this build. Browser microphone access has security constraints; see [`audio.cpp`](audio.cpp).
 
@@ -223,11 +222,11 @@ Lets multiple cameras behind one dynamic IP be reached without DDNS, by POSTing 
 
 ## Streaming to an NVR
 
-HTTP or RTSP, but not both at once. Streaming performance depends on network quality, and improves with motion detection switched off, since a recording takes priority and can make streams stutter.
+Streaming is MJPEG over HTTP. Performance depends on network quality, and improves with motion detection switched off, since a recording takes priority and can make streams stutter.
 
-**RTSP** requires the [ESP32-RTSPServer](https://github.com/rjsachse/ESP32-RTSPServer) library, version 1.3.1 or above, and `INCLUDE_RTSP` set to `true`. Enable video, audio and subtitle streams under **Edit Config → Streaming**, then save and reboot. Connect to `rtsp://<camera_ip>:<RTSPport>`, or with credentials `rtsp://<user>:<pass>@<camera_ip>:<RTSPport>`.
+Enable the streams under **Edit Config → Streaming**, which exposes `/sustain?video=1`, `/sustain?audio=1` and `/sustain?srt=1`. Multiple streams need an intermediate tool such as [go2rtc](https://github.com/AlexxIT/go2rtc) to synchronise them.
 
-**HTTP** streaming is available when `INCLUDE_RTSP` is `false`, exposing `/sustain?video=1`, `/sustain?audio=1` and `/sustain?srt=1`. Multiple streams need an intermediate tool such as [go2rtc](https://github.com/AlexxIT/go2rtc) to synchronise them.
+RTSP was removed from this fork. It required an external library, and enabling it disabled the HTTP NVR streams outright, since it took over the same task slots.
 
 ## WebDAV
 
@@ -258,13 +257,10 @@ Removing the GPIO configuration UI left several upstream features present in the
 | I2C devices — BMP280, MPU6050, SSD1306, etc. | `INCLUDE_I2C` | `I2Csda` / `I2Cscl` unassigned |
 | Telemetry recording | `INCLUDE_TELEM` | Depends on I2C |
 | Remote control of an RC vehicle | `INCLUDE_PERIPH`, `INCLUDE_MCPWM` | Depends on peripheral pins |
-| Photogrammetry turntable | `INCLUDE_PGRAM` | Depends on peripheral pins |
 
 Their **web UI controls and config rows have been removed**, since none of these flags is enabled and the settings therefore had no effect. The C++ is left in place behind its `#if INCLUDE_*` guards, so enabling a flag also means restoring the corresponding rows to the `appConfig` table in [`appSpecific.cpp`](appSpecific.cpp) and bumping `CFG_VER`.
 
-Machine learning (`INCLUDE_TINYML`) is a separate case: the classifier function in [`motionDetect.cpp`](motionDetect.cpp) contains a syntax error and has never compiled. It is preserved as inherited from upstream, but enabling the flag will not build — so unlike the others, its settings cannot be restored by a flag flip alone.
-
-The auxiliary-board *companion* mode — running this firmware on a second, cameraless ESP32 — was removed entirely and is not recoverable by configuration.
+**Deleted outright, and not recoverable by a flag flip:** photogrammetry, machine learning (its classifier never compiled — it carried a syntax error inherited from upstream), RTSP, and the auxiliary-board *companion* mode that ran this firmware on a second cameraless ESP32.
 
 For documentation of these features as they work on upstream hardware, see the [upstream README](https://github.com/s60sc/ESP32-CAM_MJPEG2SD#readme).
 

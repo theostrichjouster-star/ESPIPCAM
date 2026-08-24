@@ -808,9 +808,6 @@ bool prepRecording() {
   for (int i = 0; i < vidStreams; i++) frameSemaphore[i] = xSemaphoreCreateBinary();
   reloadConfigs(); // apply camera config
   if (!startSDtasks()) return false;
-#if INCLUDE_TINYML
-  LOG_INF("%sUsing TinyML", mlUse ? "" : "Not ");
-#endif
 
   if ((fs::LittleFSFS*)&STORAGE == &LittleFS) {
     // prevent recording

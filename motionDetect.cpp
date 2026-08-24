@@ -13,18 +13,10 @@
  When frame size is changed the OV2640 outputs a few glitched frames whilst it 
  makes the transition. These could be interpreted as spurious motion.
 
- Machine Learning can be incorporated to further discriminate when motion detection 
- has occurred by classifying whether the object in the frame is of a particular
- type of interest, eg a human, animal, vehicle etc. 
- 
  s60sc 2020, 2023, 2025
 */
 
 #include "appGlobals.h"
-
-#if INCLUDE_TINYML
-#include TINY_ML_LIB
-#endif
 
 #define INACTIVE_COLOR 96 // color for inactive motion pixel
 #define JPEG_QUAL 80 // % quality for generated motion detect jpeg
@@ -145,57 +137,6 @@ static void rgbToGray(uint8_t* buffer, int width, int height) {
     buffer[i] = (uint8_t)(((77 * buffer[index]) + (150 * buffer[index + 1]) + (29 * buffer[index + 2])) >> 8);
   }
 }
-
-#if INCLUDE_TINYML
-
-static int getImageData(size_t offset, size_t length, float *out_ptr) {
-  // copy to features as grayscale or RGB
-  size_t pixelPtr = offset * colorDepth;
-  size_t out_ptr_idx = 0;
-  while (out_ptr_idx < length) {
-    out_ptr[out_ptr_idx++] = (colorDepth == RGB888_BYTES)  
-      ? (float)((currBuff[pixelPtr] << 16) + (currBuff[pixelPtr + 1] << 8) + currBuff[pixelPtr + 2])
-      : (float)((currBuff[pixelPtr] << 16) + (currBuff[pixelPtr] << 8) + currBuff[pixelPtr]);  
-    pixelPtr += colorDepth;
-  } 
-  return 0;
-}
-
-static bool tinyMLclassify(size_t (RESIZE_DIM) {
-  // convert input data to appropriate format
-  bool out = false;
-  uint32_t dTime = millis(); 
-  // reduce size of bitmap to that required by classifier and copy to features as grayscale or RGB
-  if (RESIZE_DIM != EI_CLASSIFIER_INPUT_WIDTH) {
-    size_t tempSize = EI_CLASSIFIER_INPUT_WIDTH * EI_CLASSIFIER_INPUT_HEIGHT * colorDepth;
-    uint8_t* tempBuff = (uint8_t*)ps_malloc(tempSize);
-    rescaleImage(currBuff, RESIZE_DIM, RESIZE_DIM, tempBuff, EI_CLASSIFIER_INPUT_WIDTH, EI_CLASSIFIER_INPUT_HEIGHT);
-    memcpy(currBuff, tempBuff, tempSize);
-    free(tempBuff);
-  }
-  signal_t features_signal;
-  features_signal.total_length = EI_CLASSIFIER_INPUT_WIDTH * EI_CLASSIFIER_INPUT_HEIGHT;
-  features_signal.get_data = &getImageData;
-
-  // Run the classifier
-  ei_impulse_result_t result = { 0 };
-  EI_IMPULSE_ERROR res = run_classifier(&features_signal, &result, false);
-  if (res == EI_IMPULSE_OK) {
-    if (result.classification[0].value > mlProbability) {
-      out = true; // sufficient classification match, so keep motion detection
-      if (dbgVerbose) {
-        LOG_VRB("Prob: %0.2f, Timing: DSP %d ms, inference %d ms, anomaly %d ms", 
-        result.classification[0].value, result.timing.dsp, result.timing.classification, result.timing.anomaly);
-        char outcome[200] = {0};
-        for (uint16_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++)
-          sprintf(outcome + strlen(outcome), "%s: %.2f, ", ei_classifier_inferencing_categories[i], result.classification[i].value);
-        LOG_VRB("Predictions - %s in %ums", outcome, millis() - dTime);
-      } 
-    } 
-  } else LOG_WRN("Failed to run classifier (%d)", res);
-  return out;
-}
-#endif
 
 bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   // check difference between current and previous image (subtract background)
@@ -340,13 +281,6 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
       if (!motionStatus && motionCnt >= detectMotionFrames) {
         LOG_VRB("***** Motion - START");
         motionStatus = true; // motion started
-#if INCLUDE_TINYML
-        // pass image to TinyML for classification
-        if (mlUse) if (!tinyMLclassify(RESIZE_DIM)) {
-          motionCnt = 0; // not classified, so cancel motion
-          motionStatus = false;
-        }
-#endif
         dTime = millis();
 #if INCLUDE_MQTT
         if (mqtt_active && motionCnt) {
