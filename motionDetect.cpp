@@ -42,7 +42,6 @@ int motionThreshold = 0; // the threshold that count was measured against
 float motionVal = 8.0; // initial motion sensitivity setting
 uint8_t* motionJpeg = NULL;
 size_t motionJpegLen = 0;
-static uint8_t* currBuff = NULL;
 
 #ifndef AUXILIARY
 
@@ -105,33 +104,6 @@ bool isNight(uint8_t nightSwitch) {
   return nightTime;
 }
 
-static void rescaleImage(const uint8_t* input, int inputWidth, int inputHeight, uint8_t* output, int outputWidth, int outputHeight) {
-  // use bilinear interpolation to resize image
-  float xRatio = (float)inputWidth / (float)outputWidth;
-  float yRatio = (float)inputHeight / (float)outputHeight;
-
-  for (int i = 0; i < outputHeight; ++i) {
-    for (int j = 0; j < outputWidth; ++j) {
-      int xL = (int)floor(xRatio * j);
-      int yL = (int)floor(yRatio * i);
-      int xH = (int)ceil(xRatio * j);
-      int yH = (int)ceil(yRatio * i);
-      float xWeight = xRatio * j - xL;
-      float yWeight = yRatio * i - yL;
-      for (int channel = 0; channel < colorDepth; ++channel) {
-        uint8_t a = input[(yL * inputWidth + xL) * colorDepth + channel];
-        uint8_t b = input[(yL * inputWidth + xH) * colorDepth + channel];
-        uint8_t c = input[(yH * inputWidth + xL) * colorDepth + channel];
-        uint8_t d = input[(yH * inputWidth + xH) * colorDepth + channel];
-
-        float pixel = a * (1 - xWeight) * (1 - yWeight) + b * xWeight * (1 - yWeight)
-                    + c * yWeight * (1 - xWeight) + d * xWeight * yWeight;
-        output[(i * outputWidth + j) * colorDepth + channel] = (uint8_t)pixel;
-      }
-    }
-  }
-}
-
 static void rgbToGray(uint8_t* buffer, int width, int height) {
   // convert rgb buffer to grayscale in place
   for (int i = 0; i < width * height; ++i) {
@@ -144,14 +116,17 @@ static void rgbToGray(uint8_t* buffer, int width, int height) {
 bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   // check difference between current and previous image (subtract background)
   // convert image from JPEG to downscaled RGB888 or 8 bit grayscale bitmap
-  size_t RESIZE_DIM = 96;  // dimensions of resized motion bitmap
-  static bool firstCall = true;
-  if (firstCall) {
-    if (ESP.getPsramSize() < 3 * ONEMEG) RESIZE_DIM = 64; // otherwise insufficient PSRAM (issue #706)
-    firstCall = false;
-  }
-  size_t RESIZE_DIM_SQ = (RESIZE_DIM * RESIZE_DIM); // pixels in bitmap
-  
+  // The decoded bitmap is compared at its native size. It used to be bilinear resampled up
+  // to a fixed 96x96 first, for two reasons that no longer hold:
+  //   - normalisation: detection once ran at the capture resolution, so the bitmap varied
+  //     (QVGA/4 80x60, SVGA/8 100x76, HD/8 160x90) and had to be squared off to compare
+  //     against prevBuff. Detection is now pinned to MOTION_DETECT_FS, so it never varies.
+  //   - smoothing: true when the source was larger than the target, where averaging
+  //     neighbours suppresses noise. From VGA/8 it was an UPSCALE, 80x60 to 96x96, which
+  //     cannot recover smoothing that way - it invented 4,416 interpolated pixels carrying
+  //     no new information, in floating point, on every check.
+  // Measured 8ms of a ~40ms check, plus a whole buffer and a copy.
+  // The square shape was probably inherited from TinyML, since removed.
   // keyed off sensorFS, the size the sensor is actually at, not fsizePtr - the capture
   // resolution the user picked is never what gets decoded here
   if (!motionSizeAllowed(sensorFS)) return false; // pixel count, not enum index
@@ -180,8 +155,8 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   static uint8_t* rgbBuf = (uint8_t*)heap_caps_aligned_calloc(16, 1, MOTION_RGB_BUF_SIZE, MALLOC_CAP_SPIRAM);
  #if INCLUDE_NEW_JPG
   static struct esp_jpeg_stream jpegHandle = {0};
-  static uint8_t* jpgBuf = (uint8_t*)ps_malloc(RESIZE_DIM_SQ * RGB888_BYTES);
-#endif  
+  static uint8_t* jpgBuf = (uint8_t*)ps_malloc(MOTION_RGB_BUF_SIZE);
+#endif
 
   // calculate parameters for sample size when resolution changes
   static bool prevBuffValid = false; // prevBuff holds a comparable image at this geometry
@@ -221,29 +196,44 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 3, 0)
   if (colorDepth == GRAYSCALE_BYTES) rgbToGray(rgbBuf, sampleWidth, sampleHeight);
 #endif
-  LOG_VRB("JPEG to rescaled %s bitmap conversion %u bytes in %lums", colorDepth == RGB888_BYTES ? "color" : "grayscale", sampleWidth * sampleHeight * colorDepth, millis() - dTime);
-  
-  // allocate buffer space on heap
-  size_t resizeDimLen = RESIZE_DIM_SQ * colorDepth; // byte size of bitmap
+  LOG_VRB("JPEG to %s bitmap conversion %u bytes in %lums", colorDepth == RGB888_BYTES ? "color" : "grayscale", sampleWidth * sampleHeight * colorDepth, millis() - dTime);
+
+  // allocate buffer space on heap, sized from the bitmap actually being compared. Done on
+  // first use because the geometry is not known until the setup block above has run
+  size_t bmpPixels = (size_t)sampleWidth * sampleHeight;
+  size_t resizeDimLen = bmpPixels * colorDepth; // byte size of bitmap
+  static size_t allocPixels = 0;
   if (motionJpeg == NULL) motionJpeg = (uint8_t*)ps_malloc(32 * 1024);
-  if (currBuff == NULL) currBuff = (uint8_t*)ps_malloc(RESIZE_DIM_SQ * RGB888_BYTES);
-  static uint8_t* prevBuff = (uint8_t*)ps_malloc(RESIZE_DIM_SQ * RGB888_BYTES);
-  static uint8_t* changeMap = (uint8_t*)ps_malloc(RESIZE_DIM_SQ * RGB888_BYTES);
-  
-  dTime = millis();
-  rescaleImage(rgbBuf, sampleWidth, sampleHeight, currBuff, RESIZE_DIM, RESIZE_DIM);
-  LOG_VRB("Bitmap rescale to %u bytes in %lums", resizeDimLen, millis() - dTime);
-  // compare each pixel in current frame with previous frame 
+  static uint8_t* prevBuff = NULL;
+  static uint8_t* changeMap = NULL;
+  if (allocPixels != bmpPixels) {
+    // geometry changed, which after commit 3534ba9 can only happen for at most one frame at
+    // boot before settleSensor() pins the sensor. Reallocate rather than compare mismatched
+    // buffers, and treat prevBuff as stale
+    free(prevBuff); free(changeMap);
+    prevBuff = (uint8_t*)ps_malloc(bmpPixels * RGB888_BYTES);
+    changeMap = (uint8_t*)ps_malloc(bmpPixels * RGB888_BYTES);
+    allocPixels = (prevBuff && changeMap) ? bmpPixels : 0;
+    prevBuffValid = false;
+    if (!allocPixels) {
+      LOG_WRN("Failed to allocate %u byte motion buffers - check skipped", bmpPixels * RGB888_BYTES);
+      return motionStatus;
+    }
+  }
+
+  // compare each pixel in current frame with previous frame, at the bitmap's native size
   dTime = millis();
   int changeCount = 0;
-  // set horizontal region of interest in image 
-  uint16_t startPixel = (RESIZE_DIM*(detectStartBand-1)/detectNumBands) * RESIZE_DIM * colorDepth;
-  uint16_t endPixel = (RESIZE_DIM*(detectEndBand)/detectNumBands) * RESIZE_DIM * colorDepth;
+  // set horizontal region of interest in image. The first term is a row count and the
+  // second the row stride, so they take height and width respectively - bands stay
+  // proportional and cover the same part of the scene as before
+  uint16_t startPixel = (sampleHeight*(detectStartBand-1)/detectNumBands) * sampleWidth * colorDepth;
+  uint16_t endPixel = (sampleHeight*(detectEndBand)/detectNumBands) * sampleWidth * colorDepth;
   int moveThreshold = max(1, (int)(((endPixel - startPixel) / colorDepth) * (11 - motionVal) / 100)); // number of changed pixels that constitute a movement
   for (size_t i = 0; i < resizeDimLen; i += colorDepth) {
     uint16_t currPix = 0, prevPix = 0;
     for (int j = 0; j < colorDepth; j++) {
-      currPix += currBuff[i + j];
+      currPix += rgbBuf[i + j]; // compared straight from the decoder output, no copy
       prevPix += prevBuff[i + j];
     }
     currPix /= colorDepth;
@@ -263,9 +253,9 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
     }
   }
 
-  lightLevel = (lux*100)/(RESIZE_DIM_SQ*255); // light value as a %
+  lightLevel = (lux*100)/(bmpPixels*255); // light value as a %
   nightTime = isNight(nightSwitch);
-  memcpy(prevBuff, currBuff, resizeDimLen); // save image for next comparison
+  memcpy(prevBuff, rgbBuf, resizeDimLen); // save image for next comparison
   prevBuffValid = true;
   LOG_VRB("Detected %u changes, threshold %u, light level %u, in %lums", changeCount, moveThreshold, lightLevel, millis() - dTime);
   // kept for tuning: dumpMotionStats reports the highest change count seen against the
@@ -285,12 +275,15 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
       dTime = millis();
       // build jpeg of changeMap for debug streaming
 #if INCLUDE_NEW_JPG
-      motionJpegLen = rgb2jpg(changeMap, RESIZE_DIM, RESIZE_DIM, JPEG_QUAL, jpgBuf);
+      motionJpegLen = rgb2jpg(changeMap, sampleWidth, sampleHeight, JPEG_QUAL, jpgBuf);
       if (motionJpegLen == 0) LOG_WRN("motionDetect: encode() failed"); 
       else memcpy(motionJpeg, jpgBuf, motionJpegLen); 
 #else
       uint8_t* jpg_buf = NULL;
-      if (!fmt2jpg(changeMap, resizeDimLen, RESIZE_DIM, RESIZE_DIM, PIXFORMAT_RGB888, JPEG_QUAL, &jpg_buf, &motionJpegLen))
+      // changeMap is always RGB888 regardless of colorDepth, so its length is the RGB888
+      // one - the old call passed the colorDepth sized length here, which understated it
+      // threefold in grayscale mode
+      if (!fmt2jpg(changeMap, bmpPixels * RGB888_BYTES, sampleWidth, sampleHeight, PIXFORMAT_RGB888, JPEG_QUAL, &jpg_buf, &motionJpegLen))
         LOG_WRN("motionDetect: fmt2jpg() failed"); 
       else memcpy(motionJpeg, jpg_buf, motionJpegLen); 
       free(jpg_buf);
