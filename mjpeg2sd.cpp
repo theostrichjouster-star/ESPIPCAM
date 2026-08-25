@@ -244,8 +244,23 @@ static inline uint8_t desiredFPS(framesize_t forFS) {
 
 static void applyHtsFloor(sensor_t* s) {
   // Worth 19.2 -> 24.5fps at 1280x960 and 25.3 -> 31.9 at HD, for one register pair.
-  // Binned sizes only: a full resolution line reads twice the pixels and its floor has not
-  // been measured, so those are left exactly as the driver set them
+  //
+  // Binned sizes only, and deliberately so. Full resolution has since been measured and is a
+  // different case: at FHD the sensor reads 2624 real columns per line against HTS 2844, so
+  // there is almost nothing spare. It works down to 2700 (5.8 -> 6.2fps) and is stone dead at
+  // 2650 - not degraded frames, no frames at all, and no still either. A 6% gain sitting 1.9%
+  // above a hard cliff, measured on one sensor at one temperature, is a bad trade, so the
+  // full resolution sizes are left exactly as the driver set them. 2060 is safe here for the
+  // opposite reason: it is the driver's own choice for VGA and SVGA on this same binned
+  // window, already proven across the product, and XGA and HD were simply set high for no
+  // reason. VTS has no slack at all at full resolution - dropping FHD from 1488 to 1340
+  // stopped frame output entirely, and restoring it recovered immediately.
+  //
+  // The remaining FHD lever is neither of these. It reads 1472 unbinned rows to produce 1080
+  // and downscales; cropping the window to 1080 rows instead would roughly double the rate.
+  // Setting the window and VTS alone is not enough - it kills output, because the ISP scaler
+  // is still configured to consume 1472 rows. That needs 0x5600-0x5606 and the offsets at
+  // 0x3810-0x3813 reconfigured with the window, and has not been attempted
   if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return;
   int xInc = s->get_reg(s, 0x3814, 0xFF); // [7:4] odd increment, [3:0] even, ratio is the mean
   if (xInc < 0) return;
