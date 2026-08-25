@@ -256,6 +256,17 @@ static void applyHtsFloor(sensor_t* s) {
   // reason. VTS has no slack at all at full resolution - dropping FHD from 1488 to 1340
   // stopped frame output entirely, and restoring it recovered immediately.
   //
+  // DO NOT reduce VTS at full resolution to chase frame rate. It looks like a free doubling
+  // and is not. FHD at VTS 1480 instead of 1488 reports 11.7fps instead of 5.8, and SXGA at
+  // 1956 instead of 1968 reports 9.4 instead of 4.7 - both reproducible, both with valid
+  // headers. The frames are corrupt: each carries only about half the horizontal pixels,
+  // duplicated side by side with a seam down the middle. The rate halves because the sensor
+  // is doing half the work, having failed to complete a full resolution line readout in the
+  // shortened frame. Nothing automated catches this - ffmpeg decoded all 177 frames of a test
+  // recording without error, every SOF read 1920x1080, header dimensions agreed at both
+  // offsets, frameCnt agreed, and Bad frames discarded stayed 0. It was found by looking at a
+  // frame. Any change to sensor timing registers needs a human to view an actual image
+  //
   // The remaining FHD lever is neither of these. It reads 1472 unbinned rows to produce 1080
   // and downscales; cropping the window to 1080 rows instead would roughly double the rate.
   // Setting the window and VTS alone is not enough - it kills output, because the ISP scaler
