@@ -1751,9 +1751,14 @@ bool prepCam() {
           sprintf(camModel, "PID=0x%X", s->id.PID);
           break;
       }
-      // set frame size to configured value
+      // set frame size to configured value, mapped the same way every other caller maps it.
+      // The config can hold an app-only size past the driver's enum (see FS_1280X960), and
+      // handing that straight to the driver made it log "Invalid framesize: 25" and clamp to
+      // QSXGA, so the frame grabbed below to verify the camera came off a 2560x1920 window
+      // rather than the configured one. startSDtasks() put it right afterwards, which is why
+      // this only ever showed up as an error line in the boot log
       char fsizePtrStr[4];
-      if (retrieveConfigVal("framesize", fsizePtrStr)) s->set_framesize(s, (framesize_t)(atoi(fsizePtrStr)));
+      if (retrieveConfigVal("framesize", fsizePtrStr)) s->set_framesize(s, hwFrameSize((framesize_t)(atoi(fsizePtrStr))));
       else s->set_framesize(s, FRAMESIZE_VGA);
 
       // model specific corrections
