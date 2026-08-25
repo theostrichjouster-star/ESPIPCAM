@@ -1353,6 +1353,10 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_VFIFO_VSIZE   0x4604 // .. 0x4605 JPEG output height
 #define OV5640_JPG_MODE_SEL  0x4713 // [2:0] JPEG mode 1..6, reset default 0x02
 #define OV5640_ISP_CONTROL01 0x5001 // [5] ISP scale enable - decides crop vs downscale
+#define OV5640_AEC_PK_EXPOSURE 0x3500 // .. 0x3502 exposure, [19:4] lines and [3:0] fraction
+#define OV5640_AEC_PK_REAL_GAIN 0x350a // .. 0x350b AGC gain actually applied, 0x350b[7:0] x/16
+#define OV5640_AEC_CTRL00    0x3a00 // [2] night mode enable - extends the frame in the dark
+#define OV5640_AEC_GAIN_CEIL 0x3a18 // .. 0x3a19 AGC ceiling, real gain format
 
 static int camReg(sensor_t* s, int reg) {
   // single 8 bit register, -1 on SCCB failure
@@ -1446,6 +1450,19 @@ void dumpCamRegs() {
   LOG_INF("Timing: HTS %d, VTS %d + %d AEC extra = %d effective, %.0f clocks/frame",
     hts, vts, vtsExtra, vtsEff, frameClks);
   LOG_INF("Ceiling: %.1f fps on SYSCLK basis, %.1f fps on PCLK basis (app FPS %u)", fpsSys, fpsPclk, FPS);
+  // Exposure and gain belong next to the frame timing because they are the same trade: the
+  // frame period is the hard ceiling on integration time, so pushing the rate up buys darkness
+  // that only gain can pay for. Exposure is in units of line/16 (datasheet 4.6.2), gain is in
+  // real gain format where the value is 16x the actual multiplier
+  int expRaw = (camReg(s, OV5640_AEC_PK_EXPOSURE) << 16) | camReg16(s, OV5640_AEC_PK_EXPOSURE + 1);
+  int gainRaw = camReg16(s, OV5640_AEC_PK_REAL_GAIN) & 0x3FF;
+  int gainCeil = camReg16(s, OV5640_AEC_GAIN_CEIL) & 0x3FF;
+  int aec00 = camReg(s, OV5640_AEC_CTRL00);
+  float expLines = (expRaw < 0) ? 0.0f : (float)(expRaw & 0xFFFFF) / 16.0f;
+  float expMs = (sysClk > 0 && hts > 0) ? expLines * hts * 1000.0f / sysClk : 0.0f;
+  LOG_INF("Exposure: %.1f lines = %.2fms of the %.2fms frame, gain %.2fx (ceiling %.2fx), night mode %s",
+    expLines, expMs, (fpsSys > 0) ? 1000.0f / fpsSys : 0.0f, gainRaw / 16.0f, gainCeil / 16.0f,
+    (aec00 < 0) ? "?" : ((aec00 & 0x04) ? "ON - frame may extend" : "off"));
   LOG_INF("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d",
     jpgMode < 0 ? -1 : jpgMode & 0x07, jpgMode, vfifo00, (vfifo00 > 0 && (vfifo00 & 0x20)) ? "on" : "off",
     camReg16(s, OV5640_VFIFO_HSIZE), camReg16(s, OV5640_VFIFO_VSIZE));
@@ -1469,8 +1486,13 @@ void dumpCamRegs() {
     (isp01 < 0) ? "?" : ((isp01 & 0x20) ? "on" : "off"), isp01);
   LOG_INF("Subsample: 0x3814=0x%02X 0x3815=0x%02X (%.1fx by %.1fx) 0x3820=0x%02X 0x3821=0x%02X",
     xInc, yInc, xBin, yBin, camReg(s, OV5640_TIMING_TC_R20), camReg(s, OV5640_TIMING_TC_R21));
-  LOG_INF("Die temp: %.1fC, free heap %s, free PSRAM %s",
-    readInternalTemp(), fmtSize(ESP.getFreeHeap()), fmtSize(ESP.getFreePsram()));
+  // This is the ESP32-S3's own on-die sensor (utils.cpp readInternalTemp, configured for a
+  // 20-100C band), NOT the camera - it sits in this dump only because it is the one thermal
+  // number we have. The OV5640 exposes no temperature register at all, and its datasheet
+  // table 8-2 puts stable image quality at 0-50C junction against -30 to +70C for merely
+  // functioning. So a hot S3 reading is a warning about a part we cannot actually measure
+  LOG_INF("ESP32-S3 die temp: %.1fC (not the camera - OV5640 has no sensor, stable to 50C), light %u%%, free heap %s, free PSRAM %s",
+    readInternalTemp(), lightLevel, fmtSize(ESP.getFreeHeap()), fmtSize(ESP.getFreePsram()));
   LOG_INF("**********************************");
 }
 
