@@ -56,19 +56,32 @@ esp_err_t fileHandler(httpd_req_t* req, bool download) {
     return ESP_OK;
   }
   
-  // Check if browser already has this version of the file
-  char inVer[10];
+  // Check if browser already has this version of the file.
+  // The tag has to identify the file, not the firmware. It used to be CFG_VER, a compile time
+  // constant untouched since upstream v8.3, so every file the board served shared one tag and
+  // an edited data file was answered 304 for as long as the browser kept its copy. That is how
+  // the 1280x960 option sat in MJPEG2SD.htm from ccf5e77 onwards without ever reaching a
+  // browser, and why no web UI edit could be seen without clearing the cache by hand.
+  // Size and last write time both come free from the open handle. They collide only when an
+  // edit preserves the byte count AND the timestamp is unset, which needs the clock to have
+  // been unset when the file was written - SD_MMC takes mtime from the system clock, so a file
+  // fetched before the first NTP sync reads zero. Hashing the content would be exact but means
+  // reading all 93KB of the page on every request, which is not worth it here
+  char inVer[32];
+  char fileVer[32];
+  snprintf(fileVer, sizeof(fileVer), "%llx-%x", (unsigned long long)df.getLastWrite(), (unsigned)df.size());
   if (httpd_req_get_hdr_value_str(req, "If-None-Match", inVer, sizeof(inVer)) == ESP_OK) {
-    if (atoi(inVer) == CFG_VER) {
-      // already has version cached, no need to resend
+    if (!strcmp(inVer, fileVer)) {
+      // already has this version cached, no need to resend
       httpd_resp_set_status(req, "304 Not Modified");
-      return httpd_resp_send(req, NULL, 0); 
+      return httpd_resp_send(req, NULL, 0);
     }
   }
   // this version not cached, so send it
   httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-  itoa(CFG_VER, inVer, 10);
-  httpd_resp_set_hdr(req, "ETag", inVer);
+  // fileVer must outlive the response: httpd_resp_set_hdr keeps the pointer rather than copying
+  // the string, and the send happens below in this same stack frame
+  httpd_resp_set_hdr(req, "ETag", fileVer);
   return (download) ? downloadFile(df, req) : sendChunks(df, req);
 }
 
