@@ -1362,6 +1362,8 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_VFIFO_HSIZE   0x4602 // .. 0x4603 JPEG output width
 #define OV5640_VFIFO_VSIZE   0x4604 // .. 0x4605 JPEG output height
 #define OV5640_JPG_MODE_SEL  0x4713 // [2:0] JPEG mode 1..6, reset default 0x02
+#define OV5640_JPEG_CTRL00   0x4400 // [7] encoder input format, 0 = YUV420, 1 = YUV422
+#define OV5640_JFIFO_OVERFLOW 0x4417 // [0] JPEG FIFO overflow, read only - see below
 #define OV5640_ISP_CONTROL01 0x5001 // [5] ISP scale enable - decides crop vs downscale
 #define OV5640_AEC_PK_EXPOSURE 0x3500 // .. 0x3502 exposure, [19:4] lines and [3:0] fraction
 #define OV5640_AEC_PK_REAL_GAIN 0x350a // .. 0x350b AGC gain actually applied, 0x350b[7:0] x/16
@@ -1499,9 +1501,19 @@ void dumpCamRegs() {
   LOG_INF("Exposure: %.1f lines = %.2fms of the %.2fms frame, gain %.2fx (ceiling %.2fx), night mode %s",
     expLines, expMs, (fpsPix > 0) ? 1000.0f / fpsPix : 0.0f, gainRaw / 16.0f, gainCeil / 16.0f,
     (aec00 < 0) ? "?" : ((aec00 & 0x04) ? "ON - frame may extend" : "off"));
-  LOG_INF("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d",
+  // 0x4417[0] is the JPEG FIFO overflow flag, and it is here because it separates two
+  // explanations of the same symptom. When the image breaks up at a high pixel clock, either
+  // the clock has passed the 96MHz maximum in table 8-5, or the JPEG engine could not keep up
+  // and its FIFO overran. Those want opposite responses, and without this flag they look
+  // identical from outside. 0x4400[7] is the encoder's input format: YUV422 costs 2 bytes per
+  // pixel against 4:2:0's 1.5, so it sets the data rate the engine and then the card must carry
+  int jpegCtrl = camReg(s, OV5640_JPEG_CTRL00);
+  int jfifoOvf = camReg(s, OV5640_JFIFO_OVERFLOW);
+  LOG_INF("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d, input %s, JFIFO overflow %s",
     jpgMode < 0 ? -1 : jpgMode & 0x07, jpgMode, vfifo00, (vfifo00 > 0 && (vfifo00 & 0x20)) ? "on" : "off",
-    camReg16(s, OV5640_VFIFO_HSIZE), camReg16(s, OV5640_VFIFO_VSIZE));
+    camReg16(s, OV5640_VFIFO_HSIZE), camReg16(s, OV5640_VFIFO_VSIZE),
+    (jpegCtrl < 0) ? "?" : ((jpegCtrl & 0x80) ? "YUV422" : "YUV420"),
+    (jfifoOvf < 0) ? "?" : ((jfifoOvf & 0x01) ? "YES - encoder could not keep up" : "no"));
   int xSt = camReg16(s, OV5640_X_ADDR_ST), ySt = camReg16(s, OV5640_X_ADDR_ST + 2);
   int xEnd = camReg16(s, OV5640_X_ADDR_END), yEnd = camReg16(s, OV5640_X_ADDR_END + 2);
   int xOff = camReg16(s, OV5640_X_OFFSET), yOff = camReg16(s, OV5640_X_OFFSET + 2);
