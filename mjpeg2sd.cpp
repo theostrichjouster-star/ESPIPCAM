@@ -1400,41 +1400,49 @@ static int camReg16(sensor_t* s, int reg) {
   return (hi < 0 || lo < 0) ? -1 : ((hi << 8) | lo);
 }
 
-void dumpCamRegs() {
-  // report the OV5640 clock tree and frame timing as actually programmed
-  sensor_t* s = esp_camera_sensor_get();
-  if (s == NULL) {
-    LOG_WRN("dumpCam: no camera sensor");
-    return;
-  }
-  int r34 = camReg(s, OV5640_SC_PLL_CTRL0);
-  int r35 = camReg(s, OV5640_SC_PLL_CTRL1);
-  int mul = camReg(s, OV5640_SC_PLL_CTRL2);
-  int r37 = camReg(s, OV5640_SC_PLL_CTRL3);
-  int r39 = camReg(s, OV5640_SC_PLL_CTRL5);
-  int r08 = camReg(s, OV5640_SC_PLLS_CTRL0);
-  int pclkDiv = camReg(s, OV5640_PCLK_DIV);
-  int pclkMan = camReg(s, OV5640_PCLK_MANUAL);
-  if (mul < 0 || r35 < 0 || r37 < 0) {
-    LOG_WRN("dumpCam: SCCB read failed - camera may be unresponsive");
-    return;
-  }
+// The decoded PLL tree, gathered so that everything needing the pixel clock reads the same
+// number. It used to be computed inline inside dumpCamRegs(), which was fine while only the
+// instrument wanted it - the banding filter now wants it too, and two copies of this arithmetic
+// would eventually disagree about the clock while both looked plausible
+typedef struct {
+  bool valid;                                   // false if the SCCB reads failed - check first
+  int r34, r35, mul, r37, r39, r08;             // raw PLL registers, for reporting
+  int pclkDiv, pclkMan;
+  int sysDiv, preDiv, pclkRoot, pclkRootDiv;
+  bool root2x, bypass, pclkManual;
+  float preDivVal;
+  uint32_t xclk, refin, vco, pllClk, pixClk, pclkDriver;
+} camClocks_t;
+
+static camClocks_t camClocks(sensor_t* s) {
+  camClocks_t c = {};
+  if (s == NULL) return c;
+  c.r34 = camReg(s, OV5640_SC_PLL_CTRL0);
+  c.r35 = camReg(s, OV5640_SC_PLL_CTRL1);
+  c.mul = camReg(s, OV5640_SC_PLL_CTRL2);
+  c.r37 = camReg(s, OV5640_SC_PLL_CTRL3);
+  c.r39 = camReg(s, OV5640_SC_PLL_CTRL5);
+  c.r08 = camReg(s, OV5640_SC_PLLS_CTRL0);
+  c.pclkDiv = camReg(s, OV5640_PCLK_DIV);
+  c.pclkMan = camReg(s, OV5640_PCLK_MANUAL);
+  if (c.mul < 0 || c.r35 < 0 || c.r37 < 0) return c; // valid stays false
 
   // decode, then recompute the clocks using the driver's own arithmetic (calc_sysclk)
-  int sysDiv = (r35 >> 4) & 0x0F;
-  if (!sysDiv) sysDiv = 1;
-  int preDiv = r37 & 0x0F;
-  bool root2x = (r37 & 0x10) ? true : false;
-  int pclkRoot = (r08 >> 4) & 0x03;
-  bool bypass = (r39 & 0x80) ? true : false;
-  bool pclkManual = (pclkMan == 0x22);
+  c.sysDiv = (c.r35 >> 4) & 0x0F;
+  if (!c.sysDiv) c.sysDiv = 1;
+  c.preDiv = c.r37 & 0x0F;
+  c.root2x = (c.r37 & 0x10) ? true : false;
+  c.pclkRoot = (c.r08 >> 4) & 0x03;
+  c.bypass = (c.r39 & 0x80) ? true : false;
+  c.pclkManual = (c.pclkMan == 0x22);
   static const float preDivMap[] = {1, 1, 2, 3, 4, 1.5, 6, 2.5, 8};
   static const int pclkRootMap[] = {1, 2, 4, 8};
-  float preDivVal = preDivMap[preDiv > 8 ? 0 : preDiv];
+  c.preDivVal = preDivMap[c.preDiv > 8 ? 0 : c.preDiv];
+  c.pclkRootDiv = pclkRootMap[c.pclkRoot];
 
-  uint32_t xclk = xclkMhz * OneMHz;
-  uint32_t refin = (uint32_t)(xclk / preDivVal);
-  uint32_t vco = refin * mul / (root2x ? 2 : 1);
+  c.xclk = xclkMhz * OneMHz;
+  c.refin = (uint32_t)(c.xclk / c.preDivVal);
+  c.vco = c.refin * c.mul / (c.root2x ? 2 : 1);
   // Provenance matters here, because the naming used to be wrong and the wrong name misled the
   // whole investigation. This arithmetic is the esp32-camera driver's calc_sysclk() copied
   // verbatim, including the 2/5 and the /4. NEITHER constant comes from the datasheet -
@@ -1453,9 +1461,33 @@ void dumpCamRegs() {
   // on the next line computes 12.5MHz, four times low, which is why its figure was never
   // usable. Treat pixClk as an identification supported by agreement with table 8-5 and with
   // every measurement taken, not as a proven decode - the divider chain is still unverified
-  uint32_t pllClk = bypass ? xclk : (vco / sysDiv * 2 / 5); // 2/5 is 10 bit mode per 0x3034[3:0]
-  uint32_t pixClk = pllClk / 4;
-  uint32_t pclkDriver = pllClk / pclkRootMap[pclkRoot] / ((pclkManual && pclkDiv) ? pclkDiv : 2);
+  c.pllClk = c.bypass ? c.xclk : (c.vco / c.sysDiv * 2 / 5); // 2/5 is 10 bit mode per 0x3034[3:0]
+  c.pixClk = c.pllClk / 4;
+  c.pclkDriver = c.pllClk / c.pclkRootDiv / ((c.pclkManual && c.pclkDiv) ? c.pclkDiv : 2);
+  c.valid = true;
+  return c;
+}
+
+void dumpCamRegs() {
+  // report the OV5640 clock tree and frame timing as actually programmed
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL) {
+    LOG_WRN("dumpCam: no camera sensor");
+    return;
+  }
+  camClocks_t c = camClocks(s);
+  if (!c.valid) {
+    LOG_WRN("dumpCam: SCCB read failed - camera may be unresponsive");
+    return;
+  }
+  // local aliases, so the log statements below read as they always did
+  int r34 = c.r34, r35 = c.r35, mul = c.mul, r37 = c.r37, r39 = c.r39;
+  int r08 = c.r08, pclkDiv = c.pclkDiv, pclkMan = c.pclkMan;
+  int sysDiv = c.sysDiv, preDiv = c.preDiv, pclkRoot = c.pclkRoot;
+  bool root2x = c.root2x, bypass = c.bypass, pclkManual = c.pclkManual;
+  float preDivVal = c.preDivVal;
+  uint32_t refin = c.refin, vco = c.vco, pllClk = c.pllClk;
+  uint32_t pixClk = c.pixClk, pclkDriver = c.pclkDriver;
 
   int hts = camReg16(s, OV5640_X_TOTAL_SIZE);
   int vts = camReg16(s, OV5640_X_TOTAL_SIZE + 2);
@@ -1488,7 +1520,7 @@ void dumpCamRegs() {
   LOG_INF("PCLK regs: 0x3108=0x%02X 0x3824=%d 0x460C=0x%02X 0x3103=0x%02X",
     r08, pclkDiv, pclkMan, camReg(s, OV5640_SYSREM_RESET));
   LOG_INF("Decoded: mul=%d sys_div=%d pre_div=%d(/%.1f) root_2x=%d pclk_root=%d(/%d) pclk_manual=%d pclk_div=%d bypass=%d",
-    mul, sysDiv, preDiv, preDivVal, root2x, pclkRoot, pclkRootMap[pclkRoot], pclkManual, pclkDiv, bypass);
+    mul, sysDiv, preDiv, preDivVal, root2x, pclkRoot, c.pclkRootDiv, pclkManual, pclkDiv, bypass);
   LOG_INF("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, PIXCLK %.2fMHz (table 8-5: typ 48, max 96), driver PCLK %.2fMHz (4x low, do not use)",
     refin / 1000000.0, vco / 1000000.0, pllClk / 1000000.0, pixClk / 1000000.0, pclkDriver / 1000000.0);
   // table 8-5 caps the parallel port pixel clock at 96MHz. The measured cliff on this part sits
