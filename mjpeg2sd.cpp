@@ -1505,8 +1505,24 @@ void dumpCamRegs() {
   // explanations of the same symptom. When the image breaks up at a high pixel clock, either
   // the clock has passed the 96MHz maximum in table 8-5, or the JPEG engine could not keep up
   // and its FIFO overran. Those want opposite responses, and without this flag they look
-  // identical from outside. 0x4400[7] is the encoder's input format: YUV422 costs 2 bytes per
-  // pixel against 4:2:0's 1.5, so it sets the data rate the engine and then the card must carry
+  // identical from outside.
+  //
+  // 0x4400[7] is the encoder's input format, and it is reported because it must stay at YUV422.
+  // 4:2:0 would carry 1.5 bytes per pixel against 422's 2, which is worth wanting when the SD
+  // card is the binding constraint, but this part cannot do it: the ISP format mux at 0x501F
+  // (datasheet 5.12) offers YUV422, RGB, dither, RAW DPC, SNR RAW and RAW CIP, and no YUV420
+  // at all. Clearing this bit only tells the encoder to expect a format the ISP never sends.
+  // 4:2:0 subsamples chroma vertically, so the encoder then pairs chroma with the wrong lines
+  // and the image comes out with dense alternating line artifacts. Measured on a real scene:
+  // frames went from 35.1KB to 69.8KB, twice the size rather than smaller, because corrupt high
+  // frequency content compresses badly. JFIFO overflow stayed clear throughout, so the flag
+  // above correctly rules the encoder out and points at the format mismatch instead.
+  //
+  // Worth recording how this nearly passed. On a near black scene the same setting measured
+  // 19.5% SMALLER and looked like a win: the corruption is invisible when every line is black,
+  // and the frame really does carry half as many chroma blocks. Every automated check agreed -
+  // the JPEG SOF read 0x22/0x11/0x11 which is genuine 4:2:0, all 530 frames decoded, headers
+  // matched at both offsets, zero bad frames. It took a lit scene and a person looking at it
   int jpegCtrl = camReg(s, OV5640_JPEG_CTRL00);
   int jfifoOvf = camReg(s, OV5640_JFIFO_OVERFLOW);
   LOG_INF("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d, input %s, JFIFO overflow %s",
