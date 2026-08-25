@@ -234,6 +234,31 @@ static inline uint8_t desiredFPS(framesize_t forFS) {
   return (forFS == MOTION_DETECT_FS) ? frameData[MOTION_DETECT_FS].defaultFPS : captureFPS;
 }
 
+// The lowest line length the sensor will honour. The driver programs HTS 2644 for XGA and HD
+// but 2060 for VGA and SVGA on the same binned window, so 2644 is simply conservative rather
+// than required. Measured: frame rate tracks HTS exactly down to 2060, then the sensor stops
+// following - asking for 1900 came back as an effective 2069, and below about 1800 it produced
+// no frames at all. The floor is per line, so it holds regardless of VTS: it back-solved to
+// 2049 at VTS 984 and 2069 at VTS 744. The datasheet's 1296 for these modes is unreachable
+#define HTS_FLOOR 2060
+
+static void applyHtsFloor(sensor_t* s) {
+  // Worth 19.2 -> 24.5fps at 1280x960 and 25.3 -> 31.9 at HD, for one register pair.
+  // Binned sizes only: a full resolution line reads twice the pixels and its floor has not
+  // been measured, so those are left exactly as the driver set them
+  if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return;
+  int xInc = s->get_reg(s, 0x3814, 0xFF); // [7:4] odd increment, [3:0] even, ratio is the mean
+  if (xInc < 0) return;
+  if ((((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2 < 2) return; // not binned
+  int hts = (s->get_reg(s, 0x380C, 0xFF) << 8) | s->get_reg(s, 0x380D, 0xFF);
+  if (hts <= HTS_FLOOR) return; // already there, which is the case for VGA and below
+  s->set_reg(s, 0x380C, 0xFF, (HTS_FLOOR >> 8) & 0xFF);
+  s->set_reg(s, 0x380D, 0xFF, HTS_FLOOR & 0xFF);
+  int got = (s->get_reg(s, 0x380C, 0xFF) << 8) | s->get_reg(s, 0x380D, 0xFF);
+  if (got != HTS_FLOOR) LOG_WRN("HTS floor wrote %d but reads back %d", HTS_FLOOR, got);
+  else LOG_VRB("HTS %d -> %d", hts, HTS_FLOOR);
+}
+
 static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
   // Retarget the ISP scaler output without touching the window, binning or line timing.
   // 0x3808/0x3809 and 0x380A/0x380B are the DVP output size; everything upstream of them is
@@ -286,6 +311,7 @@ void setSensorSize(framesize_t newFS) {
     return;
   }
   if (newFS == FS_1280X960) setOutputSize(s, frameData[newFS].frameWidth, frameData[newFS].frameHeight);
+  applyHtsFloor(s); // also lost on every set_framesize, so re-applied here rather than at boot
   sensorFS = newFS;
   FPS = desiredFPS(newFS);
   controlFrameTimer(true);

@@ -482,15 +482,30 @@ struct frameStruct {
 // Upstream's values were tuned for an OV2640 on an AI Thinker board and are wrong here in
 // both directions: the sub-VGA rows claimed 30fps the sensor cannot produce, while XGA and
 // HD were pinned at 5fps when the pipeline sustains 2-2.4x that.
-// Two independent ceilings apply:
-//  - sensor:   SYSCLK / (HTS x VTS). set_framesize() picks the PLL multiplier from the frame
-//              size in 3 tiers (160 below QVGA, 180 below XGA, 200 above), and all binned
-//              sizes <=920 wide share HTS 2060 / VTS 984 - so every size from 96X96 to VGA
-//              is capped at 19.7-22.2fps regardless of how small it is.
-//  - pipeline: SD write dominates above VGA (54ms of the 63ms per-frame budget at XGA).
-// Values below are the highest measured rate that the app actually sustains with headroom
-// (busy <=75%), not the sensor ceiling. Raising the sensor PLL does not help - a sweep to
-// SYSCLK 63MHz moved VGA only 22.2 -> 22.7fps, so XCLK stays at 20MHz.
+// Frame rate is the sensor's, and it follows one formula, measured within 2% at five frame
+// sizes, seven PLL multipliers and five HTS values:
+//
+//     fps = SYSCLK / (HTS x VTS_effective)   binned 2x2
+//     fps = SYSCLK / (HTS x VTS_effective) / 2   full resolution readout
+//
+// VTS_effective is 0x380E/0x380F plus the AEC extra lines in 0x350C/0x350D, which auto extend
+// the frame in poor light. SYSCLK is 45MHz below XGA and 50MHz above, from the driver's PLL
+// tiers, and saturates at multiplier 200 - beyond that the PLL stops tracking, so the clock is
+// already at its ceiling and XCLK stays at 20MHz.
+//
+// Binning is therefore what decides everything. Full resolution costs exactly double, which is
+// why FHD sits at 5.9fps while HD does 31.9 - and FHD cannot bin, since a binned read of the
+// 2592 wide array yields only about 1312 columns. setSensorSize() drops HTS to HTS_FLOOR for
+// the binned sizes, which the driver leaves needlessly high at 2644 for XGA and HD.
+//
+// Storage is not the constraint at any of these rates: the card sustains 3.4MB/s and identical
+// frame rates come back at quality 10 and 18. Note "Busy" in the recording stats counts blocked
+// time in frame acquisition, so it reads ~100% whenever the app asks for more than the sensor
+// can give. It indicates frame starvation, not load, and is not a headroom measure.
+//
+// Values below are the measured rate with a little margin for dim light, where the AEC extra
+// lines lengthen the frame. VGA stays at 20 because it is MOTION_DETECT_FS and the detection
+// cost was tuned against that rate.
 //
 // scaleFactor is passed straight to the jpeg decoder as jpg_scale_t, which only defines
 // 0..3 (JPG_SCALE_NONE..JPG_SCALE_8X). A 4 is out of range and the decode fails outright,
@@ -514,8 +529,8 @@ struct frameStruct {
 // each beats a quarter of the blocks at full IDCT cost. VGA is the smallest row in this
 // table that uses /8, which makes it the cheapest detection size that still feeds the
 // comparator an 80x60 source. QVGA at /8 is faster still but only produces 40x30, and
-// that detail loss was judged not worth the 19 ms - checkMotion() rescales whatever it
-// decodes to a fixed 96x96 anyway, so a coarser source just means a blockier compare.
+// that detail loss was judged not worth the 19 ms. Since 19439ee checkMotion() compares the
+// decoded bitmap at its native size, so a coarser source really is a coarser compare.
 const frameStruct frameData[] = {
   {"96X96", 96, 96, 18, 1, 1},     // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160)
   {"QQVGA", 160, 120, 18, 1, 1},   // measured 19.7 flat out
@@ -528,12 +543,12 @@ const frameStruct frameData[] = {
   {"CIF", 400, 296, 20, 2, 1},
   {"HVGA", 480, 320, 20, 2, 1},
   {"VGA", 640, 480, 20, 3, 1},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2
-  {"SVGA", 800, 600, 15, 3, 1},    // measured 14.6 @ 37% busy
-  {"XGA", 1024, 768, 10, 3, 1},    // measured 9.7 @ 72% busy
-  {"HD", 1280, 720, 10, 3, 1},     // PY260 | 11.4/10.9 @ 78-84% busy at 12, backed off for SD margin
-  {"SXGA", 1280, 1024, 3, 3, 1},   // measured 3.0 @ 25% busy
+  {"SVGA", 800, 600, 21, 3, 1},    // measured 22.1, already at HTS_FLOOR
+  {"XGA", 1024, 768, 24, 3, 1},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it
+  {"HD", 1280, 720, 30, 3, 1},     // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it
+  {"SXGA", 1280, 1024, 4, 3, 1},   // measured 4.6 - full resolution read of the whole array
   {"UXGA", 1600, 1200, 3, 3, 1},   // PY260 | measured 2.8 @ 66% busy | scale 3 not 4, see below
-  {"FHD", 1920, 1080, 4, 3, 1},    // 3MP Sensors only // PY260 | measured 3.0 @ 29% busy
+  {"FHD", 1920, 1080, 5, 3, 1},    // 3MP Sensors only // PY260 | measured 5.9, cannot bin
   {"P_HD", 720, 1280, 6, 3, 1},    // measured 5.0 @ 19% busy
   {"P_3MP", 864, 1536, 4, 3, 1},   // OV3660 only - not selectable on this sensor, set by analogy
   {"QXGA", 2048, 1536, 3, 4, 1},   // measured 2.9 @ 67% busy
@@ -546,7 +561,7 @@ const frameStruct frameData[] = {
   // esp32-camera library, so a size it lacks has to be carried here instead. Rows below this
   // point are never handed to the driver - setSensorSize() maps them onto a base size and
   // then overrides only the registers that differ
-  {"1280X960", 1280, 960, 19, 3, 1} // see FS_1280X960 below
+  {"1280X960", 1280, 960, 24, 3, 1} // measured 24.5 at HTS_FLOOR, 19.1 before it
 };
 
 // 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
