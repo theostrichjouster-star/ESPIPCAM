@@ -234,6 +234,27 @@ static inline uint8_t desiredFPS(framesize_t forFS) {
   return (forFS == MOTION_DETECT_FS) ? frameData[MOTION_DETECT_FS].defaultFPS : captureFPS;
 }
 
+static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
+  // Retarget the ISP scaler output without touching the window, binning or line timing.
+  // 0x3808/0x3809 and 0x380A/0x380B are the DVP output size; everything upstream of them is
+  // left as the base size set it, which is the point - frame rate follows HTS and VTS, so
+  // this changes what comes out without changing how long a frame takes to produce
+  if (s == NULL || s->set_reg == NULL) {
+    LOG_WRN("Custom frame size needs set_reg, which this sensor does not provide");
+    return;
+  }
+  s->set_reg(s, 0x3808, 0xFF, (w >> 8) & 0x0F);
+  s->set_reg(s, 0x3809, 0xFF, w & 0xFF);
+  s->set_reg(s, 0x380A, 0xFF, (h >> 8) & 0x0F);
+  s->set_reg(s, 0x380B, 0xFF, h & 0xFF);
+  // read back rather than trust the writes - a rejected SCCB write is silent, and the
+  // symptom downstream would be frames of an unexpected size with no clue why
+  int gotW = (s->get_reg(s, 0x3808, 0xFF) << 8) | s->get_reg(s, 0x3809, 0xFF);
+  int gotH = (s->get_reg(s, 0x380A, 0xFF) << 8) | s->get_reg(s, 0x380B, 0xFF);
+  if (gotW != w || gotH != h) LOG_WRN("Output size override wrote %ux%u but reads %dx%d", w, h, gotW, gotH);
+  else LOG_VRB("Output size overridden to %ux%u", w, h);
+}
+
 void setSensorSize(framesize_t newFS) {
   // Switch the sensor between the detection size and the user's capture size.
   // Deliberately does not go through setFPS(): that writes saveFPS, which playback uses to
@@ -256,10 +277,15 @@ void setSensorSize(framesize_t newFS) {
   // queued frame is immediate because it is already captured, so this costs far less than
   // reconfiguring first and then burning a frame interval per stale buffer
   esp_camera_return_all();
-  if (s->set_framesize(s, newFS) != ESP_OK) {
+  // custom sizes have no framesize_t of their own, so the driver is given the base size and
+  // the differing registers are rewritten afterwards. set_framesize() reloads the whole
+  // register block, so the override has to be re-applied on every switch, not once at boot
+  framesize_t hwFS = (newFS == FS_1280X960) ? FS_1280X960_BASE : newFS;
+  if (s->set_framesize(s, hwFS) != ESP_OK) {
     LOG_WRN("Failed to switch sensor to %s", frameData[newFS].frameSizeStr);
     return;
   }
+  if (newFS == FS_1280X960) setOutputSize(s, frameData[newFS].frameWidth, frameData[newFS].frameHeight);
   sensorFS = newFS;
   FPS = desiredFPS(newFS);
   controlFrameTimer(true);
@@ -1343,8 +1369,11 @@ void setCamPll(const char* csv) {
 
 bool prepCam() {
   // initialise camera depending on model and board
-  if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0]))
-    LOG_ERR("framesize_t entries %d != frameData entries %d", FRAMESIZE_INVALID, sizeof(frameData) / sizeof(frameData[0]));
+  // frameData mirrors framesize_t and then adds NUM_CUSTOM_FS rows past its end, so the
+  // expected total is the enum size plus those. Still catches a real enum/table mismatch
+  if (FRAMESIZE_INVALID + NUM_CUSTOM_FS != sizeof(frameData) / sizeof(frameData[0]))
+    LOG_ERR("framesize_t entries %d + %d custom != frameData entries %d", FRAMESIZE_INVALID,
+      NUM_CUSTOM_FS, sizeof(frameData) / sizeof(frameData[0]));
   if (!camPower()) return false;
 
   bool res = false;

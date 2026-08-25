@@ -541,5 +541,22 @@ const frameStruct frameData[] = {
   {"WQXGA", 2560, 1600, 2, 4, 1},  // measured 2.8 @ 85% busy at req 3, backed off
   {"P_FHD", 1080, 1920, 4, 3, 1},  // measured 4.0 @ 37% busy | scale 3 not 4, see below
   {"QSXGA", 2560, 1920, 2, 4, 1},  // measured 2.0 @ 59% busy
-  {"5MP", 2592, 1944, 4, 4, 1}     // PY260 only - unreachable on OV5640, left as inherited
+  {"5MP", 2592, 1944, 4, 4, 1},    // PY260 only - unreachable on OV5640, left as inherited
+  // Custom sizes past the driver's framesize_t. That enum lives in the precompiled
+  // esp32-camera library, so a size it lacks has to be carried here instead. Rows below this
+  // point are never handed to the driver - setSensorSize() maps them onto a base size and
+  // then overrides only the registers that differ
+  {"1280X960", 1280, 960, 19, 3, 1} // see FS_1280X960 below
 };
+
+// 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
+// decides frame rate on this part: measured fps is SYSCLK/(HTS*VTS) when binned and half that
+// at full resolution, confirmed within 2% at five frame sizes. FHD cannot bin at all - a
+// binned read of the 2592 wide array yields about 1312 columns, so 1920 is unreachable -
+// which is why FHD manages 5.9fps while HD does 25.3. Datasheet table 2-1 lists 1280x960 as a
+// native binned mode. The driver has no enum entry for it, so it is configured as XGA, which
+// uses the same 2624x1952 binned window and the same HTS/VTS, with only the DVP output size
+// overridden. It therefore runs at XGA's exact frame rate while carrying 56% more pixels.
+#define NUM_CUSTOM_FS 1
+#define FS_1280X960 (FRAMESIZE_INVALID + 0) // index 25, first row past the driver's enum
+#define FS_1280X960_BASE FRAMESIZE_XGA      // same binned window, same line timing

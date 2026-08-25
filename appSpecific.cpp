@@ -182,7 +182,13 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "camReg")) setCamReg(value);
   else if (!strcmp(variable, "xclkMhz")) xclkMhz = intVal;
   else if (!strcmp(variable, "framesize")) {
-    if (intVal > maxFS && fromUser) LOG_WRN("Frame size %s too large for %s PSRAM ", frameData[intVal].frameSizeStr, fmtSize(ESP.getPsramSize()));
+    // Compare pixels, not enum index. The custom sizes sit past framesize_t so they are
+    // numerically above maxFS while being far smaller than it - an index test would reject
+    // 1280x960 (1.23MP) against a QSXGA (4.9MP) buffer it fits inside several times over
+    if (intVal >= (int)(sizeof(frameData) / sizeof(frameData[0]))) LOG_WRN("Frame size index %d out of range", intVal);
+    else if ((uint32_t)frameData[intVal].frameWidth * frameData[intVal].frameHeight
+           > (uint32_t)frameData[maxFS].frameWidth * frameData[maxFS].frameHeight && fromUser)
+      LOG_WRN("Frame size %s too large for %s PSRAM ", frameData[intVal].frameSizeStr, fmtSize(ESP.getPsramSize()));
     else {
       fsizePtr = intVal;
       if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills only, no AVI recording",
