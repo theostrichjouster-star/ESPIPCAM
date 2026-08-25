@@ -1362,11 +1362,22 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_VFIFO_HSIZE   0x4602 // .. 0x4603 JPEG output width
 #define OV5640_VFIFO_VSIZE   0x4604 // .. 0x4605 JPEG output height
 #define OV5640_JPG_MODE_SEL  0x4713 // [2:0] JPEG mode 1..6, reset default 0x02
-// [7] encoder input format, 0 = YUV420, 1 = YUV422. Reported but NOT a usable lever: clearing
-// it corrupts the image. The ISP can only emit YUV422 - datasheet 5.12 offers no 4:2:0 output
-// in the 0x501F format mux at all - so telling the encoder to expect 4:2:0 mismatches what it
-// is fed. Measured at HD in daylight: frames grew from 41.5KB to 181-223KB, the rate fell from
-// 32.6fps to 11-13, and ffmpeg reported "overread" and could not extract a frame. It looked
+// [7] encoder input format, 0 = YUV420, 1 = YUV422. Reported but NOT a usable lever, though not
+// for the reason first recorded here: the sensor CAN emit 4:2:0. Datasheet 7.15 gives the
+// formatter output format as 0x4300[7:4], where 0x3 is YUV422 (what the driver writes) and 0x4
+// is YUV420. Clearing this bit alone only changes what the ENCODER expects while the formatter
+// still sends 422, which is a mismatch of our own making.
+// Setting both does not work either. With 0x4300=0x4x and 0x4400=0x01, across all eight output
+// sequences 0x40-0x46, frames came back ~68KB against a 35.5KB 422 control, every one banded
+// with black horizontal lines and visibly stretched vertically. The SOF read 1280x720 with
+// Ysamp 0x22 - structurally correct 4:2:0 - so rows are missing from the buffer that arrived,
+// not misread chroma. That points at the host: 4:2:0 alternates luma-only and chroma lines, so
+// the line structure on the wire changes, and the precompiled driver writes 0x4300 back to 0x30
+// at init and lays its DVP capture out for 4:2:2 mode-2 framing. Matching the VFIFO sizes at
+// 0x4602-0x4605 to the real output stopped frame delivery entirely.
+// So this is a host limit, not a sensor limit, and it is not fixable without driver source.
+// Measured at HD in daylight when only this bit was cleared: frames grew from 41.5KB to
+// 181-223KB, the rate fell from 32.6fps to 11-13, and ffmpeg reported "overread". It looked
 // like a 19.5% saving when first tried against a near-black scene, because an all-zero chroma
 // plane decodes the same either way. Restoring 0x81 recovers exactly, same frame and same rate
 #define OV5640_JPEG_CTRL00   0x4400
@@ -1516,14 +1527,14 @@ void dumpCamRegs() {
   //
   // 0x4400[7] is the encoder's input format, and it is reported because it must stay at YUV422.
   // 4:2:0 would carry 1.5 bytes per pixel against 422's 2, which is worth wanting when the SD
-  // card is the binding constraint, but this part cannot do it: the ISP format mux at 0x501F
-  // (datasheet 5.12) offers YUV422, RGB, dither, RAW DPC, SNR RAW and RAW CIP, and no YUV420
-  // at all. Clearing this bit only tells the encoder to expect a format the ISP never sends.
-  // 4:2:0 subsamples chroma vertically, so the encoder then pairs chroma with the wrong lines
-  // and the image comes out with dense alternating line artifacts. Measured on a real scene:
-  // frames went from 35.1KB to 69.8KB, twice the size rather than smaller, because corrupt high
-  // frequency content compresses badly. JFIFO overflow stayed clear throughout, so the flag
-  // above correctly rules the encoder out and points at the format mismatch instead.
+  // card is the binding constraint. The sensor does support it - see the note at the define -
+  // but the host cannot receive it, so the bit has to stay where it is. Clearing it alone tells
+  // the encoder to expect a format the FORMATTER is not sending, because the formatter's own
+  // output format lives at 0x4300[7:4] and the driver holds it at YUV422.
+  // Measured on a real scene with only this bit cleared: frames went from 35.1KB to 69.8KB,
+  // twice the size rather than smaller, because corrupt high frequency content compresses
+  // badly. JFIFO overflow stayed clear throughout, so the flag above correctly rules the
+  // encoder out and points at the format mismatch instead.
   //
   // Worth recording how this nearly passed. On a near black scene the same setting measured
   // 19.5% SMALLER and looked like a win: the corruption is invisible when every line is black,

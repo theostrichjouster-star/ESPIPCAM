@@ -240,7 +240,10 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     else if (!strcmp(variable, "aec_value")) res = s->set_aec_value(s, intVal);
     // aec2 is night mode, 0x3A00[2]. Datasheet 4.6.1.3: it buys exposure in the dark by
     // slowing the frame rate down, extending the frame by up to the ceiling in
-    // {0x3A02,0x3A03} - which sits at its reset default of 15744 lines, many whole frames.
+    // {0x3A02,0x3A03}. That ceiling is 984 lines, not the 15744 recorded here before - 15744 is
+    // the datasheet power-on value, and the driver's own reset table overwrites it with 0x03D8
+    // during esp_camera_init, so the part never runs at the power-on figure. Confirmed by
+    // reading the register back off both boards.
     // The extension appears as the AEC extra lines dumpCamRegs() reports, so it is visible.
     // Defaulted off here because this build exists to hold a frame rate; the control still
     // works for anyone who would rather have the exposure, and lampAuto is the other answer
