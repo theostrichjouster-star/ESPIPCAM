@@ -1362,7 +1362,14 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_VFIFO_HSIZE   0x4602 // .. 0x4603 JPEG output width
 #define OV5640_VFIFO_VSIZE   0x4604 // .. 0x4605 JPEG output height
 #define OV5640_JPG_MODE_SEL  0x4713 // [2:0] JPEG mode 1..6, reset default 0x02
-#define OV5640_JPEG_CTRL00   0x4400 // [7] encoder input format, 0 = YUV420, 1 = YUV422
+// [7] encoder input format, 0 = YUV420, 1 = YUV422. Reported but NOT a usable lever: clearing
+// it corrupts the image. The ISP can only emit YUV422 - datasheet 5.12 offers no 4:2:0 output
+// in the 0x501F format mux at all - so telling the encoder to expect 4:2:0 mismatches what it
+// is fed. Measured at HD in daylight: frames grew from 41.5KB to 181-223KB, the rate fell from
+// 32.6fps to 11-13, and ffmpeg reported "overread" and could not extract a frame. It looked
+// like a 19.5% saving when first tried against a near-black scene, because an all-zero chroma
+// plane decodes the same either way. Restoring 0x81 recovers exactly, same frame and same rate
+#define OV5640_JPEG_CTRL00   0x4400
 #define OV5640_JFIFO_OVERFLOW 0x4417 // [0] JPEG FIFO overflow, read only - see below
 #define OV5640_ISP_CONTROL01 0x5001 // [5] ISP scale enable - decides crop vs downscale
 #define OV5640_AEC_PK_EXPOSURE 0x3500 // .. 0x3502 exposure, [19:4] lines and [3:0] fraction
