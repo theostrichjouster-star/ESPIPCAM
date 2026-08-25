@@ -351,9 +351,19 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
   // VTS is the rows read plus 16 lines of blanking at full resolution, measured across every
   // size. Shortening it without cropping first is the corruption trap warned about below
   if (!senWrite16(s, 0x380E, needH + 16)) LOG_WRN("Crop VTS %d did not take", needH + 16);
-  // 0x5001[5] is the scale enable, and the only scaler register the driver ever writes - the
+  // 0x5001[5] is the scale enable, and the only scaler register the driver ever writes. The
   // ratio itself is derived from window, offsets and output size, so 0x5600-0x5606 are not
-  // involved. With pre-scale now equal to the output, leaving it on would be a 1:1 rescale
+  // involved - confirmed by datasheet 5.9 and table 5-1, which give 0x501E[6] as "scale ratio
+  // manual enable" with a default of 0, meaning XSC/YSC are consulted only in manual mode.
+  // With pre-scale now equal to the output, leaving the scaler on would be a 1:1 rescale.
+  //
+  // What this does NOT fix is LENC. Datasheet 5.2 divides the image into 5x5 blocks for the
+  // BR channel and 6x6 for G, with the step held as a reciprocal in 0x5842-0x5849, and the
+  // driver never writes them. That is correct for stock operation, where the pre-scale size is
+  // constant per aspect ratio, and binned sizes are covered because 5.2 says LENC is subsample
+  // aware. Cropping is the first thing that changes the pre-scale size - here from 2560x1440 to
+  // 1920x1080 - so the correction grid lands at the wrong radial coordinates and the edges pick
+  // up a colour and luminance error. Untested fix: scale each register by 2560/1920
   int isp01 = s->get_reg(s, 0x5001, 0xFF);
   if (isp01 >= 0 && (isp01 & 0x20)) s->set_reg(s, 0x5001, 0xFF, isp01 & ~0x20);
   // A narrower window needs fewer clocks per line. Measured floor is 2060 on a 1984 column
@@ -1405,9 +1415,27 @@ void dumpCamRegs() {
   uint32_t xclk = xclkMhz * OneMHz;
   uint32_t refin = (uint32_t)(xclk / preDivVal);
   uint32_t vco = refin * mul / (root2x ? 2 : 1);
-  uint32_t pllClk = bypass ? xclk : (vco / sysDiv * 2 / 5); // 2/5 is 10 bit mode
-  uint32_t sysClk = pllClk / 4;
-  uint32_t pclk = pllClk / pclkRootMap[pclkRoot] / ((pclkManual && pclkDiv) ? pclkDiv : 2);
+  // Provenance matters here, because the naming used to be wrong and the wrong name misled the
+  // whole investigation. This arithmetic is the esp32-camera driver's calc_sysclk() copied
+  // verbatim, including the 2/5 and the /4. NEITHER constant comes from the datasheet -
+  // section 2.5 gives only the 6-27MHz input range and the 800MHz VCO ceiling, and section 7
+  // gives the divider fields without ever chaining them into an equation.
+  //
+  // The driver calls pllClk/4 "SYSCLK", and this code used to as well. That is a real
+  // datasheet term but the wrong one: section 2.5 says "SysClk is for the internal clock of
+  // the Image Signal Processing (ISP) block", and nothing ties it to HTS or VTS. What HTS and
+  // VTS count is the PIXEL clock - section 6.6 specifies the DVP VSYNC width in 0x470A/0x470B
+  // in "PCLK unit" - so the frame period is HTS x VTS pixel clocks and fps = PCLK/(HTS x VTS).
+  //
+  // So pllClk/4 is named pixClk here because that is what it behaves as, not because the
+  // datasheet derives it that way: it computes 50MHz at stock, measurement back-solves 49.7,
+  // and table 8-5 puts fPCLK typical at 48MHz and maximum at 96. The driver's own PCLK formula
+  // on the next line computes 12.5MHz, four times low, which is why its figure was never
+  // usable. Treat pixClk as an identification supported by agreement with table 8-5 and with
+  // every measurement taken, not as a proven decode - the divider chain is still unverified
+  uint32_t pllClk = bypass ? xclk : (vco / sysDiv * 2 / 5); // 2/5 is 10 bit mode per 0x3034[3:0]
+  uint32_t pixClk = pllClk / 4;
+  uint32_t pclkDriver = pllClk / pclkRootMap[pclkRoot] / ((pclkManual && pclkDiv) ? pclkDiv : 2);
 
   int hts = camReg16(s, OV5640_X_TOTAL_SIZE);
   int vts = camReg16(s, OV5640_X_TOTAL_SIZE + 2);
@@ -1419,17 +1447,17 @@ void dumpCamRegs() {
   if (vtsExtra < 0) vtsExtra = 0;
   int vtsEff = vts + vtsExtra;
   // subsample increment is [7:4] odd and [3:0] even, the ratio being their mean: 0x11 is a
-  // full readout, 0x31 is 2x. Binned rows appear to sustain twice what the SYSCLK basis
-  // predicts, so the ratio is reported next to both bases rather than folded into either -
-  // picking one here would bake an unproven theory into the instrument
+  // full readout, 0x31 is 2x. Binned rows sustain twice what a full resolution readout does at
+  // the same pixel clock, so the ratio is reported next to the rate rather than folded into
+  // it - picking one here would bake an unproven theory into the instrument
   int xInc = camReg(s, OV5640_X_INCREMENT);
   int yInc = camReg(s, OV5640_Y_INCREMENT);
   float xBin = (xInc < 0) ? 0.0f : (float)(((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2.0f;
   float yBin = (yInc < 0) ? 0.0f : (float)(((yInc >> 4) & 0x0F) + (yInc & 0x0F)) / 2.0f;
   float frameClks = (float)hts * vtsEff;
   bool haveTiming = (hts > 0 && vtsEff > 0);
-  float fpsSys = haveTiming ? (float)sysClk / frameClks : 0.0;
-  float fpsPclk = haveTiming ? (float)pclk / frameClks : 0.0;
+  float fpsPix = haveTiming ? (float)pixClk / frameClks : 0.0;
+  float fpsDriverPclk = haveTiming ? (float)pclkDriver / frameClks : 0.0;
   int jpgMode = camReg(s, OV5640_JPG_MODE_SEL);
   int vfifo00 = camReg(s, OV5640_VFIFO_CTRL00);
 
@@ -1441,15 +1469,23 @@ void dumpCamRegs() {
     r08, pclkDiv, pclkMan, camReg(s, OV5640_SYSREM_RESET));
   LOG_INF("Decoded: mul=%d sys_div=%d pre_div=%d(/%.1f) root_2x=%d pclk_root=%d(/%d) pclk_manual=%d pclk_div=%d bypass=%d",
     mul, sysDiv, preDiv, preDivVal, root2x, pclkRoot, pclkRootMap[pclkRoot], pclkManual, pclkDiv, bypass);
-  LOG_INF("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, SYSCLK %.2fMHz, PCLK %.2fMHz (PCLK divider decode unverified)",
-    refin / 1000000.0, vco / 1000000.0, pllClk / 1000000.0, sysClk / 1000000.0, pclk / 1000000.0);
+  LOG_INF("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, PIXCLK %.2fMHz (table 8-5: typ 48, max 96), driver PCLK %.2fMHz (4x low, do not use)",
+    refin / 1000000.0, vco / 1000000.0, pllClk / 1000000.0, pixClk / 1000000.0, pclkDriver / 1000000.0);
+  // table 8-5 caps the parallel port pixel clock at 96MHz. The measured cliff on this part sits
+  // between 88 and 92MHz on the pixClk basis, which is close enough to that limit to be the
+  // likely cause rather than a coincidence - worth checking before blaming the pixel array
+  if (pixClk > 96 * OneMHz) LOG_WRN("PIXCLK %.1fMHz exceeds the 96MHz maximum in table 8-5 - expect a corrupt image",
+    pixClk / 1000000.0);
   // datasheet 2.5 caps the VCO at 800MHz for a 6-27MHz input. Computing more than that means
   // this decode is wrong somewhere, and every clock derived below it inherits the error
   if (vco > 800 * OneMHz) LOG_WRN("Computed VCO %.0fMHz exceeds the 800MHz datasheet maximum - clock decode is suspect",
     vco / 1000000.0);
-  LOG_INF("Timing: HTS %d, VTS %d + %d AEC extra = %d effective, %.0f clocks/frame",
+  // section 6.6 specifies DVP sync widths in "PCLK unit", so HTS x VTS is a count of pixel
+  // clocks and the frame period follows from the pixel clock, not from the ISP's SysClk
+  LOG_INF("Timing: HTS %d, VTS %d + %d AEC extra = %d effective, %.0f pixel clocks/frame",
     hts, vts, vtsExtra, vtsEff, frameClks);
-  LOG_INF("Ceiling: %.1f fps on SYSCLK basis, %.1f fps on PCLK basis (app FPS %u)", fpsSys, fpsPclk, FPS);
+  LOG_INF("Ceiling: %.1f fps on PIXCLK basis, %.1f on the driver's PCLK figure (app FPS %u)",
+    fpsPix, fpsDriverPclk, FPS);
   // Exposure and gain belong next to the frame timing because they are the same trade: the
   // frame period is the hard ceiling on integration time, so pushing the rate up buys darkness
   // that only gain can pay for. Exposure is in units of line/16 (datasheet 4.6.2), gain is in
@@ -1459,9 +1495,9 @@ void dumpCamRegs() {
   int gainCeil = camReg16(s, OV5640_AEC_GAIN_CEIL) & 0x3FF;
   int aec00 = camReg(s, OV5640_AEC_CTRL00);
   float expLines = (expRaw < 0) ? 0.0f : (float)(expRaw & 0xFFFFF) / 16.0f;
-  float expMs = (sysClk > 0 && hts > 0) ? expLines * hts * 1000.0f / sysClk : 0.0f;
+  float expMs = (pixClk > 0 && hts > 0) ? expLines * hts * 1000.0f / pixClk : 0.0f;
   LOG_INF("Exposure: %.1f lines = %.2fms of the %.2fms frame, gain %.2fx (ceiling %.2fx), night mode %s",
-    expLines, expMs, (fpsSys > 0) ? 1000.0f / fpsSys : 0.0f, gainRaw / 16.0f, gainCeil / 16.0f,
+    expLines, expMs, (fpsPix > 0) ? 1000.0f / fpsPix : 0.0f, gainRaw / 16.0f, gainCeil / 16.0f,
     (aec00 < 0) ? "?" : ((aec00 & 0x04) ? "ON - frame may extend" : "off"));
   LOG_INF("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d",
     jpgMode < 0 ? -1 : jpgMode & 0x07, jpgMode, vfifo00, (vfifo00 > 0 && (vfifo00 & 0x20)) ? "on" : "off",

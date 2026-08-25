@@ -486,13 +486,24 @@ struct frameStruct {
 // Frame rate is the sensor's, and it follows one formula, measured within 2% at five frame
 // sizes, seven PLL multipliers and five HTS values:
 //
-//     fps = SYSCLK / (HTS x VTS_effective)   binned 2x2
-//     fps = SYSCLK / (HTS x VTS_effective) / 2   full resolution readout
+//     fps = PIXCLK / (HTS x VTS_effective)   binned 2x2
+//     fps = PIXCLK / (HTS x VTS_effective) / 2   full resolution readout
+//
+// PIXCLK is the parallel port pixel clock, and it is the pixel clock rather than any other
+// because HTS and VTS are a count of pixel clocks: section 6.6 specifies the DVP sync widths
+// in 0x470A/0x470B in "PCLK unit". This formula used to be written here with SYSCLK in place
+// of PIXCLK, copied from the naming in the driver's calc_sysclk(). That was wrong - section
+// 2.5 defines SysClk as "the internal clock of the Image Signal Processing (ISP) block" and
+// never connects it to the frame timing. The arithmetic and every measurement were unaffected;
+// only the name was, and the name sent the investigation looking for an ISP clock ceiling
+// instead of checking table 8-5, which caps the pixel clock at 96MHz.
 //
 // VTS_effective is 0x380E/0x380F plus the AEC extra lines in 0x350C/0x350D, which auto extend
-// the frame in poor light. SYSCLK is 45MHz below XGA and 50MHz above, from the driver's PLL
-// tiers, and saturates at multiplier 200 - beyond that the PLL stops tracking, so the clock is
-// already at its ceiling and XCLK stays at 20MHz.
+// the frame in poor light. PIXCLK is 45MHz below XGA and 50MHz above, from the driver's PLL
+// tiers, and its value is dumpCamRegs()' pllClk/4 - an identification supported by table 8-5
+// putting fPCLK typical at 48MHz and by agreement with every rate measured, not by a datasheet
+// derivation. Raising the multiplier past 200 stops moving it while the driver's own PLL tree
+// is used, so XCLK stays at 20MHz.
 //
 // Binning is therefore what decides everything. Full resolution costs exactly double, which is
 // why HD does 31.9fps - and FHD cannot bin, since a binned read of the 2592 wide array yields
@@ -574,7 +585,7 @@ const frameStruct frameData[] = {
 };
 
 // 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
-// decides frame rate on this part: measured fps is SYSCLK/(HTS*VTS) when binned and half that
+// decides frame rate on this part: measured fps is PIXCLK/(HTS*VTS) when binned and half that
 // at full resolution, confirmed within 2% at five frame sizes. FHD cannot bin at all - a
 // binned read of the 2592 wide array yields about 1312 columns, so 1920 is unreachable -
 // which is why FHD manages 5.9fps while HD does 25.3. Datasheet table 2-1 lists 1280x960 as a
