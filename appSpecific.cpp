@@ -238,6 +238,12 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     else if (!strcmp(variable, "awb_gain")) res = s->set_awb_gain(s, intVal);
     else if (!strcmp(variable, "agc_gain")) res = s->set_agc_gain(s, intVal);
     else if (!strcmp(variable, "aec_value")) res = s->set_aec_value(s, intVal);
+    // aec2 is night mode, 0x3A00[2]. Datasheet 4.6.1.3: it buys exposure in the dark by
+    // slowing the frame rate down, extending the frame by up to the ceiling in
+    // {0x3A02,0x3A03} - which sits at its reset default of 15744 lines, many whole frames.
+    // The extension appears as the AEC extra lines dumpCamRegs() reports, so it is visible.
+    // Defaulted off here because this build exists to hold a frame rate; the control still
+    // works for anyone who would rather have the exposure, and lampAuto is the other answer
     else if (!strcmp(variable, "aec2")) res = s->set_aec2(s, intVal);
     else if (!strcmp(variable, "dcw")) res = s->set_dcw(s, intVal);
     else if (!strcmp(variable, "bpc")) res = s->set_bpc(s, intVal);
@@ -695,7 +701,7 @@ sdLog~0~99~~na
 xclkMhz~20~98~~na
 ae_level~-2~98~~na
 aec~1~98~~na
-aec2~1~98~~na
+aec2~0~98~~na
 aec_value~204~98~~na
 agc~1~98~~na
 agc_gain~0~98~~na
