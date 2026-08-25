@@ -389,6 +389,27 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
   else LOG_VRB("Output size overridden to %ux%u", w, h);
 }
 
+static void applySensorTuning(sensor_t* s, framesize_t fs) {
+  // Everything set_framesize() does not do for us. It reloads the whole register block, so all
+  // of this is lost on every call and has to follow every one of them - which is the reason it
+  // is gathered here rather than left inline: there are two callers, and the boot one silently
+  // did none of it. A board that came up already on its configured size never went through
+  // setSensorSize() at all, so it ran on the driver's own geometry until the size was changed
+  // and changed back. Measured: HD booted at HTS 2644 and 25.2fps rather than 2060 and 32.3
+  if (s == NULL) return;
+  if (fs == FS_1280X960) setOutputSize(s, frameData[fs].frameWidth, frameData[fs].frameHeight);
+  // mutually exclusive by design - the crop handles full resolution sizes and the HTS floor
+  // the binned ones, each returning immediately when handed the other's case
+  applyCropWindow(s, fs);
+  applyHtsFloor(s);
+}
+
+static framesize_t hwFrameSize(framesize_t fs) {
+  // custom sizes have no framesize_t of their own, so the driver is given the base size and
+  // applySensorTuning() rewrites the registers that differ
+  return (fs == FS_1280X960) ? FS_1280X960_BASE : fs;
+}
+
 void setSensorSize(framesize_t newFS) {
   // Switch the sensor between the detection size and the user's capture size.
   // Deliberately does not go through setFPS(): that writes saveFPS, which playback uses to
@@ -411,20 +432,11 @@ void setSensorSize(framesize_t newFS) {
   // queued frame is immediate because it is already captured, so this costs far less than
   // reconfiguring first and then burning a frame interval per stale buffer
   esp_camera_return_all();
-  // custom sizes have no framesize_t of their own, so the driver is given the base size and
-  // the differing registers are rewritten afterwards. set_framesize() reloads the whole
-  // register block, so the override has to be re-applied on every switch, not once at boot
-  framesize_t hwFS = (newFS == FS_1280X960) ? FS_1280X960_BASE : newFS;
-  if (s->set_framesize(s, hwFS) != ESP_OK) {
+  if (s->set_framesize(s, hwFrameSize(newFS)) != ESP_OK) {
     LOG_WRN("Failed to switch sensor to %s", frameData[newFS].frameSizeStr);
     return;
   }
-  if (newFS == FS_1280X960) setOutputSize(s, frameData[newFS].frameWidth, frameData[newFS].frameHeight);
-  // the two are mutually exclusive by design - the crop handles full resolution sizes and the
-  // HTS floor the binned ones, each returning immediately when handed the other's case. Both
-  // are lost on every set_framesize, so they are re-applied here rather than once at boot
-  applyCropWindow(s, newFS);
-  applyHtsFloor(s);
+  applySensorTuning(s, newFS);
   sensorFS = newFS;
   FPS = desiredFPS(newFS);
   controlFrameTimer(true);
@@ -1176,8 +1188,10 @@ static bool startSDtasks() {
   // actually set to - processFrame() drops it to MOTION_DETECT_FS on the first frame if
   // the device comes up armed and idle
   sensor_t * s = esp_camera_sensor_get();
-  s->set_framesize(s, (framesize_t)fsizePtr);
-  sensorFS = (framesize_t)fsizePtr;
+  framesize_t bootFS = (framesize_t)fsizePtr;
+  s->set_framesize(s, hwFrameSize(bootFS));
+  applySensorTuning(s, bootFS); // or the board runs on the driver's geometry until a size change
+  sensorFS = bootFS;
   captureFPS = FPS; // whatever the config loaded is the user's capture rate
   setFPS(FPS);
   debugMemory("startSDtasks");
