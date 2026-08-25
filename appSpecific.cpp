@@ -179,6 +179,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "dumpCam")) dumpCamRegs();
   else if (!strcmp(variable, "motionStats")) dumpMotionStats();
   else if (!strcmp(variable, "camPll")) setCamPll(value);
+  else if (!strcmp(variable, "camReg")) setCamReg(value);
   else if (!strcmp(variable, "xclkMhz")) xclkMhz = intVal;
   else if (!strcmp(variable, "framesize")) {
     if (intVal > maxFS && fromUser) LOG_WRN("Frame size %s too large for %s PSRAM ", frameData[intVal].frameSizeStr, fmtSize(ESP.getPsramSize()));

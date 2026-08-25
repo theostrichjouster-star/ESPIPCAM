@@ -272,6 +272,7 @@ bool prepRecording();
 void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
 void dumpCamRegs();
+void setCamReg(const char* csv);
 void setCamPll(const char* csv);
 uint8_t setFPS(uint8_t val);
 uint8_t setFPSlookup(uint8_t val);

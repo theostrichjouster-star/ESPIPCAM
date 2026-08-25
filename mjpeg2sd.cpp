@@ -1168,6 +1168,11 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_Y_INCREMENT   0x3815 // vertical subsample increment
 #define OV5640_TIMING_TC_R20 0x3820 // vflip / vertical binning
 #define OV5640_TIMING_TC_R21 0x3821 // hmirror / horizontal binning
+#define OV5640_AEC_PK_VTS    0x350c // .. 0x350d extra frame lines added by AEC
+#define OV5640_VFIFO_CTRL00  0x4600 // [5] JPEG fixed height enable (mode 2 only)
+#define OV5640_VFIFO_HSIZE   0x4602 // .. 0x4603 JPEG output width
+#define OV5640_VFIFO_VSIZE   0x4604 // .. 0x4605 JPEG output height
+#define OV5640_JPG_MODE_SEL  0x4713 // [2:0] JPEG mode 1..6, reset default 0x02
 
 static int camReg(sensor_t* s, int reg) {
   // single 8 bit register, -1 on SCCB failure
@@ -1222,7 +1227,27 @@ void dumpCamRegs() {
 
   int hts = camReg16(s, OV5640_X_TOTAL_SIZE);
   int vts = camReg16(s, OV5640_X_TOTAL_SIZE + 2);
-  float sensorFps = (hts > 0 && vts > 0) ? (float)sysClk / ((float)hts * vts) : 0.0;
+  // AEC extends the frame past VTS to buy exposure time, and in auto mode it moves on its
+  // own - datasheet 4.6.2 puts the maximum exposure at {0x380E,0x380F} + {0x350C,0x350D}.
+  // Reading VTS alone therefore understates the frame period exactly when the light is poor,
+  // which is when the rate actually drops, so the ceiling is derived from the sum
+  int vtsExtra = camReg16(s, OV5640_AEC_PK_VTS);
+  if (vtsExtra < 0) vtsExtra = 0;
+  int vtsEff = vts + vtsExtra;
+  // subsample increment is [7:4] odd and [3:0] even, the ratio being their mean: 0x11 is a
+  // full readout, 0x31 is 2x. Binned rows appear to sustain twice what the SYSCLK basis
+  // predicts, so the ratio is reported next to both bases rather than folded into either -
+  // picking one here would bake an unproven theory into the instrument
+  int xInc = camReg(s, OV5640_X_INCREMENT);
+  int yInc = camReg(s, OV5640_Y_INCREMENT);
+  float xBin = (xInc < 0) ? 0.0f : (float)(((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2.0f;
+  float yBin = (yInc < 0) ? 0.0f : (float)(((yInc >> 4) & 0x0F) + (yInc & 0x0F)) / 2.0f;
+  float frameClks = (float)hts * vtsEff;
+  bool haveTiming = (hts > 0 && vtsEff > 0);
+  float fpsSys = haveTiming ? (float)sysClk / frameClks : 0.0;
+  float fpsPclk = haveTiming ? (float)pclk / frameClks : 0.0;
+  int jpgMode = camReg(s, OV5640_JPG_MODE_SEL);
+  int vfifo00 = camReg(s, OV5640_VFIFO_CTRL00);
 
   LOG_INF("******** OV5640 clock tree ********");
   LOG_INF("Frame size: %s, XCLK %uMHz (fixed)", frameData[sensorFS].frameSizeStr, xclkMhz);
@@ -1232,20 +1257,56 @@ void dumpCamRegs() {
     r08, pclkDiv, pclkMan, camReg(s, OV5640_SYSREM_RESET));
   LOG_INF("Decoded: mul=%d sys_div=%d pre_div=%d(/%.1f) root_2x=%d pclk_root=%d(/%d) pclk_manual=%d pclk_div=%d bypass=%d",
     mul, sysDiv, preDiv, preDivVal, root2x, pclkRoot, pclkRootMap[pclkRoot], pclkManual, pclkDiv, bypass);
-  LOG_INF("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, SYSCLK %.2fMHz, PCLK %.2fMHz",
+  LOG_INF("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, SYSCLK %.2fMHz, PCLK %.2fMHz (PCLK divider decode unverified)",
     refin / 1000000.0, vco / 1000000.0, pllClk / 1000000.0, sysClk / 1000000.0, pclk / 1000000.0);
-  LOG_INF("Timing: HTS %d, VTS %d -> sensor ceiling %.1f fps (app FPS %u)", hts, vts, sensorFps, FPS);
+  // datasheet 2.5 caps the VCO at 800MHz for a 6-27MHz input. Computing more than that means
+  // this decode is wrong somewhere, and every clock derived below it inherits the error
+  if (vco > 800 * OneMHz) LOG_WRN("Computed VCO %.0fMHz exceeds the 800MHz datasheet maximum - clock decode is suspect",
+    vco / 1000000.0);
+  LOG_INF("Timing: HTS %d, VTS %d + %d AEC extra = %d effective, %.0f clocks/frame",
+    hts, vts, vtsExtra, vtsEff, frameClks);
+  LOG_INF("Ceiling: %.1f fps on SYSCLK basis, %.1f fps on PCLK basis (app FPS %u)", fpsSys, fpsPclk, FPS);
+  LOG_INF("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d",
+    jpgMode < 0 ? -1 : jpgMode & 0x07, jpgMode, vfifo00, (vfifo00 > 0 && (vfifo00 & 0x20)) ? "on" : "off",
+    camReg16(s, OV5640_VFIFO_HSIZE), camReg16(s, OV5640_VFIFO_VSIZE));
   LOG_INF("Window: start %d,%d end %d,%d output %dx%d offset %d,%d",
     camReg16(s, OV5640_X_ADDR_ST), camReg16(s, OV5640_X_ADDR_ST + 2),
     camReg16(s, OV5640_X_ADDR_END), camReg16(s, OV5640_X_ADDR_END + 2),
     camReg16(s, OV5640_X_OUTPUT_SIZE), camReg16(s, OV5640_X_OUTPUT_SIZE + 2),
     camReg16(s, OV5640_X_OFFSET), camReg16(s, OV5640_X_OFFSET + 2));
-  LOG_INF("Subsample: 0x3814=0x%02X 0x3815=0x%02X 0x3820=0x%02X 0x3821=0x%02X",
-    camReg(s, OV5640_X_INCREMENT), camReg(s, OV5640_Y_INCREMENT),
-    camReg(s, OV5640_TIMING_TC_R20), camReg(s, OV5640_TIMING_TC_R21));
+  LOG_INF("Subsample: 0x3814=0x%02X 0x3815=0x%02X (%.1fx by %.1fx) 0x3820=0x%02X 0x3821=0x%02X",
+    xInc, yInc, xBin, yBin, camReg(s, OV5640_TIMING_TC_R20), camReg(s, OV5640_TIMING_TC_R21));
   LOG_INF("Die temp: %.1fC, free heap %s, free PSRAM %s",
     readInternalTemp(), fmtSize(ESP.getFreeHeap()), fmtSize(ESP.getFreePsram()));
   LOG_INF("**********************************");
+}
+
+void setCamReg(const char* csv) {
+  // debug: write one sensor register, for timing experiments such as walking HTS down.
+  // csv is addr,value - strtol base 0, so both accept 0x hex or plain decimal.
+  // NOTE the write is lost on the next set_framesize(), which reloads the whole register
+  // block, so do not change frame size midway through a sweep and expect it to persist
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->set_reg == NULL) {
+    LOG_WRN("camReg: set_reg not available for this sensor");
+    return;
+  }
+  char* end = NULL;
+  long reg = strtol(csv, &end, 0);
+  if (end == csv || *end != ',') {
+    LOG_WRN("camReg: need addr,value eg 0x380C,0x0A - got '%s'", csv);
+    return;
+  }
+  long val = strtol(end + 1, NULL, 0);
+  if (reg < 0x3000 || reg > 0x6100 || val < 0 || val > 0xFF) {
+    LOG_WRN("camReg: addr must be 0x3000-0x6100 and value 0-255, got 0x%lX,0x%lX", reg, val);
+    return;
+  }
+  s->set_reg(s, (int)reg, 0xFF, (int)val);
+  // read back - a rejected SCCB write is otherwise silent
+  int got = s->get_reg(s, (int)reg, 0xFF);
+  if (got != (int)val) LOG_WRN("camReg: 0x%04lX <- 0x%02lX but reads back 0x%02X", reg, val, got);
+  else LOG_INF("camReg: 0x%04lX = 0x%02lX", reg, val);
 }
 
 void setCamPll(const char* csv) {
