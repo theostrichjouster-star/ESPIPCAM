@@ -273,6 +273,7 @@ void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
 void dumpCamRegs();
 void setCamReg(const char* csv);
+void getCamReg(const char* addr);
 void setCamPll(const char* csv);
 uint8_t setFPS(uint8_t val);
 uint8_t setFPSlookup(uint8_t val);
@@ -494,9 +495,17 @@ struct frameStruct {
 // already at its ceiling and XCLK stays at 20MHz.
 //
 // Binning is therefore what decides everything. Full resolution costs exactly double, which is
-// why FHD sits at 5.9fps while HD does 31.9 - and FHD cannot bin, since a binned read of the
-// 2592 wide array yields only about 1312 columns. setSensorSize() drops HTS to HTS_FLOOR for
-// the binned sizes, which the driver leaves needlessly high at 2644 for XGA and HD.
+// why HD does 31.9fps - and FHD cannot bin, since a binned read of the 2592 wide array yields
+// only about 1312 columns. setSensorSize() drops HTS to HTS_FLOOR for the binned sizes, which
+// the driver leaves needlessly high at 2644 for XGA and HD.
+//
+// The other half of HTS x VTS is how much of the array is read at all. Datasheet 4.2: frame
+// rate follows the ISP input size, and the driver never crops - it programs the window from a
+// fixed ratio_table row and downscales. FHD was reading 2624x1472 to emit 1920x1080, so
+// setSensorSize() now calls applyCropWindow() to read only what is wanted, which took FHD from
+// 5.9 to 10.7fps, SXGA from 4.6 to 11.3, UXGA from 2.8 to 9.6 and P_HD from 5.0 to 9.9. It
+// costs field of view - FHD reads 1984 of 2624 columns, so framing is about 1.29x tighter -
+// and it costs light, since a shorter frame is a shorter maximum exposure.
 //
 // Storage is not the constraint at any of these rates: the card sustains 3.4MB/s and identical
 // frame rates come back at quality 10 and 18. Note "Busy" in the recording stats counts blocked
@@ -546,12 +555,12 @@ const frameStruct frameData[] = {
   {"SVGA", 800, 600, 21, 3, 1},    // measured 22.1, already at HTS_FLOOR
   {"XGA", 1024, 768, 24, 3, 1},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it
   {"HD", 1280, 720, 30, 3, 1},     // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it
-  {"SXGA", 1280, 1024, 4, 3, 1},   // measured 4.6 - full resolution read of the whole array
-  {"UXGA", 1600, 1200, 3, 3, 1},   // PY260 | measured 2.8 @ 66% busy | scale 3 not 4, see below
-  {"FHD", 1920, 1080, 5, 3, 1},    // 3MP Sensors only // PY260 | measured 5.9, cannot bin
-  {"P_HD", 720, 1280, 6, 3, 1},    // measured 5.0 @ 19% busy
+  {"SXGA", 1280, 1024, 11, 3, 1},  // measured 11.3 cropped, 4.6 before it
+  {"UXGA", 1600, 1200, 9, 3, 1},   // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below
+  {"FHD", 1920, 1080, 10, 3, 1},   // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before
+  {"P_HD", 720, 1280, 9, 3, 1},    // measured 9.9 cropped, 5.0 before
   {"P_3MP", 864, 1536, 4, 3, 1},   // OV3660 only - not selectable on this sensor, set by analogy
-  {"QXGA", 2048, 1536, 3, 4, 1},   // measured 2.9 @ 67% busy
+  {"QXGA", 2048, 1536, 7, 4, 1},   // stills only, so not measurable by recording - 7.2 predicted cropped
   {"QHD", 2560, 1440, 2, 4, 1},    // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin
   {"WQXGA", 2560, 1600, 2, 4, 1},  // measured 2.8 @ 85% busy at req 3, backed off
   {"P_FHD", 1080, 1920, 4, 3, 1},  // measured 4.0 @ 37% busy | scale 3 not 4, see below

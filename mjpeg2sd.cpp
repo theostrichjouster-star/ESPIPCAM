@@ -267,11 +267,13 @@ static void applyHtsFloor(sensor_t* s) {
   // offsets, frameCnt agreed, and Bad frames discarded stayed 0. It was found by looking at a
   // frame. Any change to sensor timing registers needs a human to view an actual image
   //
-  // The remaining FHD lever is neither of these. It reads 1472 unbinned rows to produce 1080
-  // and downscales; cropping the window to 1080 rows instead would roughly double the rate.
-  // Setting the window and VTS alone is not enough - it kills output, because the ISP scaler
-  // is still configured to consume 1472 rows. That needs 0x5600-0x5606 and the offsets at
-  // 0x3810-0x3813 reconfigured with the window, and has not been attempted
+  // The FHD lever turned out to be neither of these, and is now applyCropWindow() below: the
+  // driver never crops, so FHD was reading 2624x1472 off the array and downscaling it to
+  // 1920x1080. Cropping the window to 1984x1112 and turning the scaler off makes both HTS and
+  // VTS legitimately shorter, and took it from 5.9 to 10.7fps with clean frames. Setting the
+  // window and VTS alone kills output because the scaler is still enabled with nothing left to
+  // scale - the missing register was 0x5001[5], not the 0x5600-0x5606 ratio block, which the
+  // driver never writes at all because the hardware derives the ratio from the sizes
   if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return;
   int xInc = s->get_reg(s, 0x3814, 0xFF); // [7:4] odd increment, [3:0] even, ratio is the mean
   if (xInc < 0) return;
@@ -283,6 +285,87 @@ static void applyHtsFloor(sensor_t* s) {
   int got = (s->get_reg(s, 0x380C, 0xFF) << 8) | s->get_reg(s, 0x380D, 0xFF);
   if (got != HTS_FLOOR) LOG_WRN("HTS floor wrote %d but reads back %d", HTS_FLOOR, got);
   else LOG_VRB("HTS %d -> %d", hts, HTS_FLOOR);
+}
+
+static int senReg16(sensor_t* s, int reg) {
+  // big endian register pair straight off the sensor, -1 if either half fails
+  int hi = s->get_reg(s, reg, 0xFF);
+  int lo = s->get_reg(s, reg + 1, 0xFF);
+  return (hi < 0 || lo < 0) ? -1 : ((hi << 8) | lo);
+}
+
+static bool senWrite16(sensor_t* s, int reg, int val) {
+  // write a register pair and confirm it, since a rejected SCCB write is otherwise silent
+  s->set_reg(s, reg, 0xFF, (val >> 8) & 0xFF);
+  s->set_reg(s, reg + 1, 0xFF, val & 0xFF);
+  return senReg16(s, reg) == val;
+}
+
+static void applyCropWindow(sensor_t* s, framesize_t forFS) {
+  // The full resolution counterpart to applyHtsFloor(), and the answer to the FHD problem.
+  //
+  // Datasheet 4.2: frame rate follows the ISP input size - the pixels actually read off the
+  // array - not the output size. "Typically, the larger the ISP input size is, the less
+  // maximum frame rate can be reached". The esp32-camera driver never crops: set_framesize()
+  // programs the window from a fixed ratio_table row and leaves the ISP scaler to shrink
+  // whatever that reads. Every 16:9 size therefore reads 2624x1472 off the array, so FHD was
+  // spending 2844x1488 clocks to emit 1920x1080. Table 2-1 defines 1080p the other way round,
+  // as "cropping from full resolution", and cropping is what this does: read only the pixels
+  // that are wanted, turn the scaler off, and shorten the frame to match.
+  //
+  // Measured on COM4, prediction first at every step: 5.9fps stock, 7.7 cropped at the stock
+  // HTS against 7.8 predicted, then 8.5 / 9.5 / 10.7 at HTS 2600 / 2300 / 2060 against 8.5 /
+  // 9.6 / 10.8 predicted. 0 bad frames throughout, every frame decoding, and frames extracted
+  // and looked at after each change - which is not optional here, see the warning below.
+  //
+  // It costs field of view. FHD now reads 1984 of the array's 2624 columns, so framing is
+  // about 1.29x tighter than it was. That is inherent to the method and is what the datasheet
+  // mode does too. It also costs light: a 1.82x shorter frame is 1.82x less maximum exposure
+  if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return;
+  int xInc = s->get_reg(s, 0x3814, 0xFF);
+  if (xInc < 0) return;
+  if ((((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2 >= 2) return; // binned - applyHtsFloor's job
+
+  int xSt = senReg16(s, 0x3800), ySt = senReg16(s, 0x3802);
+  int xEnd = senReg16(s, 0x3804), yEnd = senReg16(s, 0x3806);
+  int xOff = senReg16(s, 0x3810), yOff = senReg16(s, 0x3812);
+  if (xSt < 0 || ySt < 0 || xOff < 0 || yOff < 0 || xEnd <= xSt || yEnd <= ySt) return;
+  int haveW = xEnd - xSt + 1, haveH = yEnd - ySt + 1;
+  // datasheet figure 4-3: pre-scaling size is the input less twice the offset, so this is the
+  // input that makes the scaler a no-op and the output a straight crop
+  int needW = frameData[forFS].frameWidth + 2 * xOff;
+  int needH = frameData[forFS].frameHeight + 2 * yOff;
+  // bigger than the window means there is nothing to crop, which is what leaves QSXGA, 5MP,
+  // QHD and WQXGA alone - at those the output already is the whole array
+  if (needW > haveW || needH > haveH) return;
+  if (needW == haveW && needH == haveH) return;
+  // keep the start even so the Bayer phase is unchanged, or the colours come out wrong
+  int newXSt = (xSt + (haveW - needW) / 2) & ~1;
+  int newYSt = (ySt + (haveH - needH) / 2) & ~1;
+
+  if (!senWrite16(s, 0x3800, newXSt) || !senWrite16(s, 0x3802, newYSt)
+   || !senWrite16(s, 0x3804, newXSt + needW - 1) || !senWrite16(s, 0x3806, newYSt + needH - 1)) {
+    LOG_WRN("Crop window did not take for %s - sensor left as the driver set it", frameData[forFS].frameSizeStr);
+    return;
+  }
+  // VTS is the rows read plus 16 lines of blanking at full resolution, measured across every
+  // size. Shortening it without cropping first is the corruption trap warned about below
+  if (!senWrite16(s, 0x380E, needH + 16)) LOG_WRN("Crop VTS %d did not take", needH + 16);
+  // 0x5001[5] is the scale enable, and the only scaler register the driver ever writes - the
+  // ratio itself is derived from window, offsets and output size, so 0x5600-0x5606 are not
+  // involved. With pre-scale now equal to the output, leaving it on would be a 1:1 rescale
+  int isp01 = s->get_reg(s, 0x5001, 0xFF);
+  if (isp01 >= 0 && (isp01 & 0x20)) s->set_reg(s, 0x5001, 0xFF, isp01 & ~0x20);
+  // A narrower window needs fewer clocks per line. Measured floor is 2060 on a 1984 column
+  // crop, 2700 on the uncropped 2624 columns, and 2060 on the 1312 columns of a binned read,
+  // which all fit max(2060, columns + 76). Only the FHD point is measured directly; the rule
+  // is the conservative reading of the three, and HTS is left alone if it is already lower
+  int htsFloor = needW + 76;
+  if (htsFloor < HTS_FLOOR) htsFloor = HTS_FLOOR;
+  int hts = senReg16(s, 0x380C);
+  if (hts > htsFloor && !senWrite16(s, 0x380C, htsFloor)) LOG_WRN("Crop HTS %d did not take", htsFloor);
+  LOG_VRB("Cropped %s to %dx%d at %d,%d, VTS %d, HTS %d", frameData[forFS].frameSizeStr,
+    needW, needH, newXSt, newYSt, needH + 16, (hts > htsFloor) ? htsFloor : hts);
 }
 
 static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
@@ -337,7 +420,11 @@ void setSensorSize(framesize_t newFS) {
     return;
   }
   if (newFS == FS_1280X960) setOutputSize(s, frameData[newFS].frameWidth, frameData[newFS].frameHeight);
-  applyHtsFloor(s); // also lost on every set_framesize, so re-applied here rather than at boot
+  // the two are mutually exclusive by design - the crop handles full resolution sizes and the
+  // HTS floor the binned ones, each returning immediately when handed the other's case. Both
+  // are lost on every set_framesize, so they are re-applied here rather than once at boot
+  applyCropWindow(s, newFS);
+  applyHtsFloor(s);
   sensorFS = newFS;
   FPS = desiredFPS(newFS);
   controlFrameTimer(true);
@@ -1251,6 +1338,7 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_VFIFO_HSIZE   0x4602 // .. 0x4603 JPEG output width
 #define OV5640_VFIFO_VSIZE   0x4604 // .. 0x4605 JPEG output height
 #define OV5640_JPG_MODE_SEL  0x4713 // [2:0] JPEG mode 1..6, reset default 0x02
+#define OV5640_ISP_CONTROL01 0x5001 // [5] ISP scale enable - decides crop vs downscale
 
 static int camReg(sensor_t* s, int reg) {
   // single 8 bit register, -1 on SCCB failure
@@ -1347,11 +1435,24 @@ void dumpCamRegs() {
   LOG_INF("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d",
     jpgMode < 0 ? -1 : jpgMode & 0x07, jpgMode, vfifo00, (vfifo00 > 0 && (vfifo00 & 0x20)) ? "on" : "off",
     camReg16(s, OV5640_VFIFO_HSIZE), camReg16(s, OV5640_VFIFO_VSIZE));
+  int xSt = camReg16(s, OV5640_X_ADDR_ST), ySt = camReg16(s, OV5640_X_ADDR_ST + 2);
+  int xEnd = camReg16(s, OV5640_X_ADDR_END), yEnd = camReg16(s, OV5640_X_ADDR_END + 2);
+  int xOff = camReg16(s, OV5640_X_OFFSET), yOff = camReg16(s, OV5640_X_OFFSET + 2);
+  int isp01 = camReg(s, OV5640_ISP_CONTROL01);
   LOG_INF("Window: start %d,%d end %d,%d output %dx%d offset %d,%d",
-    camReg16(s, OV5640_X_ADDR_ST), camReg16(s, OV5640_X_ADDR_ST + 2),
-    camReg16(s, OV5640_X_ADDR_END), camReg16(s, OV5640_X_ADDR_END + 2),
+    xSt, ySt, xEnd, yEnd,
     camReg16(s, OV5640_X_OUTPUT_SIZE), camReg16(s, OV5640_X_OUTPUT_SIZE + 2),
-    camReg16(s, OV5640_X_OFFSET), camReg16(s, OV5640_X_OFFSET + 2));
+    xOff, yOff);
+  // datasheet 4.2: frame rate follows the ISP input size - what is actually read off the pixel
+  // array - and not the output size. "Typically, the larger the ISP input size is, the less
+  // maximum frame rate can be reached". The driver never crops: set_framesize() programs the
+  // window from a fixed ratio_table row and leaves the scaler to shrink whatever that reads,
+  // so at FHD these two lines disagree by 2624x1472 against 1920x1080. Pre-scaling size is the
+  // input less twice the offset (datasheet figure 4-3); when it equals the output size the
+  // scaler is doing nothing and 0x5001[5] should be clear
+  LOG_INF("ISP: input %dx%d, pre-scale %dx%d, scale %s (0x5001=0x%02X)",
+    xEnd - xSt + 1, yEnd - ySt + 1, xEnd - xSt + 1 - 2 * xOff, yEnd - ySt + 1 - 2 * yOff,
+    (isp01 < 0) ? "?" : ((isp01 & 0x20) ? "on" : "off"), isp01);
   LOG_INF("Subsample: 0x3814=0x%02X 0x3815=0x%02X (%.1fx by %.1fx) 0x3820=0x%02X 0x3821=0x%02X",
     xInc, yInc, xBin, yBin, camReg(s, OV5640_TIMING_TC_R20), camReg(s, OV5640_TIMING_TC_R21));
   LOG_INF("Die temp: %.1fC, free heap %s, free PSRAM %s",
@@ -1385,6 +1486,26 @@ void setCamReg(const char* csv) {
   int got = s->get_reg(s, (int)reg, 0xFF);
   if (got != (int)val) LOG_WRN("camReg: 0x%04lX <- 0x%02lX but reads back 0x%02X", reg, val, got);
   else LOG_INF("camReg: 0x%04lX = 0x%02lX", reg, val);
+}
+
+void getCamReg(const char* addr) {
+  // debug: read one sensor register. The counterpart to setCamReg(), and needed by it - any
+  // register holding unrelated bits (0x5001 holds the scale enable next to AWB and the colour
+  // matrix) cannot be safely rewritten without seeing what is already there, because set_reg
+  // takes a whole byte. strtol base 0, so 0x hex or plain decimal
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->get_reg == NULL) {
+    LOG_WRN("camRegRd: get_reg not available for this sensor");
+    return;
+  }
+  long reg = strtol(addr, NULL, 0);
+  if (reg < 0x3000 || reg > 0x6100) {
+    LOG_WRN("camRegRd: addr must be 0x3000-0x6100, got 0x%lX", reg);
+    return;
+  }
+  int got = s->get_reg(s, (int)reg, 0xFF);
+  if (got < 0) LOG_WRN("camRegRd: 0x%04lX read failed", reg);
+  else LOG_INF("camRegRd: 0x%04lX = 0x%02X (%d)", reg, got, got);
 }
 
 void setCamPll(const char* csv) {
