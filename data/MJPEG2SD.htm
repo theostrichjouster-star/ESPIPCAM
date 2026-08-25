@@ -951,8 +951,14 @@
                         <option class="OV3660 OV5640 PY260 hidden" value="16">FHD(1920x1080)</option>
                         <option class="AllOV PY260 hidden" value="15">UXGA(1600x1200)</option>
                         <option class="AllOV hidden" value="14">SXGA(1280x1024)</option>
-                        <!-- app-only size past the driver's framesize_t, see FS_1280X960 -->
-                        <option class="OV5640 hidden" value="25">1280x960</option>
+                        <!-- app-only size past the driver's framesize_t, see FS_1280X960.
+                             The name before the bracket has to be frameSizeStr exactly, uppercase
+                             X and all, because showView() prefix matches it against the size token
+                             in a recording's filename. The dimensions in the bracket then give
+                             showView()'s /(\d+)x(\d+)/ the lowercase x it needs. Reads oddly
+                             because this size has no standard name, but it is the only form both
+                             matchers accept -->
+                        <option class="OV5640 hidden" value="25">1280X960(1280x960)</option>
                         <option class="AllOV PY260 hidden" value="13">HD(1280x720)</option>
                         <option class="AllOV hidden" value="12">XGA(1024x768)</option>
                         <option class="AllOV hidden" value="11">SVGA(800x600)</option>
@@ -1972,6 +1978,10 @@
 
         // determine actual image size using framesize pixels
         const sizeData = sizeStr.match(/(\d+)x(\d+)/);
+        // a name that carries no WxH leaves this null, and dereferencing it throws far from the
+        // cause - the option text and frameData's frameSizeStr have to agree, and when they do
+        // not it should be an inert view rather than a dead handler
+        if (!sizeData) return console.warn('showView: no dimensions in "' + sizeStr + '"');
         const fwidth = sizeData[1];
         const fheight = sizeData[2];
         imgSize = {width: fwidth, height: fheight};
