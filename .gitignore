@@ -1,1 +1,5 @@
 build/
+# Local bench notes. Carries the boards' efuse MACs and LAN addresses, so it is
+# deliberately kept out of this public repo rather than merely untracked - being
+# untracked from some commit onwards would still leave it readable in history.
+BOARD_TESTING.md
