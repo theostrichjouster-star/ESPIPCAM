@@ -399,6 +399,9 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
   else LOG_VRB("Output size overridden to %ux%u", w, h);
 }
 
+// defined further down, next to camClocks() which it needs for the line time
+static void applyAecLimits(sensor_t* s);
+
 static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // Everything set_framesize() does not do for us. It reloads the whole register block, so all
   // of this is lost on every call and has to follow every one of them - which is the reason it
@@ -412,6 +415,8 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // the binned ones, each returning immediately when handed the other's case
   applyCropWindow(s, fs);
   applyHtsFloor(s);
+  // last, because it reads back the HTS and VTS the two above have just settled
+  applyAecLimits(s);
 }
 
 static framesize_t hwFrameSize(framesize_t fs) {
@@ -1387,6 +1392,14 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_AEC_PK_REAL_GAIN 0x350a // .. 0x350b AGC gain actually applied, 0x350b[7:0] x/16
 #define OV5640_AEC_CTRL00    0x3a00 // [2] night mode enable - extends the frame in the dark
 #define OV5640_AEC_GAIN_CEIL 0x3a18 // .. 0x3a19 AGC ceiling, real gain format
+// AEC limits that have to track the frame timing - see applyAecLimits(). All are driver reset
+// table values that nothing recomputes when HTS or VTS move
+#define OV5640_AEC_MAX_EXPO  0x3a02 // .. 0x3a03 max exposure in lines, must fit inside VTS
+#define OV5640_AEC_B50_STEP  0x3a08 // .. 0x3a09 lines per 50Hz half cycle, [1:0] and [7:0]
+#define OV5640_AEC_B60_STEP  0x3a0a // .. 0x3a0b lines per 60Hz half cycle
+#define OV5640_AEC_MAX_B50   0x3a0d // [5:0] how many B50 steps fit in the frame
+#define OV5640_AEC_MAX_B60   0x3a0e // [5:0] how many B60 steps fit in the frame
+#define OV5640_AEC_MAX_EXPO_50 0x3a14 // .. 0x3a15 max exposure under the 50Hz filter
 
 static int camReg(sensor_t* s, int reg) {
   // single 8 bit register, -1 on SCCB failure
@@ -1466,6 +1479,55 @@ static camClocks_t camClocks(sensor_t* s) {
   c.pclkDriver = c.pllClk / c.pclkRootDiv / ((c.pclkManual && c.pclkDiv) ? c.pclkDiv : 2);
   c.valid = true;
   return c;
+}
+
+static void applyAecLimits(sensor_t* s) {
+  // The AEC's limits are fixed values from the driver's reset table and nothing recomputes them
+  // when the timing changes. set_framesize() writes only 0x38xx, and applyHtsFloor() and
+  // applyCropWindow() move HTS and VTS underneath them, so they end up describing a frame this
+  // board does not run.
+  //
+  // Two of them are geometry, not preference:
+  //  - The banding steps at 0x3A08/0x3A0A are line counts spanning one mains half cycle, so they
+  //    are a function of the line time, HTS/pixclk. The driver ships 295 and 246, which are right
+  //    for a line time we do not use. At HTS 2060 and 45MHz the correct values are 218 and 182,
+  //    ~35% lower. 0x3A00[5] has the banding filter ENABLED, so these are actively wrong rather
+  //    than dormant, and exposure quantises to multiples of them.
+  //  - The exposure ceiling at 0x3A02 must fit inside the frame. The driver leaves it at 984
+  //    lines for every size. At HD, VTS is 744, so the AEC was choosing 885 lines - 36.46ms of a
+  //    30.65ms frame - and the sensor clipped it. Measured 0x350C/0x350D stayed zero, so this was
+  //    costing the AEC's control loop accuracy rather than costing frame rate; do not expect fps
+  //    from this, expect the AEC to stop asking for exposure the frame cannot hold.
+  if (s == NULL || s->get_reg == NULL || s->set_reg == NULL) return;
+  camClocks_t c = camClocks(s);
+  int hts = senReg16(s, OV5640_X_TOTAL_SIZE);
+  int vts = senReg16(s, OV5640_X_TOTAL_SIZE + 2);
+  // bail rather than guess. A banding step computed from a bad clock is worse than a stale one,
+  // because it is wrong in a way that looks deliberate
+  if (!c.valid || c.pixClk == 0 || hts < 1 || vts < 8) {
+    LOG_WRN("AEC limits not applied: clock %s, HTS %d, VTS %d", c.valid ? "ok" : "undecodable", hts, vts);
+    return;
+  }
+  int b50 = c.pixClk / (100 * hts);         // lines per 50Hz half cycle
+  int b60 = c.pixClk / (120 * hts);         // lines per 60Hz half cycle
+  int maxExp = vts - 4;                     // datasheet 4.6.2: exposure must leave 4 lines
+  // 10 bit fields, and a zero step would make the AEC divide by it
+  if (b50 < 1 || b60 < 1 || b50 > 0x3FF || b60 > 0x3FF || maxExp < 1 || maxExp > 0xFFFF) {
+    LOG_WRN("AEC limits not applied: B50 %d, B60 %d, max exposure %d out of range", b50, b60, maxExp);
+    return;
+  }
+  bool ok = senWrite16(s, OV5640_AEC_B50_STEP, b50);
+  ok &= senWrite16(s, OV5640_AEC_B60_STEP, b60);
+  ok &= senWrite16(s, OV5640_AEC_MAX_EXPO, maxExp);
+  ok &= senWrite16(s, OV5640_AEC_MAX_EXPO_50, maxExp);
+  // read modify write the two count registers, which are [5:0] with the rest reserved
+  int c50 = s->get_reg(s, OV5640_AEC_MAX_B50, 0xFF);
+  int c60 = s->get_reg(s, OV5640_AEC_MAX_B60, 0xFF);
+  if (c50 >= 0) s->set_reg(s, OV5640_AEC_MAX_B50, 0x3F, (maxExp / b50) & 0x3F);
+  if (c60 >= 0) s->set_reg(s, OV5640_AEC_MAX_B60, 0x3F, (maxExp / b60) & 0x3F);
+  if (!ok) LOG_WRN("AEC limits did not read back: B50 %d B60 %d maxExp %d", b50, b60, maxExp);
+  else LOG_VRB("AEC limits for HTS %d VTS %d: B50 %d, B60 %d, max exposure %d (%d/%d steps)",
+    hts, vts, b50, b60, maxExp, maxExp / b50, maxExp / b60);
 }
 
 void dumpCamRegs() {

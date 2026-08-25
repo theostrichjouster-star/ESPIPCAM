@@ -228,6 +228,13 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     else if (!strcmp(variable, "saturation")) res = s->set_saturation(s, intVal);
     else if (!strcmp(variable, "denoise")) res = s->set_denoise(s, intVal);    
     else if (!strcmp(variable, "sharpness")) res = s->set_sharpness(s, intVal);    
+    // The gainceiling_t enum is a lie on this part. Disassembling the precompiled driver shows
+    // OV5640's set_gainceiling splitting the raw argument into 0x3A18[1:0]/0x3A19[7:0], which is
+    // the 10 bit REAL GAIN field - value/16 is the multiplier - not an enum ordinal. So the
+    // OV2640 scale of 0..6 meaning 2x..128x does not apply here, and the web UI already knows
+    // that: the OV5640 branch sets this slider to 0..511. Passing the enum ordinal 6 would ask
+    // for 0.38x. The shipped default used to be 0, which overwrote the 15.5x the driver's own
+    // reset table programs and left the ceiling at 0.00x - confirmed by reading it back
     else if (!strcmp(variable, "gainceiling")) res = s->set_gainceiling(s, (gainceiling_t)intVal);
     else if (!strcmp(variable, "colorbar")) res = s->set_colorbar(s, intVal);
     else if (!strcmp(variable, "awb")) res = s->set_whitebal(s, intVal);
@@ -720,7 +727,7 @@ dcw~1~98~~na
 enableMotion~1~98~~na
 fps~20~98~~na
 framesize~10~98~~na
-gainceiling~0~98~~na
+gainceiling~511~98~~na
 hmirror~0~98~~na
 lenc~1~98~~na
 lswitch~10~98~~na
