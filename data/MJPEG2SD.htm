@@ -936,21 +936,27 @@
                     <div class="input-group" id="framesize-group">
                       <label for="framesize">Resolution</label>
                       <select id="framesize" class="selectField">
-                        <!-- sizes above the FHD pixel count cannot be recorded to AVI, but are
-                             still available for stills - see maxVideoFS in mjpeg2sd.cpp.
+                        <!-- The OV5640 list is limited to the sensor's own datasheet modes
+                             (table 2-1): 5MP/QSXGA, 1080p, 720p, 1280x960, VGA, QVGA - all
+                             recordable since maxVideoFS moved to QSXGA. The other rows KEEP
+                             their option elements (showView() reads dimensions from them for
+                             recordings made at legacy sizes, and other sensor classes still
+                             use them) but lose the OV5640/AllOV class, so the model unhide
+                             in customButtons() never shows them. The sizes stay reachable
+                             via /control?framesize= for bench work.
                              The trailing note is safe: showView() matches /(\d+)x(\d+)/ and prefix
                              matches the size name, so neither is affected by text after the bracket -->
                         <option class="PY260 hidden" value="24">5MP(2592x1944) - stills only</option>
-                        <option class="OV5640 hidden" value="23">QSXGA(2560x1920) - stills only</option>
-                        <option class="OV5640 hidden" value="22">P_FHD(1080x1920)</option>
-                        <option class="OV5640 hidden" value="21">WQXGA(2560x1600) - stills only</option>
-                        <option class="OV5640 hidden" value="20">QHD(2560x1440) - stills only</option>
-                        <option class="OV3660 OV5640 hidden" value="19">QXGA(2048x1536) - stills only</option>
+                        <option class="OV5640 hidden" value="23">QSXGA(2560x1920)</option>
+                        <option class="hidden" value="22">P_FHD(1080x1920)</option>
+                        <option class="hidden" value="21">WQXGA(2560x1600) - stills only</option>
+                        <option class="hidden" value="20">QHD(2560x1440) - stills only</option>
+                        <option class="OV3660 hidden" value="19">QXGA(2048x1536) - stills only</option>
                         <option class="OV3660 hidden" value="18">P_3MP(864x1536)</option>
-                        <option class="OV3660 OV5640 hidden" value="17">P_HD(720x1280)</option>
+                        <option class="OV3660 hidden" value="17">P_HD(720x1280)</option>
                         <option class="OV3660 OV5640 PY260 hidden" value="16">FHD(1920x1080)</option>
-                        <option class="AllOV PY260 hidden" value="15">UXGA(1600x1200)</option>
-                        <option class="AllOV hidden" value="14">SXGA(1280x1024)</option>
+                        <option class="PY260 hidden" value="15">UXGA(1600x1200)</option>
+                        <option class="hidden" value="14">SXGA(1280x1024)</option>
                         <!-- app-only size past the driver's framesize_t, see FS_1280X960.
                              The name before the bracket has to be frameSizeStr exactly, uppercase
                              X and all, because showView() prefix matches it against the size token
@@ -960,25 +966,37 @@
                              matchers accept -->
                         <option class="OV5640 hidden" value="25">1280X960(1280x960)</option>
                         <option class="AllOV PY260 hidden" value="13">HD(1280x720)</option>
-                        <option class="AllOV hidden" value="12">XGA(1024x768)</option>
-                        <option class="AllOV hidden" value="11">SVGA(800x600)</option>
+                        <option class="hidden" value="12">XGA(1024x768)</option>
+                        <option class="hidden" value="11">SVGA(800x600)</option>
                         <option class="AllOV PY260 hidden" value="10" selected="selected">VGA(640x480)</option>
-                        <option class="AllOV hidden" value="9">HVGA(480x320)</option>
-                        <option class="AllOV hidden" value="8">CIF(400x296)</option>
+                        <option class="hidden" value="9">HVGA(480x320)</option>
+                        <option class="hidden" value="8">CIF(400x296)</option>
                         <option class="PY260 hidden" value="7">320X320(320x320)</option>
                         <option class="AllOV PY260 hidden" value="6">QVGA(320x240)</option>
-                        <option class="AllOV hidden" value="5">240X240(240x240)</option>
-                        <option class="AllOV hidden" value="4">HQVGA(240x176)</option>
-                        <option class="AllOV hidden" value="3">QCIF(176x144)</option>
-                        <option class="AllOV PY260 hidden" value="2">128X128(128x128)</option>
-                        <option class="AllOV hidden" value="1">QQVGA(160x120)</option>
-                        <option class="AllOV PY260 hidden" value="0">96X96(96x96)</option>
+                        <option class="hidden" value="5">240X240(240x240)</option>
+                        <option class="hidden" value="4">HQVGA(240x176)</option>
+                        <option class="hidden" value="3">QCIF(176x144)</option>
+                        <option class="PY260 hidden" value="2">128X128(128x128)</option>
+                        <option class="hidden" value="1">QQVGA(160x120)</option>
+                        <option class="PY260 hidden" value="0">96X96(96x96)</option>
                       </select>
                     </div>
                   </div>
                   <div class="input-group" id="fps-group">
                       <label for="fps">FPS</label>
-                      <input title="Set camera required frames per second" type="range" id="fps" min="1" max="30" value="10">
+                      <!-- populated by updateFPS's opts for the selected resolution: with
+                           tunedFps the firmware hits each listed rate exactly by retiming
+                           the sensor's VTS, so the menu only ever offers what the size can
+                           deliver. The static options below just cover the pre-response
+                           moment on first load -->
+                      <select title="Camera frames per second - the menu lists the rates the selected resolution can actually deliver" id="fps" class="selectField">
+                        <option value="30">30 fps</option>
+                        <option value="25">25 fps</option>
+                        <option value="20">20 fps</option>
+                        <option value="15">15 fps</option>
+                        <option value="10" selected="selected">10 fps</option>
+                        <option value="5">5 fps</option>
+                      </select>
                   </div>
                   <div class="input-group" id="quality-group">
                       <label for="quality">Quality</label>
@@ -988,6 +1006,10 @@
                            the length of the recording. Measured, not theoretical. The PY260 branch
                            overrides this range from script and is unaffected -->
                       <input title="Set the recording quality (lower = larger frames; floored where the SD card stops keeping up)" type="range" id="quality" min="6" max="63" value="10">
+                  </div>
+                  <div class="input-group" id="budget-group">
+                      <label title="Estimated storage rate for the selected resolution, FPS and quality, against the measured SD bus ceiling. Advisory only - real frame sizes vary with the scene">Est. rate</label>
+                      <div class="displayonly" id="budgetBadge" style="padding:4px 0">-</div>
                   </div>
                   <div class="input-group" id="micGain-group">
                     <label for="micGain">Microphone Gain</label>
@@ -1643,6 +1665,7 @@
         // process change to status value
         if (dest == ID) {
           // operation based on ID
+          if (key == "fps" || key == "quality") updateBudget(); // advisory badge tracks both
           if (key == "wifi") getConfig("0");
           else if (key == "hostName") {
             document.title = value;
@@ -1673,6 +1696,16 @@
           else if (key == "delete" || key == "uploadMove" || key == "upload") sdFile(key, value);
           else if (key == 'timezoneSel') fromUser = setTz(value);
           else if (key == "framesize") fromUser = setFrameSize(key, value, fromUser);
+          // updateFPS response extras: the per-resolution rate menu, the live manual
+          // exposure ceiling (VTS-4 read off the sensor), and the measured storage budget
+          // for the SD bus clock actually set. All server-pushed, none is a control
+          else if (key == "opts") { rebuildFpsMenu(value); return; }
+          else if (key == "aecMax") {
+            const cur = Math.min(Number($('#aec_value').value) || 204, Number(value));
+            changeRange('aec_value', "0", value, cur.toString());
+            return;
+          }
+          else if (key == "budgetKBs") { budgetKBs = Number(value); updateBudget(); return; }
           else if (key == "get-still") getStill();
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
@@ -2114,6 +2147,61 @@
           sendControlResp("updateFPS", value); // needs to be after above
         }
         return false;
+      }
+
+      /************ per-resolution rate menu and storage estimate ************/
+
+      let budgetKBs = 4420; // measured SD ceiling in KB/s, refreshed by updateFPS responses
+
+      function rebuildFpsMenu(csv) {
+        // repopulate the FPS dropdown from the rates the firmware says this resolution can
+        // deliver. Display only: keeps the device's current rate if listed, else shows the
+        // nearest lower menu rate - nothing is sent unless the user picks an option
+        const sel = $('#fps');
+        const want = Number(statusData['fps'] ?? sel.value);
+        sel.innerHTML = '';
+        csv.split(',').forEach(v => {
+          const o = document.createElement('option');
+          o.value = v;
+          o.text = v + ' fps';
+          sel.add(o);
+        });
+        const vals = [...sel.options].map(o => Number(o.value));
+        sel.value = vals.includes(want) ? want : (vals.find(v => v <= want) ?? vals[vals.length - 1]);
+        updateBudget();
+      }
+
+      function estFrameKB(pixels, q) {
+        // bytes per pixel by JPEG quality, anchored on measured points (HD q6 of a lit,
+        // detailed scene ~130KB = 0.145 B/px) and linearly interpolated between anchors.
+        // Estimates only - the badge is advisory, never a gate
+        const curve = [[6, 0.145], [8, 0.12], [10, 0.10], [15, 0.075], [20, 0.06], [30, 0.045], [63, 0.03]];
+        let bpp = curve[curve.length - 1][1];
+        for (let i = 0; i < curve.length; i++) {
+          if (q <= curve[i][0]) {
+            if (i == 0) bpp = curve[0][1];
+            else {
+              const [q0, b0] = curve[i - 1], [q1, b1] = curve[i];
+              bpp = b0 + (b1 - b0) * (q - q0) / (q1 - q0);
+            }
+            break;
+          }
+        }
+        return pixels * bpp / 1024;
+      }
+
+      function updateBudget() {
+        const el = $('#budgetBadge');
+        if (!el) return;
+        const opt = $('#framesize option:checked');
+        const m = opt ? opt.innerHTML.match(/(\d+)x(\d+)/) : null;
+        if (!m) { el.innerHTML = '-'; return; }
+        const kbs = Number($('#fps').value) * estFrameKB(m[1] * m[2], Number($('#quality').value));
+        const over = kbs > budgetKBs;
+        el.innerHTML = (kbs / 1024).toFixed(2) + ' of ' + (budgetKBs / 1024).toFixed(2) + ' MB/s';
+        el.style.color = over ? '#e05a4e' : '';
+        el.title = over ? 'Estimated rate exceeds the measured SD ceiling - expect dropped frames'
+                        : 'Within the measured SD ceiling';
       }
 
       function setAgc(key, value) {
