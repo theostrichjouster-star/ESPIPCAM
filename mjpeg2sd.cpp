@@ -157,21 +157,18 @@ static void recordingCamMode(bool starting) {
   // Gain-driven UV shift (5.10) is a different mechanism and still applies; this only stops
   // the white point walking mid-recording.
   //
-  // AF: the boot state is continuous autofocus, and a hunt refocuses the whole frame - focus
-  // breathing in the clip, and every motion cell lights at once. On start, one single-shot
-  // acquisition (CMD_MAIN 0x03, from the AF library's app-note derived header, not invented)
-  // which also takes the MCU out of continuous mode; fire and forget rather than blocking the
-  // first frames on a focus wait - the lens settles during the opening fraction of the clip.
-  // On close, continuous AF is restored.
+  // AF is deliberately left alone. The first version of this fired a single-shot acquisition
+  // (CMD_MAIN 0x03) at recording start to stop continuous AF hunting mid-clip - and it wedged
+  // the AF MCU in a permanent hunt instead: FW status read 0x00 (focusing) for the entire
+  // recording and delivered frames fell from 30.0 to 21.5fps, reproducibly. The library's
+  // header carries no documented pause/release command to do this properly, and the datasheet
+  // does not cover the mailbox at all, so per the rule against inventing mailbox values the
+  // continuous AF of the boot state stands. Measured, continuous AF at steady state is free -
+  // 30.0fps recordings with it active - because a focused scene leaves the MCU idle (0x10).
+  // The cost accepted is refocus breathing if the scene depth changes mid-clip.
   sensor_t* s = esp_camera_sensor_get();
   if (s == NULL) return;
   s->set_reg(s, 0x5196, 0x20, starting ? 0x20 : 0x00); // AWB freeze bit only
-#if INCLUDE_AF
-  if (starting) {
-    s->set_reg(s, OV5640_CMD_ACK, 0xFF, 0x01);
-    s->set_reg(s, OV5640_CMD_MAIN, 0xFF, AF_TRIG_SINGLE_AUTO_FOCUS);
-  } else ov5640AF.autoFocusMode(); // back to the boot behaviour
-#endif
 }
 
 /**************** capture AVI  ************************/
