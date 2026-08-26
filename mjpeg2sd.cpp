@@ -1933,6 +1933,7 @@ void getCamReg(const char* addr) {
 // sensor, and PIXCLK is arithmetic on registers. These diagnostics close the loop with two
 // independent measurements that share no assumptions with that arithmetic.
 #include "soc/ledc_struct.h"
+#include "soc/lcd_cam_struct.h"
 #include "soc/gpio_struct.h"
 #include "soc/gpio_sig_map.h"
 #include "hal/gpio_ll.h"
@@ -2026,21 +2027,36 @@ void xclkStat(const char* unused) {
     LOG_WRN("xclkStat: refused while capturing");
     return;
   }
-  // 1: the camera's timer is LEDC_TIMER_1 low speed (prepCam), and on the S3 the low speed
-  // block is the only one. Divider is 10.8 fixed point; output = src / (div x 2^duty_res)
+  // 1: despite prepCam passing LEDC_TIMER_1 in the camera config, on the S3 the prebuilt
+  // driver never touches LEDC (measured: the whole LEDC block reads zero and uninitialised
+  // while XCLK toggles regardless) - XCLK comes from the LCD_CAM peripheral's own camera
+  // clock: src / (div_num + div_b/div_a), a genuine fractional divider that dithers between
+  // div_num and div_num+1 whenever div_b != 0. The LEDC decode is kept for the one path that
+  // does use it, changeXCLK(), which steals the pin for xclkMhz > 20
+  uint32_t camSel = LCD_CAM.cam_ctrl.cam_clk_sel; // 0 off, 1 XTAL 40MHz, 2 PLL_D2 240MHz, 3 PLL_F160M 160MHz
+  uint32_t divNum = LCD_CAM.cam_ctrl.cam_clkm_div_num;
+  uint32_t divA = LCD_CAM.cam_ctrl.cam_clkm_div_a;
+  uint32_t divB = LCD_CAM.cam_ctrl.cam_clkm_div_b;
+  const char* camSrc = (camSel == 1) ? "XTAL 40MHz" : (camSel == 2) ? "PLL_D2 240MHz"
+    : (camSel == 3) ? "PLL_F160M 160MHz" : "DISABLED";
+  double camSrcHz = (camSel == 1) ? 40e6 : (camSel == 2) ? 240e6 : (camSel == 3) ? 160e6 : 0;
+  double camDiv = divNum + ((divA > 0) ? (double)divB / divA : 0);
+  double camHz = (camDiv > 0) ? camSrcHz / camDiv : 0;
+  LOG_INF("LCD_CAM clk: src %s, divider %lu + %lu/%lu = %.4f (%s) -> %.3fMHz programmed",
+    camSrc, (unsigned long)divNum, (unsigned long)divB, (unsigned long)divA, camDiv,
+    divB ? "DITHERED, edges jitter by one src cycle" : "integer, cycle exact", camHz / 1e6);
   uint32_t raw = LEDC.timer_group[0].timer[LEDC_TIMER_1].conf.clock_divider;
   uint32_t dutyRes = LEDC.timer_group[0].timer[LEDC_TIMER_1].conf.duty_resolution;
   uint32_t srcSel = LEDC.conf.apb_clk_sel; // 1 = APB 80MHz, 2 = RC_FAST ~17.5MHz, 3 = XTAL 40MHz
-  const char* srcName = (srcSel == 1) ? "APB 80MHz" : (srcSel == 3) ? "XTAL 40MHz"
-    : (srcSel == 2) ? "RC_FAST ~17.5MHz" : "INVALID";
-  double srcHz = (srcSel == 1) ? 80e6 : (srcSel == 3) ? 40e6 : (srcSel == 2) ? 17.5e6 : 0;
-  uint32_t frac = raw & 0xFF;
-  double div = raw / 256.0;
-  double ledcHz = (raw > 0 && dutyRes > 0) ? srcHz / (div * (1 << dutyRes)) : 0;
-  LOG_INF("LEDC: src %s, divider %.4f (raw 0x%lX, frac %lu/256 - %s), duty res %lu bit -> %.3fMHz programmed",
-    srcName, div, (unsigned long)raw, (unsigned long)frac,
-    frac ? "DITHERED, edges jitter by one src cycle" : "cycle exact", (unsigned long)dutyRes,
-    ledcHz / 1e6);
+  if (srcSel != 0 && raw != 0) {
+    double srcHz = (srcSel == 1) ? 80e6 : (srcSel == 3) ? 40e6 : 17.5e6;
+    uint32_t frac = raw & 0xFF;
+    double div = raw / 256.0;
+    double ledcHz = (dutyRes > 0) ? srcHz / (div * (1 << dutyRes)) : 0;
+    LOG_INF("LEDC (changeXCLK path): src sel %lu, divider %.4f (frac %lu/256 - %s), duty res %lu bit -> %.3fMHz",
+      (unsigned long)srcSel, div, (unsigned long)frac, frac ? "DITHERED" : "cycle exact",
+      (unsigned long)dutyRes, ledcHz / 1e6);
+  } else LOG_INF("LEDC: uninitialised (expected at xclkMhz <= 20 - the S3 driver clocks the pin from LCD_CAM)");
   // 2: count the pad itself. PCNT samples on the 80MHz APB clock, reliable to roughly half
   // that, so 20MHz XCLK is in range and 40 is marginal - flagged rather than trusted
   double xclkHz = pcntEdgeHz(XCLK_GPIO_NUM, 100, 0);
