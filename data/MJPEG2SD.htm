@@ -1802,6 +1802,10 @@
               if (el.classList.contains(cameraModel)) show(el);
             });
           } else alert("Unhandled camera model: " + cameraModel);
+          // populate the rate menu, exposure ceiling and storage budget for the boot
+          // resolution - otherwise opts only ever arrives on a size CHANGE and the fps
+          // dropdown sits empty until the user touches the resolution
+          sendControlResp("updateFPS", "0");
         }
         firstCall = false;
       }
