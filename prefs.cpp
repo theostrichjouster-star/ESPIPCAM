@@ -533,6 +533,36 @@ static bool checkConfigFile() {
   return goodFile;
 }
 
+static void mergeDefaultConfigs() {
+  // Bring an existing config file up to date with rows added by newer firmware. The file is
+  // only ever created whole (checkConfigFile) and updateConfigVect() refuses unknown keys, so
+  // without this there was NO path for a new config row to reach an installed board short of
+  // a CFG_VER bump - which deletes the whole /data folder and every saved setting with it.
+  // Found when fhdProfile silently refused to persist on a board whose configs.txt predated
+  // the row: the control set the variable, the save wrote the file, and the key was in
+  // neither. Two passes, because getKeyPos()'s binary search is only valid while the vector
+  // stays sorted: collect the missing rows first, then insert, re-sort and save
+  std::vector<std::string> missing;
+  std::istringstream ss(appConfig);
+  std::string line;
+  while (std::getline(ss, line)) {
+    if (line.length() < 2) continue;
+    size_t d = line.find(DELIM);
+    if (d == std::string::npos || d == 0) continue;
+    if (getKeyPos(line.substr(0, d)) < 0) missing.push_back(line);
+  }
+  if (missing.empty()) return;
+  if (psramFound()) heap_caps_malloc_extmem_enable(MIN_RAM);
+  for (const auto& m : missing) loadVectItem(m);
+  std::sort(configs.begin(), configs.end(), [] (
+    const std::vector<std::string> &a, const std::vector<std::string> &b) {
+    return a[0] < b[0];}
+  );
+  if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
+  LOG_INF("Added %d new config keys from this build", (int)missing.size());
+  saveConfigVect();
+}
+
 bool loadConfig() {
   // called on startup
   LOG_INF("Load config");
@@ -540,6 +570,7 @@ bool loadConfig() {
   if (!res) res = checkConfigFile(); // to recreate file if deleted on first call
   if (res) {
     loadConfigVect();
+    mergeDefaultConfigs(); // new-in-this-build rows, without a CFG_VER wipe
     //showConfigVect();
     loadPrefs(); // overwrites any corresponding entries in config
     // load variables from stored config vector
