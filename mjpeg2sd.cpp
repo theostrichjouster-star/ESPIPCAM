@@ -492,11 +492,23 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     LOG_WRN("Tuned timing: HTS %d / VTS %d readback implausible - not retimed", hts, vtsNow);
     return;
   }
+  // The VTS floor cannot be "whatever VTS is there now" - a previous tuned choice may have
+  // raised it, and clamping against it would make rates monotonically decreasing (found on
+  // hardware: after 10fps at FHD set VTS 1941, a 15fps request was wrongly refused). The
+  // floor is derived from the window registers instead, which the tuning never touches:
+  // rows read + 16 blanking lines at full resolution, rows/2 + 8 binned - matching every
+  // measured driver value (744 HD, 984 VGA/XGA, 1112 cropped FHD, 1968 QSXGA)
+  int ySt = senReg16(s, 0x3802), yEnd = senReg16(s, 0x3806);
+  int vtsFloor = vtsNow; // fallback: never lower what is there if the window is unreadable
+  if (ySt >= 0 && yEnd > ySt) {
+    int rows = yEnd - ySt + 1;
+    vtsFloor = (lf == 2) ? rows + 16 : rows / 2 + 8;
+  }
   int vts = (int)(80000000UL / ((uint32_t)hts * lf * fps));
-  if (vts < vtsNow) {
+  if (vts < vtsFloor) {
     LOG_WRN("Tuned timing: %ufps is beyond the %s ceiling %.1f - delivering the ceiling",
-      fps, frameData[fs].frameSizeStr, 80e6 / ((float)hts * lf * vtsNow));
-    vts = vtsNow;
+      fps, frameData[fs].frameSizeStr, 80e6 / ((float)hts * lf * vtsFloor));
+    vts = vtsFloor;
   }
   if (vts > 0xFFFF) vts = 0xFFFF; // 16 bit register; ~0.02fps floor at HD, never plausible
   if (!senWrite16(s, 0x380E, vts)) LOG_WRN("Tuned timing: VTS %d did not read back", vts);
