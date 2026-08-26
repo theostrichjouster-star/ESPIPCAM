@@ -440,7 +440,7 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
 // defined further down, next to camClocks() which it needs for the line time
 static void applyAecLimits(sensor_t* s);
 
-int hdProfile = 0; // config: HD runs the tuned 30fps / long-exposure profile below
+int hdProfile = 0; // config: 0 driver default, 1 the tuned 80MHz/30fps profile, 2 the in-spec-everywhere 40MHz/25fps profile
 int mdAtCapture = 0; // config: detect motion at the capture size instead of dropping to VGA
 
 static void applyHdProfile(sensor_t* s) {
@@ -458,13 +458,26 @@ static void applyHdProfile(sensor_t* s) {
   // light the AEC then buys exposure before gain, so frames stay low-noise and small, which is
   // what the storage budget wants. applyAecLimits() runs after this and derives the banding
   // steps and exposure ceiling from these values, so they stay consistent by construction.
+  //
+  // hdProfile 2 keeps the identical VCO 800 tree and doubles sys_div (0x3035 0x11 -> 0x21) for
+  // PIXCLK 40MHz - the first configuration in spec on BOTH ends of the DVP link, since the
+  // ESP32-S3 receive side has its own ~40MHz PCLK ceiling that the driver default (50) and
+  // profile 1 (80) both exceed. Dividing down is preferred over lowering the VCO because the
+  // VCO's low end is less characterized than its verified maximum. Line time doubles to
+  // 51.5us, so VTS 776 gives fps = 40e6/(2060 x 776) = 25.0 and max exposure 772 lines =
+  // 39.8ms. Storage falls out at ~3.3MB/s for q6, under even the stock 40MHz SD bus ceiling.
+  // Exists to test whether an in-spec PCLK stops the zombie hangs; if it does, it becomes the
+  // recommended reliability profile
+  bool lowClk = (hdProfile == 2);
   s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
-  s->set_reg(s, 0x3035, 0xFF, 0x11); // sys_div 1
-  s->set_reg(s, 0x3036, 0xFF, 120);  // mul -> VCO 800MHz, PIXCLK 80MHz
+  s->set_reg(s, 0x3035, 0xFF, lowClk ? 0x21 : 0x11); // sys_div 2 or 1
+  s->set_reg(s, 0x3036, 0xFF, 120);  // mul -> VCO 800MHz
   delay(50); // let the PLL relock, same settle setCamPll() uses
-  if (!senWrite16(s, 0x380E, 1294)) LOG_WRN("HD profile: VTS 1294 did not read back");
+  int wantVts = lowClk ? 776 : 1294;
+  if (!senWrite16(s, 0x380E, wantVts)) LOG_WRN("HD profile: VTS %d did not read back", wantVts);
   int gotMul = s->get_reg(s, 0x3036, 0xFF);
   if (gotMul != 120) LOG_WRN("HD profile: PLL mul wrote 120 but reads %d", gotMul);
+  else if (lowClk) LOG_INF("HD profile 2: PIXCLK 40MHz, VTS 776 -> 25.0fps, max exposure 39.8ms");
   else LOG_INF("HD profile: PIXCLK 80MHz, VTS 1294 -> 30.0fps, max exposure 33.2ms");
 }
 
