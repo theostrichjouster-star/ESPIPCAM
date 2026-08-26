@@ -2112,6 +2112,40 @@ void xclkStat(const char* unused) {
   } else LOG_INF("VSYNC counted: %.3ffps over 60 frames (HTS/VTS readback failed, no implied PIXCLK)", vsyncHz);
 }
 
+void lencFhd(const char* val) {
+  // Experimental A/B control for the LENC-after-crop problem documented in applyCropWindow():
+  // the crop shrank the readout window by exactly 4/3 in both axes (2624x1472 -> 1952x1096),
+  // so the lens correction grid lands at the wrong radial coordinates and the edges carry a
+  // colour/luminance error. Datasheet 5.2 / table 7-29: 0x5842-0x5849 hold the RECIPROCAL of
+  // the grid step, 11 bits each, BR channel on a 5x5 grid and G on 6x6. A 4/3 smaller step
+  // means a 4/3 LARGER reciprocal. The driver never writes these (power-on defaults 0x012B /
+  // 0x018D / 0x018F / 0x0109), but the current values are read and scaled rather than assumed.
+  // 1 applies the scaled set, 0 restores what was read before the first apply. Runtime only,
+  // lost on reboot - wired into applyFhdProfile() only if the eyeball verdict is favourable.
+  // The verdict is necessarily a human one: flat-field corners, before vs after
+  static int orig[4] = {-1, -1, -1, -1};
+  static const int regs[4] = {0x5842, 0x5844, 0x5846, 0x5848};
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->set_reg == NULL) {
+    LOG_WRN("lencFhd: no sensor");
+    return;
+  }
+  bool apply = (atoi(val) != 0);
+  for (int i = 0; i < 4; i++) {
+    if (orig[i] < 0) {
+      orig[i] = senReg16(s, regs[i]);
+      if (orig[i] < 0) {
+        LOG_WRN("lencFhd: read of 0x%04X failed, aborting", regs[i]);
+        return;
+      }
+    }
+    int want = apply ? ((orig[i] & 0x7FF) * 4 + 1) / 3 : orig[i]; // 4/3, rounded, 11 bit
+    if (want > 0x7FF) want = 0x7FF;
+    if (!senWrite16(s, regs[i], want)) LOG_WRN("lencFhd: 0x%04X wrote %d but did not read back", regs[i], want);
+    else LOG_INF("lencFhd: 0x%04X %d -> %d (%s)", regs[i], orig[i], want, apply ? "scaled 4/3" : "restored");
+  }
+}
+
 void setCamPll(const char* csv) {
   // apply an arbitrary PLL config, for sweeping at a fixed XCLK
   // csv is the 8 public set_pll() args: bypass,mul,sys_div,root_2x,pre_div,seld5,pclk_manual,pclk_div
