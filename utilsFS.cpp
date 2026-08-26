@@ -17,6 +17,10 @@
 #include "appGlobals.h"
 #include "ff.h"
 #include "vfs_fat_internal.h"
+// for sdBusClk() - the SDMMC host clock divider is not reachable through the public driver API
+#include "driver/sdmmc_host.h"
+#include "hal/sdmmc_ll.h"
+#include "soc/sdmmc_struct.h"
 
 // Storage settings
 int sdMinCardFreeSpace = 100; // Minimum amount of card free Megabytes before sdFreeSpaceMode action is enabled
@@ -27,7 +31,9 @@ static bool use1bitMode = true;
 static int sdmmcFreq = BOARD_MAX_SDMMC_FREQ; // board specific default SD_MMC speed
 #endif
 
-enum fsInd {SDMMC, LITTLEFS, SPIFFSS, TBD};
+// first member was named SDMMC, which collides with the peripheral struct of that name declared
+// by soc/sdmmc_struct.h - pulled in via hal/sdmmc_ll.h for sdBusClk(). Local to this file
+enum fsInd {FS_SDMMC, LITTLEFS, SPIFFSS, TBD};
 static fsInd thisFS = TBD; 
 static const char* fsTypes[] = {"SD_MMC", "LittleFS", "SPIFFS", "TBD"};
 static const char* fsPaths[] = {"/sdcard", "/littlefs", "/spiffs"};
@@ -50,6 +56,50 @@ static void infoSD() {
     LOG_INF("SD card type %s, Size: %s, using %d bit mode @ %uMHz", typeStr, fmtSize(SD_MMC.cardSize()), use1bitMode ? 1 : 4, sdmmcFreq / 1000);
   }
 #endif
+}
+
+void sdBusClk(const char* val) {
+  // Diagnostic: retune the SD bus clock, for measuring where this board's storage actually tops out.
+  //
+  // The public API cannot do this. sdmmc_host_set_card_clk() pins the host divider at 4 and only
+  // moves the card divider, so every frequency it can reach is an integer fraction of 40MHz - ask
+  // it for 80MHz and you silently get 40. The hardware is a two stage divider:
+  //   PLL160M -> /div (2..16) -> host clock -> /(2 x card_div), bypassed when card_div is 0
+  // so the host divider is the only way up. div 4 = 40MHz (the default), 3 = 53.33, 2 = 80, which
+  // is the ceiling because sdmmc_ll_set_clock_div() asserts div > 1.
+  //
+  // 40MHz is SD High Speed, the fastest in spec mode this host supports - there is no UHS on the
+  // S3, so no SDR50/SDR104 and no DDR (that needs 1.8V signalling). Anything above div 4 is
+  // therefore out of spec for the CARD as well as untested for the board's routing, and is for
+  // measurement only. Deliberately not a config row: nothing persists it, so a power cycle always
+  // comes back at the driver's own 40MHz.
+  //
+  // Range checked here rather than relying on the HAL_ASSERT inside sdmmc_ll_set_clock_div(),
+  // which aborts rather than returns
+  int div = atoi(val);
+  int freqKhz = 0;
+  if (!div) {
+    // report only, no change
+    sdmmc_host_get_real_freq(SDMMC_HOST_SLOT_1, &freqKhz);
+    LOG_INF("SD bus clock: %d kHz (host div %lu)", freqKhz, sdmmc_ll_get_clock_div(&SDMMC));
+    return;
+  }
+  if (div < 2 || div > 16) {
+    LOG_WRN("sdBusClk: host divider must be 2-16 (2 = 80MHz, 4 = 40MHz default), got %d", div);
+    return;
+  }
+  if (isCapturing) {
+    LOG_WRN("sdBusClk: refused, a recording is in progress - retuning the bus mid write is not safe");
+    return;
+  }
+  int wasKhz = 0;
+  sdmmc_host_get_real_freq(SDMMC_HOST_SLOT_1, &wasKhz);
+  sdmmc_ll_set_clock_div(&SDMMC, div);
+  // read back rather than assume: this reads the dividers out of the registers, so if the poke did
+  // not take effect the reported figure stays where it was and the experiment is not fooled
+  sdmmc_host_get_real_freq(SDMMC_HOST_SLOT_1, &freqKhz);
+  LOG_WRN("SD bus clock %d -> %d kHz (host div %d)%s", wasKhz, freqKhz, div,
+    freqKhz > 40000 ? " - ABOVE SD High Speed, verify data integrity before believing any speed" : "");
 }
 
 static bool prepSD_MMC() {
@@ -106,7 +156,7 @@ bool startStorage() {
   bool res = false;
 #if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)
   if ((fs::SDMMCFS*)&STORAGE == &SD_MMC) {
-    thisFS = SDMMC;
+    thisFS = FS_SDMMC;
     res = prepSD_MMC();
     if (res) listFolder(DATA_DIR);
     else snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Check SD card inserted");

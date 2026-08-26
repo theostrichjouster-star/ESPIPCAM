@@ -121,6 +121,7 @@ bool changeExtension(char* fileName, const char* newExt);
 bool checkAlarm();
 bool checkAuth(httpd_req_t* req);
 bool checkDataFiles();
+void sdBusClk(const char* val); // diagnostic: retune the SD bus clock, see utilsFS.cpp
 bool checkFreeStorage();
 void checkMemory(const char* source = "");
 uint32_t checkStackUse(TaskHandle_t thisTask, int taskIdx);
