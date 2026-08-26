@@ -88,6 +88,8 @@ void sdBusClk(const char* val) {
     LOG_WRN("sdBusClk: host divider must be 2-16 (2 = 80MHz, 4 = 40MHz default), got %d", div);
     return;
   }
+  if ((int)sdmmc_ll_get_clock_div(&SDMMC) == div) return; // already there - the boot reapply of a default
+
   if (isCapturing) {
     LOG_WRN("sdBusClk: refused, a recording is in progress - retuning the bus mid write is not safe");
     return;

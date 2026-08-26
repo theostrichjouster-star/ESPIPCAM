@@ -181,7 +181,11 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "camPll")) setCamPll(value);
   else if (!strcmp(variable, "camReg")) setCamReg(value);
   else if (!strcmp(variable, "camRegRd")) getCamReg(value);
-  else if (!strcmp(variable, "sdBusClk")) sdBusClk(value); // 0 reports, 2-16 sets the host divider
+  else if (!strcmp(variable, "sdBusClk")) sdBusClk(value); // 0 reports, 2-16 sets the host divider (transient)
+  // the persisted counterpart: the saved row reapplies the divider on every boot via the
+  // config load, which runs after the SD is mounted. Default 4 = the stock 40MHz - safe for
+  // fresh installs; 3 = 53.33MHz, out of SD HS spec and only for individually qualified cards
+  else if (!strcmp(variable, "sdBusDiv")) sdBusClk(value);
   else if (!strcmp(variable, "avgZones")) avgZones(value); // dump the AEC 4x4 zone grid + gates
   else if (!strcmp(variable, "xclkStat")) xclkStat(value); // measure XCLK and VSYNC off the pins
   else if (!strcmp(variable, "lencFhd")) lencFhd(value); // A/B the LENC 4/3 rescale for the FHD crop
@@ -746,6 +750,7 @@ xclkMhz~20~98~~na
 ae_level~-2~98~~na
 aec~1~98~~na
 tunedFps~0~98~~na
+sdBusDiv~4~98~~na
 mdAtCapture~0~98~~na
 aec2~0~98~~na
 aec_value~204~98~~na
