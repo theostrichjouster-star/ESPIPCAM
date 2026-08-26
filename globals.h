@@ -184,6 +184,7 @@ void replaceChar(char* s, char c, char r);
 void resetCrashLoop();
 void reset_log();
 void resetWatchDog(int wdIndex, uint32_t wdTimeout = 1);
+void stopWatchDog(); // disable the watchdog for teardown paths, see utils.cpp
 bool retrieveConfigVal(const char* variable, char* value);
 void runTaskStats(bool _onceOnly = false);
 void saveRamLog(const char* ramLogName);

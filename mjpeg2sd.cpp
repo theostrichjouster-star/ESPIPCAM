@@ -941,6 +941,16 @@ static void captureTask(void* parameter) {
   uint32_t ulNotifiedValue;
   while (true) {
     ulNotifiedValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // Enrol this task in the watchdog and pet it once per wake. Nothing watched it before, and
+    // it is the task most able to block: saveFrame() writes to the card synchronously with no
+    // timeout anywhere below it, and FATFS is reentrant so it holds the volume mutex while it
+    // does. A card that stops responding therefore took the web server and everything else that
+    // touches storage down with it, while the ping task carried on petting the only watchdog
+    // there was - which is why the board answered pings for ever and never recovered on its own.
+    // The frame timer runs whether or not a recording is in progress, so this task wakes at the
+    // frame rate regardless and a missed pet means genuinely stuck, not merely idle. The one
+    // path that legitimately stops the timer is OTAprereq(), which now stops the watchdog first
+    resetWatchDog(1, wifiTimeoutSecs * 1000 * 2);
     if (ulNotifiedValue > FB_CNT) ulNotifiedValue = FB_CNT; // prevent too big queue if FPS excessive
     // may be more than one isr outstanding if the task delayed by SD write or jpeg decode
     while (ulNotifiedValue-- > 0) processFrame();
@@ -1282,6 +1292,9 @@ void endTasks() {
 
 void OTAprereq() {
   // stop timer isrs, and free up heap space, or crashes esp32
+  // watchdog first: this deliberately stops the frame timer and the ping task, so every enrolled
+  // task stops petting and the panic would otherwise fire in the middle of an update
+  stopWatchDog();
   doPlayback = forceRecord = false;
   controlFrameTimer(false);
 #if INCLUDE_PERIPH

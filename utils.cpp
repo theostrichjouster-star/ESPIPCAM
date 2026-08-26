@@ -252,16 +252,23 @@ void resetWatchDog(int wdIndex, uint32_t wdTimeout) {
   // customised watchdogs for particular tasks
   // ping task (0) used as watchdog in case of esp freeze
   static bool watchDogStarted[4] = {false, false, false, false};
+  static bool twdtConfigured = false;
   if (watchDogStarted[wdIndex]) esp_task_wdt_reset();
   else {
-    // setup watchdog on first call
-    esp_task_wdt_deinit(); 
-    esp_task_wdt_config_t twdt_config = {
-      .timeout_ms = wdTimeout,
-      .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
-      .trigger_panic = true, // panic abort on watchdog alert (contains wdt_isr)
-    };
-    esp_task_wdt_init(&twdt_config);
+    // Configure the timer once only, then just enrol each task. This used to reconfigure on the
+    // first call for EVERY index, and esp_task_wdt_deinit() drops every task already enrolled -
+    // so a second task signing up silently unregistered the first and only one was ever watched.
+    // The array here always implied more than one, but the deinit made that impossible
+    if (!twdtConfigured) {
+      esp_task_wdt_deinit();
+      esp_task_wdt_config_t twdt_config = {
+        .timeout_ms = wdTimeout,
+        .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
+        .trigger_panic = true, // panic abort on watchdog alert (contains wdt_isr)
+      };
+      esp_task_wdt_init(&twdt_config);
+      twdtConfigured = true;
+    }
     esp_task_wdt_add(NULL);
     if (esp_task_wdt_status(NULL) == ESP_OK) {
       watchDogStarted[wdIndex] = true;
@@ -269,6 +276,13 @@ void resetWatchDog(int wdIndex, uint32_t wdTimeout) {
       LOG_INF("WatchDog started for task: %s", pcTaskGetName(NULL));
     } else LOG_ERR("WatchDog failed to start for task: %s ", pcTaskGetName(NULL));
   }
+}
+
+void stopWatchDog() {
+  // Disable the watchdog entirely, for teardown paths that deliberately stop the things it
+  // watches. OTAprereq() halts the frame timer and the ping task, so every enrolled task stops
+  // petting - without this the panic would fire part way through an update
+  esp_task_wdt_deinit();
 }
 
 static void statusCheck() {
