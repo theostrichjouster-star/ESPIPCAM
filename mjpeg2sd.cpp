@@ -253,10 +253,20 @@ static bool detectionActive() {
   return !viewerActive();
 }
 
+static inline bool mdAtCaptureActive() {
+  // detect at the capture size only when that size is one the decoder is allowed to touch -
+  // MOTION_MAX_PIXELS caps at HD because decoding at or above ~1.3MP intermittently hard hangs
+  // the board (see appGlobals.h). Above the cap the VGA drop stays, exactly as before
+  return mdAtCapture && motionSizeAllowed(fsizePtr);
+}
+
 static framesize_t desiredSensorFS() {
   // derived from the same predicate, so the sensor is at the detection size exactly when
-  // detection runs - the two cannot drift apart
-  return detectionActive() ? MOTION_DETECT_FS : (framesize_t)fsizePtr;
+  // detection runs - the two cannot drift apart.
+  // With mdAtCapture the sensor holds the capture size through idle detection: stills and
+  // streams are instant at full resolution, there are no transition glitch frames to flush,
+  // and the retimed HD profile is never clobbered by a VGA round trip
+  return (detectionActive() && !mdAtCaptureActive()) ? MOTION_DETECT_FS : (framesize_t)fsizePtr;
 }
 
 static inline uint8_t desiredFPS(framesize_t forFS) {
@@ -434,6 +444,7 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
 static void applyAecLimits(sensor_t* s);
 
 int hdProfile = 0; // config: HD runs the tuned 30fps / long-exposure profile below
+int mdAtCapture = 0; // config: detect motion at the capture size instead of dropping to VGA
 
 static void applyHdProfile(sensor_t* s) {
   // The tuned HD recording profile: in-spec PLL at the sensor's own VCO maximum, and a longer
@@ -799,6 +810,70 @@ static bool closeAvi() {
   }
 }
 
+static bool zonePreFilter() {
+  // Tier 1 of detection at the capture size: decide whether this check needs a JPEG decode at
+  // all, from the sensor's own 4x4 zone luminance grid (section 7.28, 0x5691-0x56A0). The
+  // sensor computes the grid continuously for its AEC at any resolution, so sampling it is
+  // ~20 SCCB reads (~2-3ms) against a 60-90ms HD decode. Returns true when a decode is
+  // warranted: zones moved, the periodic floor is due, or the zones cannot be trusted.
+  //
+  // Two gates make the zones trustworthy, both measured this week:
+  //  - AEC deadband (section 4.5): while YAVG sits inside {0x3A1E..0x3A1B} the AEC holds
+  //    exposure, and on a static scene the 16 zones are stable to +-1 count. Outside the band
+  //    the AEC is re-exposing and every zone moves at once - an optical event, not motion.
+  //  - AF state: a focus hunt also moves every zone at once. Codes from the AF library's
+  //    app-note derived header: 0x70 idle, 0x10 focused, anything else is a hunt in progress.
+  //  When a gate fails the reference is dropped and the decode runs, so gated intervals fall
+  //  back to exactly the pre-filter-free behaviour rather than going blind.
+  //
+  // The reference updates every clean tick, so a very slow mover may never beat ZONE_T against
+  // the previous tick - that is what the DECODE_FLOOR is for: an unconditional decode at least
+  // every 2s bounds the miss window for anything the grid is too coarse or too slow to see.
+  const int ZONE_T = 5;              // per-zone delta to count, 5x the measured noise floor
+  const int ZONE_N = 2;              // zones over ZONE_T to trip a decode
+  const uint32_t DECODE_FLOOR_MS = 2000;
+  static uint8_t refZones[16];
+  static bool refValid = false;
+  static uint32_t lastDecode = 0;
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->get_reg == NULL) return true; // cannot read the grid: decode as before
+  int yavg = s->get_reg(s, 0x56A1, 0xFF);
+  int bandHi = s->get_reg(s, 0x3A1B, 0xFF);
+  int bandLo = s->get_reg(s, 0x3A1E, 0xFF);
+  bool gatesOk = (yavg >= 0 && yavg >= bandLo && yavg <= bandHi);
+#if INCLUDE_AF
+  if (gatesOk) {
+    uint8_t af = ov5640AF.getFWStatus();
+    gatesOk = (af == FW_STATUS_S_IDLE || af == FW_STATUS_S_FOCUSED);
+  }
+#endif
+  if (!gatesOk) {
+    refValid = false;
+    lastDecode = millis();
+    return true;
+  }
+  uint8_t z[16];
+  for (int i = 0; i < 16; i++) {
+    int v = s->get_reg(s, 0x5691 + i, 0xFF);
+    if (v < 0) { refValid = false; return true; } // SCCB glitch: decode as before
+    z[i] = (uint8_t)v;
+  }
+  bool trip = false;
+  if (refValid) {
+    int moved = 0;
+    for (int i = 0; i < 16; i++) if (abs((int)z[i] - (int)refZones[i]) >= ZONE_T) moved++;
+    trip = (moved >= ZONE_N);
+  }
+  bool hadRef = refValid;
+  memcpy(refZones, z, sizeof(refZones));
+  refValid = true;
+  if (trip || !hadRef || millis() - lastDecode >= DECODE_FLOOR_MS) {
+    lastDecode = millis();
+    return true;
+  }
+  return false; // scene quiet by the sensor's own account - skip the decode
+}
+
 static boolean processFrame() {
   // get camera frame
   static bool haveMotion = false;
@@ -861,7 +936,9 @@ static boolean processFrame() {
   int reasonId = 0;
   bool prevMotion = haveMotion;
   if (detectionActive()) {
-    if (doMonitor()) {
+    // with mdAtCapture the decode is skipped whenever the sensor's own zone grid says the
+    // scene is quiet - on a skip haveMotion is left untouched, so edges are unaffected
+    if (doMonitor() && (!mdAtCaptureActive() || zonePreFilter())) {
       uint32_t mTime = micros(); // micros, as a check can be only a few ms
       // The second argument is the PREVIOUS motion state, which checkMotion() uses to find
       // the start and stop edges - not "are we capturing". Passing a literal false made
