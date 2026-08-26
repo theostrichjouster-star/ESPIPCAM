@@ -406,6 +406,33 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
 // defined further down, next to camClocks() which it needs for the line time
 static void applyAecLimits(sensor_t* s);
 
+int hdProfile = 0; // config: HD runs the tuned 30fps / long-exposure profile below
+
+static void applyHdProfile(sensor_t* s) {
+  // The tuned HD recording profile: in-spec PLL at the sensor's own VCO maximum, and a longer
+  // frame bought deliberately for exposure headroom.
+  //
+  // PLL: pre_div 3 / sys_div 1 / mul 120 at XCLK 20MHz gives REFIN 6.67MHz, VCO 800MHz - the
+  // section 2.5 maximum, exactly in spec - and PIXCLK 80MHz, against table 8-5's typ 48 max 96
+  // with the measured image cliff at 88-92. The driver's own tree computes a nominal VCO of
+  // 2000MHz for its 50MHz PIXCLK, 2.5x over spec. These three writes are byte for byte the
+  // configuration the clock sweep validated to 52fps; everything else stays at driver defaults.
+  //
+  // VTS 1294 rather than the 744 floor: fps = 80e6/(2060 x 1294) = 30.0, and max exposure is
+  // VTS-4 lines x 25.75us = 33.2ms - the classic 1/30s, 1.74x the headroom of the floor. In dim
+  // light the AEC then buys exposure before gain, so frames stay low-noise and small, which is
+  // what the storage budget wants. applyAecLimits() runs after this and derives the banding
+  // steps and exposure ceiling from these values, so they stay consistent by construction.
+  s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
+  s->set_reg(s, 0x3035, 0xFF, 0x11); // sys_div 1
+  s->set_reg(s, 0x3036, 0xFF, 120);  // mul -> VCO 800MHz, PIXCLK 80MHz
+  delay(50); // let the PLL relock, same settle setCamPll() uses
+  if (!senWrite16(s, 0x380E, 1294)) LOG_WRN("HD profile: VTS 1294 did not read back");
+  int gotMul = s->get_reg(s, 0x3036, 0xFF);
+  if (gotMul != 120) LOG_WRN("HD profile: PLL mul wrote 120 but reads %d", gotMul);
+  else LOG_INF("HD profile: PIXCLK 80MHz, VTS 1294 -> 30.0fps, max exposure 33.2ms");
+}
+
 static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // Everything set_framesize() does not do for us. It reloads the whole register block, so all
   // of this is lost on every call and has to follow every one of them - which is the reason it
@@ -419,7 +446,10 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // the binned ones, each returning immediately when handed the other's case
   applyCropWindow(s, fs);
   applyHtsFloor(s);
-  // last, because it reads back the HTS and VTS the two above have just settled
+  // the profile must precede applyAecLimits(), which derives banding and the exposure ceiling
+  // from whatever clock and VTS are in force by the time it reads them back
+  if (hdProfile && fs == FRAMESIZE_HD) applyHdProfile(s);
+  // last, because it reads back the HTS, VTS and clock the steps above have settled
   applyAecLimits(s);
 }
 

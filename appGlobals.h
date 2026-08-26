@@ -78,7 +78,7 @@
 // its web files from GITHUB_PATH on the next boot. Recordings and the WiFi credentials are
 // untouched - the credentials live in NVS, not on the card - but the download means the repo
 // must already hold the files you expect the board to come back with
-#define CFG_VER 50
+#define CFG_VER 51
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -345,6 +345,7 @@ extern bool useMotion; // whether to use camera for motion detection (with motio
 extern uint8_t colorDepth;
 extern int dashCamOn; // enable continuous recording, with given interval
 extern int maxFrames;
+extern int hdProfile; // HD runs the tuned 30fps / long-exposure profile, see applyHdProfile()
 extern uint8_t xclkMhz;
 extern char camModel[];
 extern bool doKeepFrame;
