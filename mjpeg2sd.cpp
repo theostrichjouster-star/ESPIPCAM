@@ -33,7 +33,11 @@ int captureSecs = 15; // fixed duration of a motion triggered recording
 // audio chunks are written every AUD_CHUNK_MIN bytes rather than every frame, so above
 // 4fps the index needs well under 2 entries per frame. Overflowing it now closes the
 // recording rather than rebooting, so this is a target rather than a hard ceiling
-int maxFrames = 10000; // maximum number of frames in video before auto close
+// Also the self-rescue bound. When the offered byte rate far exceeds the SD bus, HTTP can be
+// unreachable for the whole recording, so a stop command may never arrive - the recording
+// closing itself is then the only way back. 10000 frames meant up to ~20 minutes of that;
+// 3600 caps it at 3 minutes at the 20fps default, ~6-7 under heavy shedding
+int maxFrames = 3600; // maximum number of frames in video before auto close
 
 // status & control fields
 uint8_t FPS = 0;

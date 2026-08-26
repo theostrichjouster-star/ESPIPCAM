@@ -762,7 +762,7 @@ ntpServer~pool.ntp.org~0~T~NTP Server address
 alarmHour~1~2~N~Hour of day for daily actions
 refreshVal~5~2~N~Web page refresh rate (secs)
 responseTimeoutSecs~10~2~N~Server response timeout (secs)
-maxFrames~10000~1~N~Max frames in recording
+maxFrames~3600~1~N~Max frames in recording
 dashCamOn~0~98~~na
 moveStartChecks~5~1~N~Checks per second for start motion
 captureSecs~15~1~N~Motion recording length (secs)
