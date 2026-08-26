@@ -1775,6 +1775,41 @@ void setCamReg(const char* csv) {
   else LOG_INF("camReg: 0x%04lX = 0x%02lX", reg, val);
 }
 
+void avgZones(const char* unused) {
+  // Diagnostic for the tier-1 motion pre-filter: dump the AEC's own 4x4 zone luminance grid.
+  // Section 7.28: the sensor computes sixteen zone averages for its AEC at any resolution and
+  // exposes them at 0x5691-0x56A0, with the weighted aggregate YAVG at 0x56A1. Reading them is
+  // ~17 SCCB transactions - a scene sample with no frame decode at all.
+  //
+  // Also reports the two gates the pre-filter must respect:
+  //  - AEC stable: section 4.5 defines a deadband - the AEC holds exposure while YAVG sits
+  //    inside {0x3A1E .. 0x3A1B}. Zone diffs are only meaningful inside the band; outside it
+  //    the AEC is actively re-exposing and every zone moves at once.
+  //  - AF idle: a focus hunt refocuses the whole frame, which also moves every zone at once.
+  //    FW status codes are from the AF library's app-note derived header.
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->get_reg == NULL) return;
+  uint8_t z[16];
+  char zstr[80] = "";
+  for (int i = 0; i < 16; i++) {
+    int v = s->get_reg(s, 0x5691 + i, 0xFF);
+    z[i] = (v < 0) ? 0 : v;
+    sprintf(zstr + strlen(zstr), "%3u%s", z[i], (i % 4 == 3) ? " | " : " ");
+  }
+  int yavg = s->get_reg(s, 0x56A1, 0xFF);
+  int bandHi = s->get_reg(s, 0x3A1B, 0xFF);
+  int bandLo = s->get_reg(s, 0x3A1E, 0xFF);
+  bool aecStable = (yavg >= 0 && yavg >= bandLo && yavg <= bandHi);
+  int afStat = -1;
+#if INCLUDE_AF
+  afStat = ov5640AF.getFWStatus();
+#endif
+  bool afBusy = (afStat >= 0) && !(afStat == 0x70 || afStat == 0x10); // idle / focused
+  LOG_INF("AVG zones: %s YAVG %d band %d..%d %s, AF 0x%02X %s", zstr, yavg, bandLo, bandHi,
+    aecStable ? "AEC stable" : "AEC MOVING - zones invalid", afStat,
+    afBusy ? "BUSY - zones invalid" : "idle");
+}
+
 void getCamReg(const char* addr) {
   // debug: read one sensor register. The counterpart to setCamReg(), and needed by it - any
   // register holding unrelated bits (0x5001 holds the scale enable next to AWB and the colour

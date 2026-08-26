@@ -279,6 +279,7 @@ void setCamTilt(int tiltVal);
 void dumpCamRegs();
 void setCamReg(const char* csv);
 void getCamReg(const char* addr);
+void avgZones(const char* unused); // diagnostic: dump the AEC 4x4 zone grid, see mjpeg2sd.cpp
 void setCamPll(const char* csv);
 uint8_t setFPS(uint8_t val);
 uint8_t setFPSlookup(uint8_t val);
