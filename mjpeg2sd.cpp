@@ -1397,7 +1397,18 @@ bool prepRecording() {
 }
 
 void appShutdown() {
-  // nothing to flush on shutdown - motion recordings are closed by processFrame()
+  // nothing to flush on shutdown - motion recordings are closed by processFrame().
+  // The sensor, however, must not carry tuned state across a soft restart: the ESP resets but
+  // the OV5640 keeps power, and with the PLL retimed by the HD profile the next boot's camera
+  // probe can intermittently read a garbage PID and fail 0x106 ESP_ERR_NOT_SUPPORTED (observed
+  // after an OTA with hdProfile active; the retry boot recovered). 0x3008[7] is the sensor's
+  // software reset - all registers return to power-on defaults, so the probe always sees a
+  // factory-state part. Harmless when the state was stock
+  sensor_t* s = esp_camera_sensor_get();
+  if (s != NULL && s->set_reg != NULL) {
+    s->set_reg(s, 0x3008, 0xFF, 0x82); // software reset, then normal run state
+    delay(10);
+  }
 }
 
 static void deleteTask(TaskHandle_t& thisTaskHandle) {
