@@ -188,8 +188,10 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "xclkMhz")) xclkMhz = intVal;
   // takes effect on the next size change (or boot), when applySensorTuning() next runs - the
   // sensor cannot be retimed from the web task while the capture task may hold a frame
-  else if (!strcmp(variable, "hdProfile")) hdProfile = intVal;
-  else if (!strcmp(variable, "fhdProfile")) fhdProfile = intVal;
+  else if (!strcmp(variable, "tunedFps")) {
+    tunedFps = intVal;
+    if (playbackHandle != NULL) retimePending = true; // capture task re-times on next frame
+  }
   else if (!strcmp(variable, "mdAtCapture")) mdAtCapture = intVal; // effective from the next idle transition
   else if (!strcmp(variable, "framesize")) {
     // Compare pixels, not enum index. The custom sizes sit past framesize_t so they are
@@ -229,6 +231,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     FPS = intVal;
     captureFPS = intVal; // the user's rate for the capture size, preserved across switches
     if (playbackHandle != NULL) setFPS(FPS);
+    // with tuned timing the fps choice drives the sensor's VTS too; the capture task owns
+    // sensor writes, so only the flag is raised here (VTS-only change - no PLL relock)
+    if (tunedFps) retimePending = true;
   }
   else if (s) {
     if (!strcmp(variable, "quality")) res = s->set_quality(s, intVal);
@@ -720,8 +725,7 @@ sdLog~0~99~~na
 xclkMhz~20~98~~na
 ae_level~-2~98~~na
 aec~1~98~~na
-hdProfile~0~98~~na
-fhdProfile~0~98~~na
+tunedFps~0~98~~na
 mdAtCapture~0~98~~na
 aec2~0~98~~na
 aec_value~204~98~~na

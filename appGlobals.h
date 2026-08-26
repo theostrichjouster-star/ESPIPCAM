@@ -348,8 +348,8 @@ extern bool useMotion; // whether to use camera for motion detection (with motio
 extern uint8_t colorDepth;
 extern int dashCamOn; // enable continuous recording, with given interval
 extern int maxFrames;
-extern int hdProfile; // HD runs the tuned 30fps / long-exposure profile, see applyHdProfile()
-extern int fhdProfile; // FHD runs the tuned 15/12.5/10fps profile, see applyFhdProfile()
+extern int tunedFps; // fps choices drive the sensor's own timing, see applyTunedTiming()
+extern volatile bool retimePending; // fps changed - capture task retimes on the next frame
 extern int mdAtCapture; // detect motion at the capture size instead of dropping to VGA
 extern uint8_t xclkMhz;
 extern char camModel[];

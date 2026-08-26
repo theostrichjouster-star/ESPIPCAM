@@ -112,8 +112,11 @@ framesize_t maxFS = FRAMESIZE_SVGA; // default, sizes the camera frame buffers
 // AVI recording is capped here, but the frame size setting itself is not - there is only
 // one global fsizePtr, and stills read the same live frame, so capping the setting would
 // cap them too. Above this cap you still get full resolution stills, just no motion or
-// forced AVI recording
-framesize_t maxVideoFS = FRAMESIZE_FHD;
+// forced AVI recording.
+// QSXGA since the table 2-1 UI rework: 5MP video at the tuned ~7fps ceiling. The buffer
+// arithmetic: maxFrameBuffSize is QSXGA WxH/5 = 983KB and a q6 5MP frame runs ~600KB, so
+// the frame fits the buffer sized for it by prepCam() - verified, not assumed, in the sweep
+framesize_t maxVideoFS = FRAMESIZE_QSXGA;
 // what the sensor is set to right now. Initialised by prepCam() once fsizePtr is known
 framesize_t sensorFS = MOTION_DETECT_FS;
 
@@ -439,76 +442,60 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
 
 // defined further down, next to camClocks() which it needs for the line time
 static void applyAecLimits(sensor_t* s);
+static int senLineFactor(sensor_t* s);
 
-int hdProfile = 0; // config: 0 driver default, 1 the tuned 80MHz/30fps profile, 2 the in-spec-everywhere 40MHz/25fps profile
-int fhdProfile = 0; // config: 0 driver default, 1/2/3 = 15/12.5/10fps on the same in-spec 80MHz tree
+int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
 int mdAtCapture = 0; // config: detect motion at the capture size instead of dropping to VGA
+volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
 
-static void applyHdProfile(sensor_t* s) {
-  // The tuned HD recording profile: in-spec PLL at the sensor's own VCO maximum, and a longer
-  // frame bought deliberately for exposure headroom.
+static void applyTunedTiming(sensor_t* s, framesize_t fs) {
+  // The generalisation of the retired hdProfile/fhdProfile pair: at every video size, the
+  // fps setting IS the sensor's frame timing, hit exactly by computing VTS on the in-spec
+  // PLL. Replaces "the timer asks and the sensor delivers whatever the driver's clock tree
+  // happens to produce" with timing that agrees by construction.
   //
-  // PLL: pre_div 3 / sys_div 1 / mul 120 at XCLK 20MHz gives REFIN 6.67MHz, VCO 800MHz - the
-  // section 2.5 maximum, exactly in spec - and PIXCLK 80MHz, against table 8-5's typ 48 max 96
-  // with the measured image cliff at 88-92. The driver's own tree computes a nominal VCO of
-  // 2000MHz for its 50MHz PIXCLK, 2.5x over spec. These three writes are byte for byte the
-  // configuration the clock sweep validated to 52fps; everything else stays at driver defaults.
+  // PLL: pre_div 3 / sys_div 1 / mul 120 at XCLK 20MHz -> REFIN 6.67MHz, VCO 800MHz (the
+  // section 2.5 maximum, exactly in spec against the driver's nominal 2000) and PIXCLK 80MHz
+  // (table 8-5 typ 48 max 96, measured image cliff 88-92). Hardware-verified at HD (30.0fps
+  // dead-on) and FHD (15.004 counted); the per-size sweep extends that proof.
   //
-  // VTS 1294 rather than the 744 floor: fps = 80e6/(2060 x 1294) = 30.0, and max exposure is
-  // VTS-4 lines x 25.75us = 33.2ms - the classic 1/30s, 1.74x the headroom of the floor. In dim
-  // light the AEC then buys exposure before gain, so frames stay low-noise and small, which is
-  // what the storage budget wants. applyAecLimits() runs after this and derives the banding
-  // steps and exposure ceiling from these values, so they stay consistent by construction.
-  //
-  // hdProfile 2 keeps the identical VCO 800 tree and doubles sys_div (0x3035 0x11 -> 0x21) for
-  // PIXCLK 40MHz - the first configuration in spec on BOTH ends of the DVP link, since the
-  // ESP32-S3 receive side has its own ~40MHz PCLK ceiling that the driver default (50) and
-  // profile 1 (80) both exceed. Dividing down is preferred over lowering the VCO because the
-  // VCO's low end is less characterized than its verified maximum. Line time doubles to
-  // 51.5us, so VTS 776 gives fps = 40e6/(2060 x 776) = 25.0 and max exposure 772 lines =
-  // 39.8ms. Storage falls out at ~3.3MB/s for q6, under even the stock 40MHz SD bus ceiling.
-  // Exists to test whether an in-spec PCLK stops the zombie hangs; if it does, it becomes the
-  // recommended reliability profile
-  bool lowClk = (hdProfile == 2);
-  s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
-  s->set_reg(s, 0x3035, 0xFF, lowClk ? 0x21 : 0x11); // sys_div 2 or 1
-  s->set_reg(s, 0x3036, 0xFF, 120);  // mul -> VCO 800MHz
-  delay(50); // let the PLL relock, same settle setCamPll() uses
-  int wantVts = lowClk ? 776 : 1294;
-  if (!senWrite16(s, 0x380E, wantVts)) LOG_WRN("HD profile: VTS %d did not read back", wantVts);
-  int gotMul = s->get_reg(s, 0x3036, 0xFF);
-  if (gotMul != 120) LOG_WRN("HD profile: PLL mul wrote 120 but reads %d", gotMul);
-  else if (lowClk) LOG_INF("HD profile 2: PIXCLK 40MHz, VTS 776 -> 25.0fps, max exposure 39.8ms");
-  else LOG_INF("HD profile: PIXCLK 80MHz, VTS 1294 -> 30.0fps, max exposure 33.2ms");
-}
-
-static void applyFhdProfile(sensor_t* s) {
-  // The FHD counterpart to applyHdProfile(), layered on applyCropWindow()'s 1952x1096 read -
-  // by the time this runs the crop has already floored HTS at 2060 and set VTS to the 1112
-  // floor. Same in-spec PLL bytes as the HD profile: VCO 800MHz, the section 2.5 maximum, and
-  // PIXCLK 80MHz against the driver's 50. FHD cannot bin (a binned read of the 2592-wide
-  // array yields ~1312 columns), so fps = PIXCLK/(HTS x VTS)/2 and the ceiling at the VTS
-  // floor is 17.5fps; the profile trades some of that for even rates and exposure headroom:
-  //   1: VTS 1294 -> 15.0fps    2: VTS 1553 -> 12.5fps    3: VTS 1941 -> 10.0fps
-  // Every option RAISES VTS above the 1112 floor, which is added blanking and safe. The trap
-  // is the other direction - see the applyHtsFloor() warning: a full resolution VTS below
-  // rows+16 halves the readout into seamed split frames that decode cleanly and pass every
-  // automated check. Storage decides which option is usable; measured, not assumed
-  static const int fhdVts[] = {0, 1294, 1553, 1941};
-  static const char* fhdFps[] = {"", "15.0", "12.5", "10.0"};
-  if (fhdProfile < 1 || fhdProfile > 3) {
-    LOG_WRN("fhdProfile %d out of range 1-3, ignored", fhdProfile);
-    return;
-  }
+  // VTS = PIXCLK / (HTS x lineFactor x fps), the hardware-proven model - lineFactor is 2 at
+  // full resolution where a line costs 2 x HTS clocks. Clamped UPWARD only: never below the
+  // VTS already in force (the driver's own value binned, the crop's rows+16 full res),
+  // because raising VTS is blanking and safe while lowering it is the proven split-frame
+  // trap - seamed half-width frames that decode cleanly and pass every automated check.
+  // applyAecLimits() runs after this and derives banding steps and the exposure ceiling from
+  // whatever landed, so they stay consistent by construction. The 40MHz in-spec-everywhere
+  // variant (retired hdProfile 2) remains reproducible at runtime via camPll if the zombie
+  // investigation ever needs it again - see BOARD_TESTING.md
+  uint8_t fps = desiredFPS(fs);
+  if (fps < 1) fps = 1;
   s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
   s->set_reg(s, 0x3035, 0xFF, 0x11); // sys_div 1
   s->set_reg(s, 0x3036, 0xFF, 120);  // mul -> VCO 800MHz, PIXCLK 80MHz
-  delay(50); // let the PLL relock, same settle as the HD profile
-  int wantVts = fhdVts[fhdProfile];
-  if (!senWrite16(s, 0x380E, wantVts)) LOG_WRN("FHD profile: VTS %d did not read back", wantVts);
+  delay(50); // let the PLL relock, same settle setCamPll() uses
   int gotMul = s->get_reg(s, 0x3036, 0xFF);
-  if (gotMul != 120) LOG_WRN("FHD profile: PLL mul wrote 120 but reads %d", gotMul);
-  else LOG_INF("FHD profile %d: PIXCLK 80MHz, VTS %d -> %sfps", fhdProfile, wantVts, fhdFps[fhdProfile]);
+  if (gotMul != 120) {
+    LOG_WRN("Tuned timing: PLL mul wrote 120 but reads %d - VTS left alone", gotMul);
+    return;
+  }
+  int hts = senReg16(s, 0x380C);
+  int vtsNow = senReg16(s, 0x380E);
+  int lf = senLineFactor(s);
+  if (hts < 1 || vtsNow < 8) {
+    LOG_WRN("Tuned timing: HTS %d / VTS %d readback implausible - not retimed", hts, vtsNow);
+    return;
+  }
+  int vts = (int)(80000000UL / ((uint32_t)hts * lf * fps));
+  if (vts < vtsNow) {
+    LOG_WRN("Tuned timing: %ufps is beyond the %s ceiling %.1f - delivering the ceiling",
+      fps, frameData[fs].frameSizeStr, 80e6 / ((float)hts * lf * vtsNow));
+    vts = vtsNow;
+  }
+  if (vts > 0xFFFF) vts = 0xFFFF; // 16 bit register; ~0.02fps floor at HD, never plausible
+  if (!senWrite16(s, 0x380E, vts)) LOG_WRN("Tuned timing: VTS %d did not read back", vts);
+  else LOG_INF("Tuned timing %s: PIXCLK 80MHz, HTS %d x%d, VTS %d -> %.2ffps",
+    frameData[fs].frameSizeStr, hts, lf, vts, 80e6 / ((float)hts * lf * vts));
 }
 
 static void applySensorTuning(sensor_t* s, framesize_t fs) {
@@ -524,10 +511,9 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // the binned ones, each returning immediately when handed the other's case
   applyCropWindow(s, fs);
   applyHtsFloor(s);
-  // the profile must precede applyAecLimits(), which derives banding and the exposure ceiling
-  // from whatever clock and VTS are in force by the time it reads them back
-  if (hdProfile && fs == FRAMESIZE_HD) applyHdProfile(s);
-  if (fhdProfile && fs == FRAMESIZE_FHD) applyFhdProfile(s);
+  // the retiming must precede applyAecLimits(), which derives banding and the exposure
+  // ceiling from whatever clock and VTS are in force by the time it reads them back
+  if (tunedFps && videoSizeAllowed(fs)) applyTunedTiming(s, fs);
   // last, because it reads back the HTS, VTS and clock the steps above have settled
   applyAecLimits(s);
 }
@@ -583,8 +569,17 @@ static void settleSensor() {
   // stopped returning to MOTION_DETECT_FS
   if (isPlaying) return;
   framesize_t want = desiredSensorFS();
-  if (want != sensorFS) setSensorSize(want);
-  else if (FPS != desiredFPS(want)) {
+  if (want != sensorFS) {
+    setSensorSize(want); // runs applySensorTuning, so any pending retime is covered
+    retimePending = false;
+  } else if (retimePending && !isCapturing) {
+    // fps changed at a constant size. Only this task may retime the sensor (the web task
+    // cannot - the capture may hold a frame mid-flight), which is why the handler just
+    // raises the flag. With the tuned PLL already in force this is a VTS-only change:
+    // blanking, no relock. Deferred while capturing so a recording keeps one timing
+    retimePending = false;
+    applySensorTuning(esp_camera_sensor_get(), (framesize_t)sensorFS);
+  } else if (FPS != desiredFPS(want)) {
     // size is already right but the rate is not - happens after a playback restores the
     // browser's rate while the sensor is sitting at the detection size
     FPS = desiredFPS(want);
@@ -2143,7 +2138,7 @@ void lencFhd(const char* val) {
   // means a 4/3 LARGER reciprocal. The driver never writes these (power-on defaults 0x012B /
   // 0x018D / 0x018F / 0x0109), but the current values are read and scaled rather than assumed.
   // 1 applies the scaled set, 0 restores what was read before the first apply. Runtime only,
-  // lost on reboot - wired into applyFhdProfile() only if the eyeball verdict is favourable.
+  // lost on reboot - wired into applyTunedTiming()'s FHD path only if the eyeball verdict is favourable.
   // The verdict is necessarily a human one: flat-field corners, before vs after
   static int orig[4] = {-1, -1, -1, -1};
   static const int regs[4] = {0x5842, 0x5844, 0x5846, 0x5848};
