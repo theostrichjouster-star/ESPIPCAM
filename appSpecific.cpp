@@ -347,8 +347,11 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
       int hi = sen->get_reg(sen, 0x380E, 0xFF), lo = sen->get_reg(sen, 0x380F, 0xFF);
       if (hi >= 0 && lo >= 0) aecMax = ((hi << 8) | lo) - 4; // datasheet 4.6.2
     }
+    // captureFPS, not the row default: on a size change the framesize handler has already
+    // reset captureFPS to the new default before the UI asks, and on a plain page load the
+    // device's actual rate is the truth - the default would overwrite it in the browser
     sprintf(jsonBuff, "{\"fps\":\"%u\",\"opts\":\"%s\",\"aecMax\":\"%d\",\"budgetKBs\":\"%d\"}",
-      frameData[fsizePtr].defaultFPS, opts, aecMax, (sdBusKHz() > 50000) ? 4420 : 3550);
+      captureFPS, opts, aecMax, (sdBusKHz() > 50000) ? 4420 : 3550);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   }
