@@ -188,6 +188,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   // takes effect on the next size change (or boot), when applySensorTuning() next runs - the
   // sensor cannot be retimed from the web task while the capture task may hold a frame
   else if (!strcmp(variable, "hdProfile")) hdProfile = intVal;
+  else if (!strcmp(variable, "fhdProfile")) fhdProfile = intVal;
   else if (!strcmp(variable, "mdAtCapture")) mdAtCapture = intVal; // effective from the next idle transition
   else if (!strcmp(variable, "framesize")) {
     // Compare pixels, not enum index. The custom sizes sit past framesize_t so they are
@@ -719,6 +720,7 @@ xclkMhz~20~98~~na
 ae_level~-2~98~~na
 aec~1~98~~na
 hdProfile~0~98~~na
+fhdProfile~0~98~~na
 mdAtCapture~0~98~~na
 aec2~0~98~~na
 aec_value~204~98~~na

@@ -441,6 +441,7 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
 static void applyAecLimits(sensor_t* s);
 
 int hdProfile = 0; // config: 0 driver default, 1 the tuned 80MHz/30fps profile, 2 the in-spec-everywhere 40MHz/25fps profile
+int fhdProfile = 0; // config: 0 driver default, 1/2/3 = 15/12.5/10fps on the same in-spec 80MHz tree
 int mdAtCapture = 0; // config: detect motion at the capture size instead of dropping to VGA
 
 static void applyHdProfile(sensor_t* s) {
@@ -481,6 +482,35 @@ static void applyHdProfile(sensor_t* s) {
   else LOG_INF("HD profile: PIXCLK 80MHz, VTS 1294 -> 30.0fps, max exposure 33.2ms");
 }
 
+static void applyFhdProfile(sensor_t* s) {
+  // The FHD counterpart to applyHdProfile(), layered on applyCropWindow()'s 1952x1096 read -
+  // by the time this runs the crop has already floored HTS at 2060 and set VTS to the 1112
+  // floor. Same in-spec PLL bytes as the HD profile: VCO 800MHz, the section 2.5 maximum, and
+  // PIXCLK 80MHz against the driver's 50. FHD cannot bin (a binned read of the 2592-wide
+  // array yields ~1312 columns), so fps = PIXCLK/(HTS x VTS)/2 and the ceiling at the VTS
+  // floor is 17.5fps; the profile trades some of that for even rates and exposure headroom:
+  //   1: VTS 1294 -> 15.0fps    2: VTS 1553 -> 12.5fps    3: VTS 1941 -> 10.0fps
+  // Every option RAISES VTS above the 1112 floor, which is added blanking and safe. The trap
+  // is the other direction - see the applyHtsFloor() warning: a full resolution VTS below
+  // rows+16 halves the readout into seamed split frames that decode cleanly and pass every
+  // automated check. Storage decides which option is usable; measured, not assumed
+  static const int fhdVts[] = {0, 1294, 1553, 1941};
+  static const char* fhdFps[] = {"", "15.0", "12.5", "10.0"};
+  if (fhdProfile < 1 || fhdProfile > 3) {
+    LOG_WRN("fhdProfile %d out of range 1-3, ignored", fhdProfile);
+    return;
+  }
+  s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
+  s->set_reg(s, 0x3035, 0xFF, 0x11); // sys_div 1
+  s->set_reg(s, 0x3036, 0xFF, 120);  // mul -> VCO 800MHz, PIXCLK 80MHz
+  delay(50); // let the PLL relock, same settle as the HD profile
+  int wantVts = fhdVts[fhdProfile];
+  if (!senWrite16(s, 0x380E, wantVts)) LOG_WRN("FHD profile: VTS %d did not read back", wantVts);
+  int gotMul = s->get_reg(s, 0x3036, 0xFF);
+  if (gotMul != 120) LOG_WRN("FHD profile: PLL mul wrote 120 but reads %d", gotMul);
+  else LOG_INF("FHD profile %d: PIXCLK 80MHz, VTS %d -> %sfps", fhdProfile, wantVts, fhdFps[fhdProfile]);
+}
+
 static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // Everything set_framesize() does not do for us. It reloads the whole register block, so all
   // of this is lost on every call and has to follow every one of them - which is the reason it
@@ -497,6 +527,7 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // the profile must precede applyAecLimits(), which derives banding and the exposure ceiling
   // from whatever clock and VTS are in force by the time it reads them back
   if (hdProfile && fs == FRAMESIZE_HD) applyHdProfile(s);
+  if (fhdProfile && fs == FRAMESIZE_FHD) applyFhdProfile(s);
   // last, because it reads back the HTS, VTS and clock the steps above have settled
   applyAecLimits(s);
 }
