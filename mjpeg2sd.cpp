@@ -148,6 +148,32 @@ void controlFrameTimer(bool restartTimer) {
   }
 }
 
+static void recordingCamMode(bool starting) {
+  // Camera behaviour at recording boundaries: stop the two automatics whose mid-clip
+  // adjustments read as artifacts, restore them after.
+  //
+  // AWB: freeze via 0x5196[5] (datasheet table 7-22) rather than switching to manual gains -
+  // the AWB core keeps its state, colour just stops pumping for the duration of the clip.
+  // Gain-driven UV shift (5.10) is a different mechanism and still applies; this only stops
+  // the white point walking mid-recording.
+  //
+  // AF: the boot state is continuous autofocus, and a hunt refocuses the whole frame - focus
+  // breathing in the clip, and every motion cell lights at once. On start, one single-shot
+  // acquisition (CMD_MAIN 0x03, from the AF library's app-note derived header, not invented)
+  // which also takes the MCU out of continuous mode; fire and forget rather than blocking the
+  // first frames on a focus wait - the lens settles during the opening fraction of the clip.
+  // On close, continuous AF is restored.
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL) return;
+  s->set_reg(s, 0x5196, 0x20, starting ? 0x20 : 0x00); // AWB freeze bit only
+#if INCLUDE_AF
+  if (starting) {
+    s->set_reg(s, OV5640_CMD_ACK, 0xFF, 0x01);
+    s->set_reg(s, OV5640_CMD_MAIN, 0xFF, AF_TRIG_SINGLE_AUTO_FOCUS);
+  } else ov5640AF.autoFocusMode(); // back to the boot behaviour
+#endif
+}
+
 /**************** capture AVI  ************************/
 
 static void openAvi() {
@@ -161,6 +187,7 @@ static void openAvi() {
   aviFile = STORAGE.open(AVITEMP, FILE_WRITE);
   oTime = millis() - oTime;
   LOG_VRB("File opening time: %lums", oTime);
+  recordingCamMode(true); // freeze AWB, single-shot AF for the clip
 #if INCLUDE_AUDIO
   startAudioRecord();
 #endif
@@ -667,6 +694,7 @@ static void saveFrame(camera_fb_t* fb) {
 
 static bool closeAvi() {
   // closes the recorded file
+  recordingCamMode(false); // unfreeze AWB, restore continuous AF
   uint32_t vidDuration = millis() - startTime;
   uint32_t vidDurationSecs = lround(vidDuration / 1000.0);
   logLine();
