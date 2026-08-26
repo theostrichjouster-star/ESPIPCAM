@@ -982,7 +982,12 @@
                   </div>
                   <div class="input-group" id="quality-group">
                       <label for="quality">Quality</label>
-                      <input title="Set the recording quality" type="range" id="quality" min="4" max="63" value="10">
+                      <!-- floor is 6, not the sensor's minimum: below 6 an HD frame of a lit,
+                           detailed scene exceeds what the 1-bit SD bus (~3.5MB/s) can carry, the
+                           recorder sheds most of its frames, and the board can be unreachable for
+                           the length of the recording. Measured, not theoretical. The PY260 branch
+                           overrides this range from script and is unaffected -->
+                      <input title="Set the recording quality (lower = larger frames; floored where the SD card stops keeping up)" type="range" id="quality" min="6" max="63" value="10">
                   </div>
                   <div class="input-group" id="micGain-group">
                     <label for="micGain">Microphone Gain</label>
