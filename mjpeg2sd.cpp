@@ -1915,6 +1915,143 @@ void getCamReg(const char* addr) {
   else LOG_INF("camRegRd: 0x%04lX = 0x%02X (%d)", reg, got, got);
 }
 
+/************** XCLK and frame rate, measured off the hardware **************/
+// Everything else in this file infers the clocks: camClocks() ASSUMES xclkMhz reaches the
+// sensor, and PIXCLK is arithmetic on registers. These diagnostics close the loop with two
+// independent measurements that share no assumptions with that arithmetic.
+#include "soc/ledc_struct.h"
+#include "soc/gpio_struct.h"
+#include "soc/gpio_sig_map.h"
+#include "hal/gpio_ll.h"
+#include "driver/pulse_cnt.h"
+#include "esp_timer.h"
+
+static double pcntEdgeHz(int gpio, uint32_t gateMs, int frames) {
+  // count rising edges on a pin. frames == 0: free-running gate of gateMs, for MHz-range
+  // signals. frames > 0: edge-aligned window of that many events, for slow signals like VSYNC
+  // where a fixed gate would quantize badly (gateMs then acts as the timeout).
+  //
+  // The pin's own configuration is deliberately never touched. pcnt_new_channel() with a real
+  // gpio number runs gpio_config(), whose output-enable path reroutes the pad's matrix out
+  // signal to plain GPIO - on the XCLK pin that would disconnect the LEDC clock and stop the
+  // camera mid-measure. So the channel is created unrouted (edge_gpio_num -1) and the route is
+  // made by hand: IO_MUX input-enable (harmless alongside an output) plus a matrix connection
+  // into PCNT unit 0 channel 0. Nothing else in this firmware uses PCNT.
+  pcnt_unit_handle_t unit = NULL;
+  pcnt_channel_handle_t chan = NULL;
+  double hz = -1.0;
+  pcnt_unit_config_t ucfg = {};
+  ucfg.low_limit = -32768;
+  ucfg.high_limit = 32767;
+  ucfg.flags.accum_count = 1; // 16 bit counter, 20MHz signal: overflow every 1.6ms, accumulate
+  if (pcnt_new_unit(&ucfg, &unit) != ESP_OK) {
+    LOG_WRN("pcnt: unit alloc failed");
+    return -1.0;
+  }
+  do {
+    pcnt_chan_config_t ccfg = {};
+    ccfg.edge_gpio_num = -1;  // routed manually below, see comment above
+    ccfg.level_gpio_num = -1; // tied high inside the matrix by the driver
+    if (pcnt_new_channel(unit, &ccfg, &chan) != ESP_OK) break;
+    if (pcnt_channel_set_edge_action(chan, PCNT_CHANNEL_EDGE_ACTION_INCREASE,
+      PCNT_CHANNEL_EDGE_ACTION_HOLD) != ESP_OK) break;
+    pcnt_channel_set_level_action(chan, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_KEEP);
+    if (pcnt_unit_add_watch_point(unit, 32767) != ESP_OK) break; // accumulation trips here
+    gpio_ll_input_enable(&GPIO, (gpio_num_t)gpio);
+    esp_rom_gpio_connect_in_signal(gpio, PCNT_SIG_CH0_IN0_IDX, false);
+    if (pcnt_unit_enable(unit) != ESP_OK) break;
+    pcnt_unit_clear_count(unit);
+    pcnt_unit_start(unit);
+    int count = 0;
+    if (frames == 0) {
+      int64_t t0 = esp_timer_get_time();
+      delay(gateMs);
+      pcnt_unit_get_count(unit, &count);
+      int64_t gateUs = esp_timer_get_time() - t0;
+      if (count > 0 && gateUs > 0) hz = count * 1000000.0 / gateUs;
+    } else {
+      // wait for an edge so the window opens ON one, then time to the Nth after it
+      int64_t deadline = esp_timer_get_time() + (int64_t)gateMs * 1000;
+      int c0 = 0;
+      int64_t t0 = 0;
+      while (esp_timer_get_time() < deadline) {
+        pcnt_unit_get_count(unit, &count);
+        if (count > 0) { c0 = count; t0 = esp_timer_get_time(); break; }
+        delay(1);
+      }
+      if (t0 > 0) {
+        while (esp_timer_get_time() < deadline) {
+          pcnt_unit_get_count(unit, &count);
+          if (count >= c0 + frames) break;
+          delay(1);
+        }
+        int64_t spanUs = esp_timer_get_time() - t0;
+        if (count > c0 && spanUs > 0) hz = (count - c0) * 1000000.0 / spanUs;
+      }
+    }
+    pcnt_unit_stop(unit);
+  } while (false);
+  // teardown releases the unit for the next call; the matrix route is left pointing at a
+  // disabled unit, which reads nothing, and the pad input-enable bit is harmless to keep
+  if (unit != NULL) pcnt_unit_disable(unit);
+  if (chan != NULL) pcnt_del_channel(chan);
+  if (unit != NULL) {
+    pcnt_unit_remove_watch_point(unit, 32767);
+    pcnt_del_unit(unit);
+  }
+  return hz;
+}
+
+void xclkStat(const char* unused) {
+  // ground truth for the clock chain, in three layers that share no assumptions:
+  // 1. what the LEDC hardware is programmed to generate (register readback, incl. the
+  //    fractional divider bits that decide whether XCLK is cycle-exact or dithered)
+  // 2. what frequency actually toggles on the XCLK pad (PCNT hardware count)
+  // 3. what frame rate the sensor actually delivers on VSYNC, which x HTS x VTS implies the
+  //    real PIXCLK - the one number no register on the ESP32 side can ever report
+  if (isCapturing) {
+    LOG_WRN("xclkStat: refused while capturing");
+    return;
+  }
+  // 1: the camera's timer is LEDC_TIMER_1 low speed (prepCam), and on the S3 the low speed
+  // block is the only one. Divider is 10.8 fixed point; output = src / (div x 2^duty_res)
+  uint32_t raw = LEDC.timer_group[0].timer[LEDC_TIMER_1].conf.clock_divider;
+  uint32_t dutyRes = LEDC.timer_group[0].timer[LEDC_TIMER_1].conf.duty_resolution;
+  uint32_t srcSel = LEDC.conf.apb_clk_sel; // 1 = APB 80MHz, 2 = RC_FAST ~17.5MHz, 3 = XTAL 40MHz
+  const char* srcName = (srcSel == 1) ? "APB 80MHz" : (srcSel == 3) ? "XTAL 40MHz"
+    : (srcSel == 2) ? "RC_FAST ~17.5MHz" : "INVALID";
+  double srcHz = (srcSel == 1) ? 80e6 : (srcSel == 3) ? 40e6 : (srcSel == 2) ? 17.5e6 : 0;
+  uint32_t frac = raw & 0xFF;
+  double div = raw / 256.0;
+  double ledcHz = (raw > 0 && dutyRes > 0) ? srcHz / (div * (1 << dutyRes)) : 0;
+  LOG_INF("LEDC: src %s, divider %.4f (raw 0x%lX, frac %lu/256 - %s), duty res %lu bit -> %.3fMHz programmed",
+    srcName, div, (unsigned long)raw, (unsigned long)frac,
+    frac ? "DITHERED, edges jitter by one src cycle" : "cycle exact", (unsigned long)dutyRes,
+    ledcHz / 1e6);
+  // 2: count the pad itself. PCNT samples on the 80MHz APB clock, reliable to roughly half
+  // that, so 20MHz XCLK is in range and 40 is marginal - flagged rather than trusted
+  double xclkHz = pcntEdgeHz(XCLK_GPIO_NUM, 100, 0);
+  if (xclkHz < 0) LOG_WRN("XCLK count failed");
+  else LOG_INF("XCLK counted: %.4fMHz on GPIO%d over 100ms%s", xclkHz / 1e6, XCLK_GPIO_NUM,
+    (xclkHz > 35e6) ? " (above ~40MHz PCNT undercounts - treat as a floor)" : "");
+  // 3: frame rate off the VSYNC pad, edge aligned over 60 frames (2-3s at these rates)
+  double vsyncHz = pcntEdgeHz(VSYNC_GPIO_NUM, 10000, 60);
+  if (vsyncHz < 0) {
+    LOG_WRN("VSYNC count failed - no frames inside 10s");
+    return;
+  }
+  sensor_t* s = esp_camera_sensor_get();
+  int hts = (s != NULL) ? camReg16(s, OV5640_X_TOTAL_SIZE) : -1;
+  int vts = (s != NULL) ? camReg16(s, OV5640_X_TOTAL_SIZE + 2) : -1;
+  int vtsExtra = (s != NULL) ? camReg16(s, OV5640_AEC_PK_VTS) : 0;
+  if (vtsExtra < 0) vtsExtra = 0;
+  if (hts > 0 && vts > 0) {
+    double implied = vsyncHz * hts * (vts + vtsExtra);
+    LOG_INF("VSYNC counted: %.3ffps over 60 frames -> implied PIXCLK %.2fMHz (HTS %d x VTS %d+%d), vs %.2fMHz computed",
+      vsyncHz, implied / 1e6, hts, vts, vtsExtra, camClocks(s).pixClk / 1e6);
+  } else LOG_INF("VSYNC counted: %.3ffps over 60 frames (HTS/VTS readback failed, no implied PIXCLK)", vsyncHz);
+}
+
 void setCamPll(const char* csv) {
   // apply an arbitrary PLL config, for sweeping at a fixed XCLK
   // csv is the 8 public set_pll() args: bypass,mul,sys_div,root_2x,pre_div,seld5,pclk_manual,pclk_div

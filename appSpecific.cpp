@@ -183,6 +183,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "camRegRd")) getCamReg(value);
   else if (!strcmp(variable, "sdBusClk")) sdBusClk(value); // 0 reports, 2-16 sets the host divider
   else if (!strcmp(variable, "avgZones")) avgZones(value); // dump the AEC 4x4 zone grid + gates
+  else if (!strcmp(variable, "xclkStat")) xclkStat(value); // measure XCLK and VSYNC off the pins
   else if (!strcmp(variable, "xclkMhz")) xclkMhz = intVal;
   // takes effect on the next size change (or boot), when applySensorTuning() next runs - the
   // sensor cannot be retimed from the web task while the capture task may hold a frame
