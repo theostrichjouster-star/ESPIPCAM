@@ -102,6 +102,13 @@ void sdBusClk(const char* val) {
     freqKhz > 40000 ? " - ABOVE SD High Speed, verify data integrity before believing any speed" : "");
 }
 
+int sdBusKHz() {
+  // the live SD bus clock, read from the host registers - the storage budget follows it
+  int freqKhz = 0;
+  sdmmc_host_get_real_freq(SDMMC_HOST_SLOT_1, &freqKhz);
+  return freqKhz;
+}
+
 static bool prepSD_MMC() {
   bool res = false;
 #if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)

@@ -308,13 +308,33 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     httpd_resp_sendstr(req, jsonBuff);
   } 
   else if (!strcmp(variable, "updateFPS")) {
-    // Report the capture resolution's default rate for the slider. Must not go through
+    // Report the capture resolution's rate menu and headroom. Must not go through
     // setFPSlookup(), which calls setFPS() and so retunes the live frame timer - a UI poll
-    // while idle at MOTION_DETECT_FS would otherwise yank the timer to the capture rate
-    sprintf(jsonBuff, "{\"fps\":\"%u\"}", frameData[fsizePtr].defaultFPS);
+    // while idle at MOTION_DETECT_FS would otherwise yank the timer to the capture rate.
+    // opts: the standard rates at or under the size's tuned ceiling when tunedFps is on,
+    // else just the single measured driver-clock rate (stock behaviour). aecMax: the manual
+    // exposure ceiling in lines, VTS-4 read from the LIVE sensor so the slider tracks
+    // whatever timing is actually in force. budgetKBs: the measured storage ceiling for the
+    // bus clock currently set - 4420 measured at 53.3MHz, 3550 at the stock 40
+    static const uint8_t menuRates[] = {50, 40, 30, 25, 20, 15, 12, 10, 8, 5, 3, 1};
+    char opts[64] = "";
+    uint16_t ceilFPS = frameData[fsizePtr].maxTunedFPS;
+    if (tunedFps && ceilFPS) {
+      for (uint8_t i = 0; i < sizeof(menuRates); i++)
+        if (menuRates[i] <= ceilFPS)
+          sprintf(opts + strlen(opts), "%s%u", strlen(opts) ? "," : "", menuRates[i]);
+    } else sprintf(opts, "%u", frameData[fsizePtr].defaultFPS);
+    int aecMax = 1200; // the historical slider cap, kept when the sensor cannot be read
+    sensor_t* sen = esp_camera_sensor_get();
+    if (sen != NULL && sen->get_reg != NULL) {
+      int hi = sen->get_reg(sen, 0x380E, 0xFF), lo = sen->get_reg(sen, 0x380F, 0xFF);
+      if (hi >= 0 && lo >= 0) aecMax = ((hi << 8) | lo) - 4; // datasheet 4.6.2
+    }
+    sprintf(jsonBuff, "{\"fps\":\"%u\",\"opts\":\"%s\",\"aecMax\":\"%d\",\"budgetKBs\":\"%d\"}",
+      frameData[fsizePtr].defaultFPS, opts, aecMax, (sdBusKHz() > 50000) ? 4420 : 3550);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
-  } 
+  }
   else if (!strcmp(variable, "still")) {
     // send single jpeg to browser
     uint32_t startTime = millis();

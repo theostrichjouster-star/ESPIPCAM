@@ -485,6 +485,11 @@ struct frameStruct {
   const uint16_t defaultFPS;
   const uint8_t scaleFactor; // (0..3) see esp_jpeg_image_scale_t
   const uint8_t sampleRate; // (1..N)
+  // ceiling with tunedFps: PIXCLK 80 at the size's VTS/HTS floors, fps = 80e6/(HTS x lf x VTS).
+  // Values are the sweep's to own: rows the sweep has verified are measured, the rest are
+  // model predictions from the measured HTS/VTS floors and are marked in the row comments.
+  // 0 = no tuned menu (stills-only or unreachable rows)
+  const uint16_t maxTunedFPS;
 };
 
 // indexed by frame size - needs to be consistent with sensor.h framesize_t enum
@@ -563,36 +568,36 @@ struct frameStruct {
 // that detail loss was judged not worth the 19 ms. Since 19439ee checkMotion() compares the
 // decoded bitmap at its native size, so a coarser source really is a coarser compare.
 const frameStruct frameData[] = {
-  {"96X96", 96, 96, 18, 1, 1},     // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160)
-  {"QQVGA", 160, 120, 18, 1, 1},   // measured 19.7 flat out
-  {"128X128", 128, 128, 18, 1, 1}, // PY260
-  {"QCIF", 176, 144, 18, 1, 1},
-  {"HQVGA", 240, 176, 18, 2, 1},
-  {"240X240", 240, 240, 18, 2, 1},
-  {"QVGA", 320, 240, 20, 2, 1},    // PY260 | measured 22.2 flat out (PLL tier 180)
-  {"320X320", 320, 320, 20, 2, 1}, // PY260 only
-  {"CIF", 400, 296, 20, 2, 1},
-  {"HVGA", 480, 320, 20, 2, 1},
-  {"VGA", 640, 480, 20, 3, 1},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2
-  {"SVGA", 800, 600, 21, 3, 1},    // measured 22.1, already at HTS_FLOOR
-  {"XGA", 1024, 768, 24, 3, 1},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it
-  {"HD", 1280, 720, 30, 3, 1},     // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it
-  {"SXGA", 1280, 1024, 11, 3, 1},  // measured 11.3 cropped, 4.6 before it
-  {"UXGA", 1600, 1200, 9, 3, 1},   // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below
-  {"FHD", 1920, 1080, 10, 3, 1},   // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before
-  {"P_HD", 720, 1280, 9, 3, 1},    // measured 9.9 cropped, 5.0 before
-  {"P_3MP", 864, 1536, 4, 3, 1},   // OV3660 only - not selectable on this sensor, set by analogy
-  {"QXGA", 2048, 1536, 7, 4, 1},   // stills only, so not measurable by recording - 7.2 predicted cropped
-  {"QHD", 2560, 1440, 2, 4, 1},    // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin
-  {"WQXGA", 2560, 1600, 2, 4, 1},  // measured 2.8 @ 85% busy at req 3, backed off
-  {"P_FHD", 1080, 1920, 4, 3, 1},  // measured 4.0 @ 37% busy | scale 3 not 4, see below
-  {"QSXGA", 2560, 1920, 2, 4, 1},  // measured 2.0 @ 59% busy
-  {"5MP", 2592, 1944, 4, 4, 1},    // PY260 only - unreachable on OV5640, left as inherited
+  {"96X96", 96, 96, 18, 1, 1, 39}, // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160) | tuned 39 predicted
+  {"QQVGA", 160, 120, 18, 1, 1, 39},   // measured 19.7 flat out | tuned 39 predicted
+  {"128X128", 128, 128, 18, 1, 1, 39}, // PY260
+  {"QCIF", 176, 144, 18, 1, 1, 39},
+  {"HQVGA", 240, 176, 18, 2, 1, 39},
+  {"240X240", 240, 240, 18, 2, 1, 39},
+  {"QVGA", 320, 240, 20, 2, 1, 39},    // PY260 | measured 22.2 flat out (PLL tier 180) | tuned 39 predicted (binned window VTS 984)
+  {"320X320", 320, 320, 20, 2, 1, 39}, // PY260 only
+  {"CIF", 400, 296, 20, 2, 1, 39},
+  {"HVGA", 480, 320, 20, 2, 1, 39},
+  {"VGA", 640, 480, 20, 3, 1, 39},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2 | tuned 39 predicted
+  {"SVGA", 800, 600, 21, 3, 1, 39},    // measured 22.1, already at HTS_FLOOR | tuned 39 predicted
+  {"XGA", 1024, 768, 24, 3, 1, 39},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it | tuned 39 predicted
+  {"HD", 1280, 720, 30, 3, 1, 52},     // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52 MEASURED (clock sweep, VTS 744)
+  {"SXGA", 1280, 1024, 11, 3, 1, 18},  // measured 11.3 cropped, 4.6 before it | tuned 18 predicted
+  {"UXGA", 1600, 1200, 9, 3, 1, 15},   // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below | tuned 15 predicted
+  {"FHD", 1920, 1080, 10, 3, 1, 17},   // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before | tuned: 15 MEASURED, 17 ceiling predicted (VTS floor 1112)
+  {"P_HD", 720, 1280, 9, 3, 1, 14},    // measured 9.9 cropped, 5.0 before | tuned 14 predicted
+  {"P_3MP", 864, 1536, 4, 3, 1, 0},    // OV3660 only - not selectable on this sensor, set by analogy
+  {"QXGA", 2048, 1536, 7, 4, 1, 11},   // was stills only - 7.2 predicted cropped at driver clock | tuned 11 predicted
+  {"QHD", 2560, 1440, 2, 4, 1, 9},     // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin | tuned 9 predicted (no crop possible - full array read)
+  {"WQXGA", 2560, 1600, 2, 4, 1, 8},   // measured 2.8 @ 85% busy at req 3, backed off | tuned 8 predicted
+  {"P_FHD", 1080, 1920, 4, 3, 1, 9},   // measured 4.0 @ 37% busy | scale 3 not 4, see below | tuned 9 predicted
+  {"QSXGA", 2560, 1920, 2, 4, 1, 7},   // measured 2.0 @ 59% busy | tuned 7 predicted (full array, HTS 2844 x2, VTS 1968)
+  {"5MP", 2592, 1944, 4, 4, 1, 0},     // PY260 only - unreachable on OV5640, left as inherited
   // Custom sizes past the driver's framesize_t. That enum lives in the precompiled
   // esp32-camera library, so a size it lacks has to be carried here instead. Rows below this
   // point are never handed to the driver - setSensorSize() maps them onto a base size and
   // then overrides only the registers that differ
-  {"1280X960", 1280, 960, 24, 3, 1} // measured 24.5 at HTS_FLOOR, 19.1 before it
+  {"1280X960", 1280, 960, 24, 3, 1, 39} // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39 predicted (XGA timing)
 };
 
 // 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
