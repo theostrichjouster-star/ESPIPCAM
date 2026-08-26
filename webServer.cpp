@@ -405,10 +405,20 @@ esp_err_t uploadHandler(httpd_req_t *req) {
     int cmd = (strstr(inFileName, "spiffs") != NULL) ? U_SPIFFS : U_FLASH;
     if (cmd == U_SPIFFS) STORAGE.end(); // close relevant file system
     if (Update.begin(UPDATE_SIZE_UNKNOWN, cmd)) {
+      // The timeout arm below must be bounded. A half open socket - sender vanished mid
+      // transfer, no RST ever delivered - makes httpd_req_recv() return TIMEOUT indefinitely,
+      // and an unbounded retry held the only httpd worker in this loop with the tasks and
+      // watchdog already torn down by OTAprereq(): the board answered pings for ever and never
+      // served HTTP again. A clean disconnect errors and breaks; only the stall had no exit
+      uint32_t lastData = millis();
       do {
         bytesRead = httpd_req_recv(req, jsonBuff, rxSize);
-        if (bytesRead < 0) {  
+        if (bytesRead < 0) {
           if (bytesRead == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (millis() - lastData > 30000) {
+              LOG_WRN("OTA upload stalled for 30s with %u bytes outstanding", fileSize);
+              break;
+            }
             delay(10);
             continue;
           } else {
@@ -416,17 +426,22 @@ esp_err_t uploadHandler(httpd_req_t *req) {
             break;
           }
         }
+        lastData = millis();
         Update.write((uint8_t*)jsonBuff, (size_t)bytesRead);
         Update.onProgress(progress);
         fileSize -= bytesRead;
       } while (bytesRead > 0);
       if (!fileSize) Update.end(true); // true to set the size to the current progress
     }
-    if (Update.hasError()) LOG_WRN("OTA failed with error: %s", Update.errorString());
-    else LOG_INF("OTA update complete for %s", cmd == U_FLASH ? "Sketch" : "SPIFFS");
+    // an aborted transfer leaves bytes outstanding without any Update error, so success is
+    // completion, not merely the absence of a write failure. The restart runs either way -
+    // an incomplete image sits in the inactive slot and is discarded by rebooting the active one
+    bool otaOk = !Update.hasError() && !fileSize;
+    if (otaOk) LOG_INF("OTA update complete for %s", cmd == U_FLASH ? "Sketch" : "SPIFFS");
+    else LOG_WRN("OTA failed: %s", Update.hasError() ? Update.errorString() : "transfer incomplete");
     httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_sendstr(req, Update.hasError() ? "OTA update failed, restarting ..." : "OTA update complete, restarting ...");   
+    httpd_resp_sendstr(req, otaOk ? "OTA update complete, restarting ..." : "OTA update failed, restarting ...");
     doRestart("Restart after OTA");
 
   } else {
@@ -434,11 +449,19 @@ esp_err_t uploadHandler(httpd_req_t *req) {
     File uf = STORAGE.open(inFileName, FILE_WRITE);
     if (!uf) LOG_WRN("Failed to open %s on storage", inFileName);
     else {
-      // obtain file content
+      // obtain file content. Same stall bound as the OTA branch: a half open socket returns
+      // TIMEOUT for ever and would hold the only httpd worker - here the board is otherwise
+      // intact, so breaking with a failure is enough and no restart is needed
+      uint32_t lastData = millis();
       do {
         bytesRead = httpd_req_recv(req, jsonBuff, rxSize);
-        if (bytesRead < 0) {  
+        if (bytesRead < 0) {
           if (bytesRead == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (millis() - lastData > 30000) {
+              LOG_WRN("Upload of %s stalled for 30s, abandoned", inFileName);
+              bytesRead = -1;
+              break;
+            }
             delay(10);
             continue;
           } else {
@@ -446,6 +469,7 @@ esp_err_t uploadHandler(httpd_req_t *req) {
             break;
           }
         }
+        lastData = millis();
         uf.write((const uint8_t*)jsonBuff, bytesRead);
       } while (bytesRead > 0);
       uf.close();
