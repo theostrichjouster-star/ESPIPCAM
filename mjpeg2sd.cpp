@@ -1617,6 +1617,20 @@ static int camReg16(sensor_t* s, int reg) {
   return (hi < 0 || lo < 0) ? -1 : ((hi << 8) | lo);
 }
 
+static int senLineFactor(sensor_t* s) {
+  // Pixel clocks per line, as a multiple of HTS. A binned readout completes a line in HTS
+  // clocks; a full resolution readout takes 2 x HTS. Proven by hardware count on 26 Aug 2026:
+  // at FHD with HTS 2060, VTS 1294 and PIXCLK 80MHz the VSYNC pin delivered exactly 15.0fps -
+  // half the plain HTS x VTS arithmetic - which pins the full resolution line time at
+  // 2 x HTS / PIXCLK (51.5us there). The frameData model always carried this /2 for fps;
+  // everything converting between LINES and TIME needs the same factor or it reports 2x off
+  // at full resolution: banding steps, exposure milliseconds, frame period
+  if (s == NULL || s->get_reg == NULL) return 1;
+  int xInc = s->get_reg(s, 0x3814, 0xFF); // [7:4] odd + [3:0] even increment, ratio is the mean
+  if (xInc < 0) return 1; // unreadable: assume binned, which leaves the verified HD path alone
+  return ((((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2 >= 2) ? 1 : 2;
+}
+
 // The decoded PLL tree, gathered so that everything needing the pixel clock reads the same
 // number. It used to be computed inline inside dumpCamRegs(), which was fine while only the
 // instrument wanted it - the banding filter now wants it too, and two copies of this arithmetic
@@ -1712,8 +1726,10 @@ static void applyAecLimits(sensor_t* s) {
     LOG_WRN("AEC limits not applied: clock %s, HTS %d, VTS %d", c.valid ? "ok" : "undecodable", hts, vts);
     return;
   }
-  int b50 = c.pixClk / (100 * hts);         // lines per 50Hz half cycle
-  int b60 = c.pixClk / (120 * hts);         // lines per 60Hz half cycle
+  // line time is HTS clocks binned, 2 x HTS at full resolution - see senLineFactor()
+  int lf = senLineFactor(s);
+  int b50 = c.pixClk / (100 * hts * lf);    // lines per 50Hz half cycle
+  int b60 = c.pixClk / (120 * hts * lf);    // lines per 60Hz half cycle
   int maxExp = vts - 4;                     // datasheet 4.6.2: exposure must leave 4 lines
   // 10 bit fields, and a zero step would make the AEC divide by it
   if (b50 < 1 || b60 < 1 || b50 > 0x3FF || b60 > 0x3FF || maxExp < 1 || maxExp > 0xFFFF) {
@@ -1772,7 +1788,11 @@ void dumpCamRegs() {
   int yInc = camReg(s, OV5640_Y_INCREMENT);
   float xBin = (xInc < 0) ? 0.0f : (float)(((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2.0f;
   float yBin = (yInc < 0) ? 0.0f : (float)(((yInc >> 4) & 0x0F) + (yInc & 0x0F)) / 2.0f;
-  float frameClks = (float)hts * vtsEff;
+  // a full resolution line costs 2 x HTS clocks (senLineFactor() - hardware-proven via the
+  // VSYNC count), so the frame clock count, the fps ceiling and the exposure milliseconds
+  // below all carry the factor; without it every full resolution figure here read 2x optimistic
+  int lineFactor = senLineFactor(s);
+  float frameClks = (float)hts * vtsEff * lineFactor;
   bool haveTiming = (hts > 0 && vtsEff > 0);
   float fpsPix = haveTiming ? (float)pixClk / frameClks : 0.0;
   float fpsDriverPclk = haveTiming ? (float)pclkDriver / frameClks : 0.0;
@@ -1800,8 +1820,8 @@ void dumpCamRegs() {
     vco / 1000000.0);
   // section 6.6 specifies DVP sync widths in "PCLK unit", so HTS x VTS is a count of pixel
   // clocks and the frame period follows from the pixel clock, not from the ISP's SysClk
-  LOG_INF("Timing: HTS %d, VTS %d + %d AEC extra = %d effective, %.0f pixel clocks/frame",
-    hts, vts, vtsExtra, vtsEff, frameClks);
+  LOG_INF("Timing: HTS %d x%d clocks/line, VTS %d + %d AEC extra = %d effective, %.0f pixel clocks/frame",
+    hts, lineFactor, vts, vtsExtra, vtsEff, frameClks);
   LOG_INF("Ceiling: %.1f fps on PIXCLK basis, %.1f on the driver's PCLK figure (app FPS %u)",
     fpsPix, fpsDriverPclk, FPS);
   // Exposure and gain belong next to the frame timing because they are the same trade: the
@@ -1813,7 +1833,7 @@ void dumpCamRegs() {
   int gainCeil = camReg16(s, OV5640_AEC_GAIN_CEIL) & 0x3FF;
   int aec00 = camReg(s, OV5640_AEC_CTRL00);
   float expLines = (expRaw < 0) ? 0.0f : (float)(expRaw & 0xFFFFF) / 16.0f;
-  float expMs = (pixClk > 0 && hts > 0) ? expLines * hts * 1000.0f / pixClk : 0.0f;
+  float expMs = (pixClk > 0 && hts > 0) ? expLines * hts * lineFactor * 1000.0f / pixClk : 0.0f;
   LOG_INF("Exposure: %.1f lines = %.2fms of the %.2fms frame, gain %.2fx (ceiling %.2fx), night mode %s",
     expLines, expMs, (fpsPix > 0) ? 1000.0f / fpsPix : 0.0f, gainRaw / 16.0f, gainCeil / 16.0f,
     (aec00 < 0) ? "?" : ((aec00 & 0x04) ? "ON - frame may extend" : "off"));
@@ -2106,9 +2126,11 @@ void xclkStat(const char* unused) {
   int vtsExtra = (s != NULL) ? camReg16(s, OV5640_AEC_PK_VTS) : 0;
   if (vtsExtra < 0) vtsExtra = 0;
   if (hts > 0 && vts > 0) {
-    double implied = vsyncHz * hts * (vts + vtsExtra);
-    LOG_INF("VSYNC counted: %.3ffps over 60 frames -> implied PIXCLK %.2fMHz (HTS %d x VTS %d+%d), vs %.2fMHz computed",
-      vsyncHz, implied / 1e6, hts, vts, vtsExtra, camClocks(s).pixClk / 1e6);
+    // full resolution lines cost 2 x HTS clocks (senLineFactor), or the implied figure halves
+    int lf = senLineFactor(s);
+    double implied = vsyncHz * hts * lf * (vts + vtsExtra);
+    LOG_INF("VSYNC counted: %.3ffps over 60 frames -> implied PIXCLK %.2fMHz (HTS %d x%d x VTS %d+%d), vs %.2fMHz computed",
+      vsyncHz, implied / 1e6, hts, lf, vts, vtsExtra, camClocks(s).pixClk / 1e6);
   } else LOG_INF("VSYNC counted: %.3ffps over 60 frames (HTS/VTS readback failed, no implied PIXCLK)", vsyncHz);
 }
 
