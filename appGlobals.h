@@ -350,6 +350,8 @@ extern int dashCamOn; // enable continuous recording, with given interval
 extern int maxFrames;
 extern int tunedFps; // fps choices drive the sensor's own timing, see applyTunedTiming()
 extern volatile bool retimePending; // fps changed - capture task retimes on the next frame
+extern volatile int pendingFS; // size chosen mid-recording, applied when the clip closes
+extern volatile int pendingFPS; // rate chosen mid-recording, applied when the clip closes
 extern int mdAtCapture; // detect motion at the capture size instead of dropping to VGA
 extern uint8_t xclkMhz;
 extern char camModel[];

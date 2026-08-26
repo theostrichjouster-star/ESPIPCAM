@@ -447,6 +447,12 @@ static int senLineFactor(sensor_t* s);
 int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
 int mdAtCapture = 0; // config: detect motion at the capture size instead of dropping to VGA
 volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
+// a size or rate chosen MID-RECORDING is deferred here rather than applied, so one AVI keeps
+// one geometry and one timing throughout - its header carries a single WxH and fps, and
+// settleSensor() used to follow fsizePtr on the next frame regardless of what was consuming
+// the stream. Applied by settleSensor() from a quiet state when the recording closes
+volatile int pendingFS = -1;
+volatile int pendingFPS = -1;
 
 static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // The generalisation of the retired hdProfile/fhdProfile pair: at every video size, the
@@ -568,6 +574,20 @@ static void settleSensor() {
   // it froze sensorFS for the rest of the session: the sensor stopped following fsizePtr and
   // stopped returning to MOTION_DETECT_FS
   if (isPlaying) return;
+  if (!isCapturing && (pendingFS >= 0 || pendingFPS >= 0)) {
+    // choices made mid-recording, applied now that the clip has closed. Size first with the
+    // usual reset to the new size's default rate, then an explicit rate choice on top of it
+    if (pendingFS >= 0) {
+      fsizePtr = pendingFS;
+      captureFPS = frameData[fsizePtr].defaultFPS;
+      pendingFS = -1;
+    }
+    if (pendingFPS >= 0) {
+      captureFPS = pendingFPS;
+      pendingFPS = -1;
+      if (tunedFps) retimePending = true;
+    }
+  }
   framesize_t want = desiredSensorFS();
   if (want != sensorFS) {
     setSensorSize(want); // runs applySensorTuning, so any pending retime is covered
@@ -579,6 +599,10 @@ static void settleSensor() {
     // blanking, no relock. Deferred while capturing so a recording keeps one timing
     retimePending = false;
     applySensorTuning(esp_camera_sensor_get(), (framesize_t)sensorFS);
+    if (FPS != desiredFPS(sensorFS)) {
+      FPS = desiredFPS(sensorFS);
+      controlFrameTimer(true);
+    }
   } else if (FPS != desiredFPS(want)) {
     // size is already right but the rate is not - happens after a playback restores the
     // browser's rate while the sensor is sitting at the detection size

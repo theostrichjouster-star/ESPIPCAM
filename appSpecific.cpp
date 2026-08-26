@@ -205,6 +205,13 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     else if ((uint32_t)frameData[intVal].frameWidth * frameData[intVal].frameHeight
            > (uint32_t)frameData[maxFS].frameWidth * frameData[maxFS].frameHeight && fromUser)
       LOG_WRN("Frame size %s too large for %s PSRAM ", frameData[intVal].frameSizeStr, fmtSize(ESP.getPsramSize()));
+    else if (isCapturing && fromUser) {
+      // mid-recording: defer so the AVI keeps one geometry - settleSensor() applies this
+      // when the clip closes. The config vector still takes the new value above, so the UI
+      // shows the user's choice while the sensor honours the recording in progress
+      pendingFS = intVal;
+      LOG_INF("Frame size %s takes effect when the recording stops", frameData[intVal].frameSizeStr);
+    }
     else {
       fsizePtr = intVal;
       if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills only, no AVI recording",
@@ -232,12 +239,18 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     }
   }
   else if (!strcmp(variable, "fps")) {
-    FPS = intVal;
-    captureFPS = intVal; // the user's rate for the capture size, preserved across switches
-    if (playbackHandle != NULL) setFPS(FPS);
-    // with tuned timing the fps choice drives the sensor's VTS too; the capture task owns
-    // sensor writes, so only the flag is raised here (VTS-only change - no PLL relock)
-    if (tunedFps) retimePending = true;
+    if (isCapturing && fromUser) {
+      // mid-recording: defer, so the clip keeps the timing its AVI header promises
+      pendingFPS = intVal;
+      LOG_INF("FPS %d takes effect when the recording stops", intVal);
+    } else {
+      FPS = intVal;
+      captureFPS = intVal; // the user's rate for the capture size, preserved across switches
+      if (playbackHandle != NULL) setFPS(FPS);
+      // with tuned timing the fps choice drives the sensor's VTS too; the capture task owns
+      // sensor writes, so only the flag is raised here (VTS-only change - no PLL relock)
+      if (tunedFps) retimePending = true;
+    }
   }
   else if (s) {
     if (!strcmp(variable, "quality")) res = s->set_quality(s, intVal);
