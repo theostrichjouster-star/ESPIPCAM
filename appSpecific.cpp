@@ -257,8 +257,12 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     // during esp_camera_init, so the part never runs at the power-on figure. Confirmed by
     // reading the register back off both boards.
     // The extension appears as the AEC extra lines dumpCamRegs() reports, so it is visible.
-    // Defaulted off here because this build exists to hold a frame rate; the control still
-    // works for anyone who would rather have the exposure, and lampAuto is the other answer
+    // Defaulted ON since 27 Aug 2026, and the old hold-the-frame-rate rationale for off is
+    // gone twice over: applyAecLimits() caps the ceiling at VTS-4 so night mode can never
+    // extend the frame under tuned timing, and with the bit OFF the AEC refuses to integrate
+    // into a long tuned frame at all - it parks exposure near zero and runs 27-30x gain
+    // (vertical FPN stripes, washed-out color; see applyAecLimits). Off remains selectable
+    // but buys nothing and costs image quality below ~24fps
     else if (!strcmp(variable, "aec2")) res = s->set_aec2(s, intVal);
     else if (!strcmp(variable, "dcw")) res = s->set_dcw(s, intVal);
     else if (!strcmp(variable, "bpc")) res = s->set_bpc(s, intVal);
@@ -738,7 +742,7 @@ aec~1~98~~na
 tunedFps~0~98~~na
 sdBusDiv~4~98~~na
 zoneMask~65535~98~~na
-aec2~0~98~~na
+aec2~1~98~~na
 aec_value~204~98~~na
 agc~1~98~~na
 agc_gain~0~98~~na

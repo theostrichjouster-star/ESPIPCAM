@@ -1880,8 +1880,11 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_AEC_MAX_EXPO  0x3a02 // .. 0x3a03 max exposure in lines, must fit inside VTS
 #define OV5640_AEC_B50_STEP  0x3a08 // .. 0x3a09 lines per 50Hz half cycle, [1:0] and [7:0]
 #define OV5640_AEC_B60_STEP  0x3a0a // .. 0x3a0b lines per 60Hz half cycle
-#define OV5640_AEC_MAX_B50   0x3a0d // [5:0] how many B50 steps fit in the frame
-#define OV5640_AEC_MAX_B60   0x3a0e // [5:0] how many B60 steps fit in the frame
+// NOTE the band-max pair is REVERSED relative to the step pair above: datasheet table 7-9
+// puts the 60Hz count at 0x3A0D and the 50Hz count at 0x3A0E. This was shipped swapped for a
+// while - harmless only because both counts compute equal at every stock timing
+#define OV5640_AEC_MAX_B60   0x3a0d // [5:0] how many B60 steps fit in the frame
+#define OV5640_AEC_MAX_B50   0x3a0e // [5:0] how many B50 steps fit in the frame
 #define OV5640_AEC_MAX_EXPO_50 0x3a14 // .. 0x3a15 max exposure under the 50Hz filter
 
 static int camReg(sensor_t* s, int reg) {
@@ -2019,6 +2022,21 @@ static void applyAecLimits(sensor_t* s) {
   ok &= senWrite16(s, OV5640_AEC_B60_STEP, b60);
   ok &= senWrite16(s, OV5640_AEC_MAX_EXPO, maxExp);
   ok &= senWrite16(s, OV5640_AEC_MAX_EXPO_50, maxExp);
+  // Night mode (0x3A00[2], the aec2 setting) must be ON for the AEC to actually use a long
+  // tuned frame. Measured 27 Aug 2026 in a dim scene at HD: with it off and VTS at 3698, the
+  // AEC parked exposure at 172 lines of the 3694 allowed and ran gain at 27-30x of the 32x
+  // ceiling - column FPN (vertical stripes) and washed-out color - no matter what the limit
+  // registers said; correct band steps, a full register reload and banding-off all left it
+  // parked, and every forced re-convergence returned to the same point. Healthy below VTS
+  // ~1233 (tuned 30fps and every stock mode), broken by 1946 (19fps); threshold not bisected
+  // further. With the bit set the same scene went to 1444 lines at 2.4x within seconds.
+  // Frame rate is safe: night mode extends the frame via 0x350C/D only to reach the ceiling
+  // in 0x3A02/0x3A14, which is set to VTS-4 above, so it can never stretch past the frame -
+  // confirmed 0x350C/D stayed zero and delivery held at the timer rate.
+  // Reasserted here from the user's aec2 choice (default now on) because set_framesize()
+  // reloads 0x3A00 along with everything else; an explicit aec2=0 is still honored, and with
+  // it the low-fps gain-parking above - that is what turning it off means on this sensor
+  s->set_reg(s, OV5640_AEC_CTRL00, 0x04, s->status.aec2 ? 0x04 : 0x00);
   // read modify write the two count registers, which are [5:0] with the rest reserved
   int c50 = s->get_reg(s, OV5640_AEC_MAX_B50, 0xFF);
   int c60 = s->get_reg(s, OV5640_AEC_MAX_B60, 0xFF);
