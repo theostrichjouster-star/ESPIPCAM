@@ -251,6 +251,7 @@ void setCamTilt(int tiltVal);
 void dumpCamRegs();
 void setCamReg(const char* csv);
 void getCamReg(const char* addr);
+void setExtDVDD(int val); // per-board NVS key: OV5640 internal regulator bypass for external DVDD
 void avgZones(const char* unused); // diagnostic: dump the AEC 4x4 zone grid, see mjpeg2sd.cpp
 void zoneStatsJson(char* buff, size_t buffLen); // detector snapshot as JSON for threshold tuning
 void xclkStat(const char* unused); // diagnostic: measure XCLK / VSYNC off the pins, see mjpeg2sd.cpp

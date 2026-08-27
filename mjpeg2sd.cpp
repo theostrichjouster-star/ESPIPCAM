@@ -2292,6 +2292,63 @@ void avgZones(const char* unused) {
     afBusy ? "BUSY - zones invalid" : "idle");
 }
 
+/************** external DVDD - OV5640 internal regulator bypass **************/
+
+// Datasheet 2.7.2 / table 7-4: a module fed 1.5V DVDD externally should set 0x3031 (SC PWC)
+// bit[3] to switch the embedded 1.5V regulator off - otherwise both sources drive the core
+// rail in parallel and the regulator burns the difference as heat. The bit is SCCB-only, so
+// it can only be set AFTER power-up, and it does not survive a sensor reset: esp_camera_init
+// soft-resets the sensor (0x3008[7]) on every boot, so prepCam() re-asserts it each time.
+//
+// The enable lives in NVS (the WiFi-password store, prefs.cpp) rather than the config file,
+// DELIBERATELY: setting this bit on a module WITHOUT the external rail browns the sensor
+// core out until a power cycle. NVS is welded to the individual board - it never travels
+// with a firmware flash, an SD card, or a config backup - so only a board explicitly
+// provisioned with /control?extDVDD=1 (currently COM3 only) ever runs with the bypass.
+// The one-time bench measurement is in BOARD_TESTING.md
+
+static bool extDVDDKey() {
+  // read-only peek at the provisioning key; default absent = internal regulator
+  Preferences p;
+  if (!p.begin(APP_NAME, true)) return false;
+  bool ext = p.getUChar("extDVDD", 0) != 0;
+  p.end();
+  return ext;
+}
+
+static void applyExtDVDD(sensor_t* s) {
+  // switch the internal regulator off, and read back - a silently rejected write would
+  // leave the regulator fighting the external rail with nothing in the log to say so
+  if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return;
+  s->set_reg(s, 0x3031, 0x08, 0x08);
+  int got = s->get_reg(s, 0x3031, 0xFF);
+  if (got >= 0 && (got & 0x08)) LOG_INF("External DVDD: internal regulator bypassed");
+  else LOG_WRN("External DVDD: bypass bit wrote but reads 0x%02X - regulator still active", got);
+}
+
+void setExtDVDD(int val) {
+  // provision (1) or deprovision (0) this board's external DVDD key. Enabling also asserts
+  // the bit immediately so the first provisioning needs no reboot; disabling leaves the
+  // current bit alone (clearing it mid-run is safe either way, but the reboot the user
+  // does anyway restores the driver default) - the key controls what happens at boot
+  Preferences p;
+  if (!p.begin(APP_NAME, false)) {
+    LOG_WRN("extDVDD: NVS not available");
+    return;
+  }
+  if (val) {
+    p.putUChar("extDVDD", 1);
+    p.end();
+    LOG_INF("External DVDD key saved for this board");
+    sensor_t* s = esp_camera_sensor_get();
+    if (s != NULL && s->id.PID == OV5640_PID) applyExtDVDD(s);
+  } else {
+    p.remove("extDVDD");
+    p.end();
+    LOG_INF("External DVDD key removed - internal regulator from next boot");
+  }
+}
+
 void getCamReg(const char* addr) {
   // debug: read one sensor register. The counterpart to setCamReg(), and needed by it - any
   // register holding unrelated bits (0x5001 holds the scale enable next to AWB and the colour
@@ -2620,6 +2677,10 @@ bool prepCam() {
         case (OV5640_PID): {
           strcpy(camModel, "OV5640");
           zoneDetectOK = true; // the 4x4 AEC zone grid (0x5691+) that motion detection reads
+          // first, before the AF blob download spends its second: boards provisioned with
+          // the NVS key run an external 1.5V DVDD rail, and every boot arrives here with
+          // the sensor freshly soft-reset, its internal regulator back on and fighting it
+          if (extDVDDKey()) applyExtDVDD(s);
 #if INCLUDE_AF
           // enable autofocus for OV5640 if equipped - see https://github.com/0015/ESP32-OV5640-AF
           ov5640AF.start(s);

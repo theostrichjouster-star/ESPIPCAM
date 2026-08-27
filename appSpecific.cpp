@@ -164,6 +164,8 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "camPll")) setCamPll(value);
   else if (!strcmp(variable, "camReg")) setCamReg(value);
   else if (!strcmp(variable, "camRegRd")) getCamReg(value);
+  // per-board provisioning, stored in NVS not the config file - see setExtDVDD()
+  else if (!strcmp(variable, "extDVDD")) setExtDVDD(intVal);
   else if (!strcmp(variable, "sdBusClk")) sdBusClk(value); // 0 reports, 2-16 sets the host divider (transient)
   // the persisted counterpart: the saved row reapplies the divider on every boot via the
   // config load, which runs after the SD is mounted. Default 4 = the stock 40MHz - safe for
