@@ -514,22 +514,23 @@ struct frameStruct {
 // detector, which has been replaced by the sensor's own zone grid (no decode at any size).
 // The columns are kept so the rows keep their shape; nothing reads them any more.
 const frameStruct frameData[] = {
-  // maxTunedFPS 0 on every ISP-scaler size (96X96..XGA except the pass-throughs): measured
-  // 27 Aug 2026, sizes doing real ISP downscaling deliver exactly HALF the computed rate
-  // once VTS exceeds ~1109-1294 on the tuned 80MHz tree (QVGA: VTS 1109 exact, 1294 halved;
-  // VGA: 1941 halved; registers correct throughout, exposure-independent). They keep the
-  // driver's proven timing. 1280X960 is exempt by measurement - its scaler pass is 1:1
+  // Real ISP-scaler sizes halve delivery when VTS rises above the driver's value (at ANY
+  // clock - the threshold is state-dependent, measured 27/28 Aug 2026), so VGA and QVGA
+  // are CLOCK-tuned at driver VTS instead (applyScalerClock: fps via PLL mul/sys_div,
+  // verified exact at five rates over 20-61MHz, QVGA 39.47 at the 80MHz ceiling). The
+  // remaining scaler sizes (96X96..XGA) stay untuned at 0 - unmeasured and outside the
+  // OV5640 UI set. 1280X960 is exempt by measurement - its scaler pass is 1:1
   {"96X96", 96, 96, 18, 1, 1, 0}, // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160) | scaler size, untuned
   {"QQVGA", 160, 120, 18, 1, 1, 0},   // measured 19.7 flat out | scaler size, untuned
   {"128X128", 128, 128, 18, 1, 1, 0}, // PY260
   {"QCIF", 176, 144, 18, 1, 1, 0},
   {"HQVGA", 240, 176, 18, 2, 1, 0},
   {"240X240", 240, 240, 18, 2, 1, 0},
-  {"QVGA", 320, 240, 20, 2, 1, 0},    // PY260 | measured 22.2 flat out (PLL tier 180) | tuned MEASURED HALVING at VTS>=1294 - untuned
+  {"QVGA", 320, 240, 20, 2, 1, 39},   // PY260 | driver clock 22.2 (PLL tier 180) | clock-tuned: 39.47 MEASURED 28 Aug at mul 120 / VTS 984
   {"320X320", 320, 320, 20, 2, 1, 0}, // PY260 only
   {"CIF", 400, 296, 20, 2, 1, 0},
   {"HVGA", 480, 320, 20, 2, 1, 0},
-  {"VGA", 640, 480, 20, 3, 1, 0},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2 | tuned MEASURED HALVING at VTS 1941 - untuned
+  {"VGA", 640, 480, 20, 3, 1, 39},    // PY260 | driver clock 22.2 ceiling | clock-tuned: 5 rates 10-30 MEASURED 28 Aug (same 2060x984 timing as QVGA), 39 ceiling
   {"SVGA", 800, 600, 21, 3, 1, 0},    // measured 22.1, already at HTS_FLOOR | scaler size, untuned
   {"XGA", 1024, 768, 24, 3, 1, 0},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it | scaler size, untuned
   {"HD", 1280, 720, 30, 3, 1, 52},    // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52.06 MEASURED 27 Aug, exact 12-52

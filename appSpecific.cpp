@@ -219,8 +219,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
       FPS = intVal;
       captureFPS = intVal; // the user's rate for the capture size, preserved across switches
       if (playbackHandle != NULL) setFPS(FPS);
-      // with tuned timing the fps choice drives the sensor's VTS too; the capture task owns
-      // sensor writes, so only the flag is raised here (VTS-only change - no PLL relock)
+      // with tuned timing the fps choice drives the sensor's own timing too (VTS on most
+      // sizes, the PLL clock on VGA/QVGA); the capture task owns sensor writes, so only
+      // the flag is raised here
       if (tunedFps) retimePending = true;
     }
   }
@@ -310,7 +311,7 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     // exposure ceiling in lines, VTS-4 read from the LIVE sensor so the slider tracks
     // whatever timing is actually in force. budgetKBs: the measured storage ceiling for the
     // bus clock currently set - 4420 measured at 53.3MHz, 3550 at the stock 40
-    static const uint8_t menuRates[] = {50, 40, 30, 25, 20, 15, 12, 10, 8, 5, 3, 1};
+    static const uint8_t menuRates[] = {50, 40, 35, 30, 25, 20, 15, 12, 10, 8, 5, 3, 1};
     char opts[64] = "";
     uint16_t ceilFPS = frameData[fsizePtr].maxTunedFPS;
     if (tunedFps && ceilFPS) {

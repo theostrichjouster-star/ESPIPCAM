@@ -505,6 +505,81 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     frameData[fs].frameSizeStr, hts, lf, vts, 80e6 / ((float)hts * lf * vts));
 }
 
+static bool scalerClockSize(framesize_t fs) {
+  // the sizes whose tuned fps is set by moving the CLOCK at the driver's own VTS, because
+  // raising VTS on a real ISP-scaler size halves delivery (at any clock, threshold
+  // state-dependent - measured 27/28 Aug, see BOARD_TESTING.md "Per-size clock assessment")
+  // while fps-via-PLL at driver VTS ran exact at five rates over a 20-61 MHz sweep.
+  // Only the two measured members of the OV5640 UI set; other scaler sizes stay untuned
+  return fs == FRAMESIZE_VGA || fs == FRAMESIZE_QVGA;
+}
+
+static void applyScalerClock(sensor_t* s, framesize_t fs) {
+  // The scaler-size counterpart of applyTunedTiming(): the fps setting is hit by choosing
+  // the PLL multiplier and system divider while HTS and VTS stay at the driver's values
+  // (2060 x 984 for VGA/QVGA). SCLK MHz = mul x 2/3 / sys_div on the pre_div 3 tree at
+  // XCLK 20MHz, so fps = SCLK / (HTS x lf x VTS). Bench-verified: 29.925/24.990/19.894/
+  // 14.965/9.949 counted against five computed targets (0.3% worst error), stills clean,
+  // auto AEC healthy, QVGA 39.47 at the mul 120 ceiling.
+  // Selection window: mul 75-150 keeps VCO in the datasheet's 500-1000 best range (even
+  // values only above 127 per section 7.1), and SCLK is capped at the verified 80MHz -
+  // the image cliff sits at 88-92. The window spans a full 2x, so consecutive sys_div
+  // steps (worst ratio 2, at 1->2) can never leave an unreachable fps gap.
+  uint8_t fps = desiredFPS(fs);
+  if (fps < 1) fps = 1;
+  int hts = senReg16(s, 0x380C);
+  int vts = senReg16(s, 0x380E);
+  int lf = senLineFactor(s);
+  if (hts < 1 || vts < 8) {
+    LOG_WRN("Scaler clock: HTS %d / VTS %d readback implausible - clock left alone", hts, vts);
+    return;
+  }
+  float targetMHz = (float)fps * hts * lf * vts / 1e6f; // the SCLK that delivers fps exactly
+  // both ends are measured, not derived: 80 is the verified ceiling (image cliff 88-92);
+  // below ~10 the sensor degrades - 8.1MHz ran grainy with a 2.5% rate sag and 6.1MHz
+  // produced a solid false-colour frame with no scene content at all
+  const float SCLK_FLOOR_MHZ = 10.0f;
+  int mul = 0, sysDiv = 0;
+  if (targetMHz > 80.0f || targetMHz < SCLK_FLOOR_MHZ) {
+    // outside the achievable range: clamp, like the tuned path's ceiling clamp.
+    // The floor combo is the verified 5fps point (SCLK 10.13, counted 4.961)
+    bool tooFast = targetMHz > 80.0f;
+    mul = tooFast ? 120 : 76;
+    sysDiv = tooFast ? 1 : 5;
+    LOG_WRN("Scaler clock: %ufps is beyond the %s range - delivering %.2ffps", fps,
+      frameData[fs].frameSizeStr, (mul * 2e6f / 3 / sysDiv) / ((float)hts * lf * vts));
+  } else {
+    for (int sd = 1; sd <= 15; sd++) {
+      int m = (int)(targetMHz * 1.5f * sd + 0.5f);
+      if (m > 127) m &= ~1; // even only above 127
+      if (m < 75 || m > 150) continue; // VCO outside 500-1000
+      if (m * 2.0f / 3 / sd > 80.05f) continue; // above the verified SCLK ceiling
+      mul = m;
+      sysDiv = sd;
+      break; // smallest workable sys_div = lowest in-range VCO
+    }
+    if (!mul) {
+      // unreachable given the 2x-wide mul window, but never leave the PLL unprogrammed
+      mul = 120;
+      sysDiv = 1;
+      LOG_WRN("Scaler clock: no divider fit for %ufps - delivering the ceiling", fps);
+    }
+  }
+  s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
+  s->set_reg(s, 0x3035, 0xFF, (sysDiv << 4) | 0x01); // [7:4] sys_div, [3:0] MIPI div stays 1
+  s->set_reg(s, 0x3036, 0xFF, mul);
+  delay(50); // let the PLL relock, same settle applyTunedTiming uses
+  int gotMul = s->get_reg(s, 0x3036, 0xFF);
+  if (gotMul != mul) {
+    LOG_WRN("Scaler clock: PLL mul wrote %d but reads %d", mul, gotMul);
+    return;
+  }
+  float sclkMHz = mul * 2.0f / 3 / sysDiv;
+  LOG_INF("Scaler clock %s: SCLK %.2fMHz (mul %d sys_div %d), HTS %d x%d, VTS %d -> %.2ffps",
+    frameData[fs].frameSizeStr, sclkMHz, mul, sysDiv, hts, lf, vts,
+    sclkMHz * 1e6f / ((float)hts * lf * vts));
+}
+
 static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // Everything set_framesize() does not do for us. It reloads the whole register block, so all
   // of this is lost on every call and has to follow every one of them - which is the reason it
@@ -519,13 +594,17 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   applyCropWindow(s, fs);
   applyHtsFloor(s);
   // the retiming must precede applyAecLimits(), which derives banding and the exposure
-  // ceiling from whatever clock and VTS are in force by the time it reads them back.
-  // maxTunedFPS == 0 opts a size out entirely: measured 26/27 Aug, the ISP-SCALER sizes
-  // (VGA, QVGA - real downscaling, unlike 1280X960's 1:1 pass-through) deliver exactly HALF
-  // the computed rate once VTS exceeds ~1109-1294 on the 80MHz tree, with registers reading
-  // correct throughout. VTS 1109 exact, 1294 halved, exposure-independent, PLL verified in
-  // place. Those sizes keep the driver's proven timing instead
-  if (tunedFps && videoSizeAllowed(fs) && frameData[fs].maxTunedFPS) applyTunedTiming(s, fs);
+  // ceiling from whatever clock and VTS are in force by the time it reads them back - a
+  // scaler clock change would otherwise leave stale banding steps (visible stripes,
+  // measured at the E2 10fps step). maxTunedFPS == 0 still opts a size out entirely.
+  // Two tuning mechanisms, split by how the size fails: real ISP-scaler sizes halve
+  // delivery when VTS rises above the driver's value (at any clock - 27/28 Aug), so their
+  // fps moves the CLOCK at fixed VTS; every other tuned size holds the 80MHz tree and
+  // moves VTS. 1280X960's scaler pass is 1:1 and takes the VTS path by measurement
+  if (tunedFps && videoSizeAllowed(fs) && frameData[fs].maxTunedFPS) {
+    if (scalerClockSize(fs)) applyScalerClock(s, fs);
+    else applyTunedTiming(s, fs);
+  }
   // last, because it reads back the HTS, VTS and clock the steps above have settled
   applyAecLimits(s);
 }
@@ -600,8 +679,9 @@ static void settleSensor() {
   } else if (retimePending && !isCapturing) {
     // fps changed at a constant size. Only this task may retime the sensor (the web task
     // cannot - the capture may hold a frame mid-flight), which is why the handler just
-    // raises the flag. With the tuned PLL already in force this is a VTS-only change:
-    // blanking, no relock. Deferred while capturing so a recording keeps one timing
+    // raises the flag. On VTS-tuned sizes this is a blanking-only change; on the
+    // clock-tuned scaler sizes it is a PLL write with a 50ms relock - the AEC-band gate
+    // in zoneMotion absorbs the blip. Deferred while capturing so a recording keeps one timing
     retimePending = false;
     applySensorTuning(esp_camera_sensor_get(), (framesize_t)sensorFS);
     if (FPS != desiredFPS(sensorFS)) {
