@@ -530,8 +530,13 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   applyCropWindow(s, fs);
   applyHtsFloor(s);
   // the retiming must precede applyAecLimits(), which derives banding and the exposure
-  // ceiling from whatever clock and VTS are in force by the time it reads them back
-  if (tunedFps && videoSizeAllowed(fs)) applyTunedTiming(s, fs);
+  // ceiling from whatever clock and VTS are in force by the time it reads them back.
+  // maxTunedFPS == 0 opts a size out entirely: measured 26/27 Aug, the ISP-SCALER sizes
+  // (VGA, QVGA - real downscaling, unlike 1280X960's 1:1 pass-through) deliver exactly HALF
+  // the computed rate once VTS exceeds ~1109-1294 on the 80MHz tree, with registers reading
+  // correct throughout. VTS 1109 exact, 1294 halved, exposure-independent, PLL verified in
+  // place. Those sizes keep the driver's proven timing instead
+  if (tunedFps && videoSizeAllowed(fs) && frameData[fs].maxTunedFPS) applyTunedTiming(s, fs);
   // last, because it reads back the HTS, VTS and clock the steps above have settled
   applyAecLimits(s);
 }

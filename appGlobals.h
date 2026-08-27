@@ -570,36 +570,41 @@ struct frameStruct {
 // that detail loss was judged not worth the 19 ms. Since 19439ee checkMotion() compares the
 // decoded bitmap at its native size, so a coarser source really is a coarser compare.
 const frameStruct frameData[] = {
-  {"96X96", 96, 96, 18, 1, 1, 39}, // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160) | tuned 39 predicted
-  {"QQVGA", 160, 120, 18, 1, 1, 39},   // measured 19.7 flat out | tuned 39 predicted
-  {"128X128", 128, 128, 18, 1, 1, 39}, // PY260
-  {"QCIF", 176, 144, 18, 1, 1, 39},
-  {"HQVGA", 240, 176, 18, 2, 1, 39},
-  {"240X240", 240, 240, 18, 2, 1, 39},
-  {"QVGA", 320, 240, 20, 2, 1, 39},    // PY260 | measured 22.2 flat out (PLL tier 180) | tuned 39 predicted (binned window VTS 984)
-  {"320X320", 320, 320, 20, 2, 1, 39}, // PY260 only
-  {"CIF", 400, 296, 20, 2, 1, 39},
-  {"HVGA", 480, 320, 20, 2, 1, 39},
-  {"VGA", 640, 480, 20, 3, 1, 39},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2 | tuned 39 predicted
-  {"SVGA", 800, 600, 21, 3, 1, 39},    // measured 22.1, already at HTS_FLOOR | tuned 39 predicted
-  {"XGA", 1024, 768, 24, 3, 1, 39},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it | tuned 39 predicted
-  {"HD", 1280, 720, 30, 3, 1, 52},     // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52 MEASURED (clock sweep, VTS 744)
-  {"SXGA", 1280, 1024, 11, 3, 1, 18},  // measured 11.3 cropped, 4.6 before it | tuned 18 predicted
-  {"UXGA", 1600, 1200, 9, 3, 1, 15},   // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below | tuned 15 predicted
-  {"FHD", 1920, 1080, 10, 3, 1, 17},   // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before | tuned: 15 MEASURED, 17 ceiling predicted (VTS floor 1112)
-  {"P_HD", 720, 1280, 9, 3, 1, 14},    // measured 9.9 cropped, 5.0 before | tuned 14 predicted
-  {"P_3MP", 864, 1536, 4, 3, 1, 0},    // OV3660 only - not selectable on this sensor, set by analogy
-  {"QXGA", 2048, 1536, 7, 4, 1, 11},   // was stills only - 7.2 predicted cropped at driver clock | tuned 11 predicted
-  {"QHD", 2560, 1440, 2, 4, 1, 9},     // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin | tuned 9 predicted (no crop possible - full array read)
-  {"WQXGA", 2560, 1600, 2, 4, 1, 8},   // measured 2.8 @ 85% busy at req 3, backed off | tuned 8 predicted
-  {"P_FHD", 1080, 1920, 4, 3, 1, 9},   // measured 4.0 @ 37% busy | scale 3 not 4, see below | tuned 9 predicted
-  {"QSXGA", 2560, 1920, 2, 4, 1, 7},   // measured 2.0 @ 59% busy | tuned 7 predicted (full array, HTS 2844 x2, VTS 1968)
-  {"5MP", 2592, 1944, 4, 4, 1, 0},     // PY260 only - unreachable on OV5640, left as inherited
+  // maxTunedFPS 0 on every ISP-scaler size (96X96..XGA except the pass-throughs): measured
+  // 27 Aug 2026, sizes doing real ISP downscaling deliver exactly HALF the computed rate
+  // once VTS exceeds ~1109-1294 on the tuned 80MHz tree (QVGA: VTS 1109 exact, 1294 halved;
+  // VGA: 1941 halved; registers correct throughout, exposure-independent). They keep the
+  // driver's proven timing. 1280X960 is exempt by measurement - its scaler pass is 1:1
+  {"96X96", 96, 96, 18, 1, 1, 0}, // 2MP sensors // PY260  | sensor ceiling 19.7 (PLL tier 160) | scaler size, untuned
+  {"QQVGA", 160, 120, 18, 1, 1, 0},   // measured 19.7 flat out | scaler size, untuned
+  {"128X128", 128, 128, 18, 1, 1, 0}, // PY260
+  {"QCIF", 176, 144, 18, 1, 1, 0},
+  {"HQVGA", 240, 176, 18, 2, 1, 0},
+  {"240X240", 240, 240, 18, 2, 1, 0},
+  {"QVGA", 320, 240, 20, 2, 1, 0},    // PY260 | measured 22.2 flat out (PLL tier 180) | tuned MEASURED HALVING at VTS>=1294 - untuned
+  {"320X320", 320, 320, 20, 2, 1, 0}, // PY260 only
+  {"CIF", 400, 296, 20, 2, 1, 0},
+  {"HVGA", 480, 320, 20, 2, 1, 0},
+  {"VGA", 640, 480, 20, 3, 1, 0},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2 | tuned MEASURED HALVING at VTS 1941 - untuned, and it is MOTION_DETECT_FS
+  {"SVGA", 800, 600, 21, 3, 1, 0},    // measured 22.1, already at HTS_FLOOR | scaler size, untuned
+  {"XGA", 1024, 768, 24, 3, 1, 0},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it | scaler size, untuned
+  {"HD", 1280, 720, 30, 3, 1, 52},    // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52.06 MEASURED 27 Aug, exact 12-52
+  {"SXGA", 1280, 1024, 11, 3, 1, 18}, // measured 11.3 cropped, 4.6 before it | tuned 18 predicted (cropped full-res class verified at FHD/QSXGA)
+  {"UXGA", 1600, 1200, 9, 3, 1, 15},  // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below | tuned 15 predicted
+  {"FHD", 1920, 1080, 10, 3, 1, 17},  // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before | tuned 17.00 MEASURED 27 Aug, exact 10-17
+  {"P_HD", 720, 1280, 9, 3, 1, 14},   // measured 9.9 cropped, 5.0 before | tuned 14 predicted
+  {"P_3MP", 864, 1536, 4, 3, 1, 0},   // OV3660 only - not selectable on this sensor, set by analogy
+  {"QXGA", 2048, 1536, 7, 4, 1, 11},  // was stills only - 7.2 predicted cropped at driver clock | tuned 11 predicted
+  {"QHD", 2560, 1440, 2, 4, 1, 9},    // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin | tuned 9 predicted (no crop possible - full array read)
+  {"WQXGA", 2560, 1600, 2, 4, 1, 8},  // measured 2.8 @ 85% busy at req 3, backed off | tuned 8 predicted
+  {"P_FHD", 1080, 1920, 4, 3, 1, 9},  // measured 4.0 @ 37% busy | scale 3 not 4, see below | tuned 9 predicted
+  {"QSXGA", 2560, 1920, 2, 4, 1, 7},  // measured 2.0 @ 59% busy | tuned 7.00 MEASURED 27 Aug (full array, HTS 2844 x2); q6 frames 764KB - see the budget badge
+  {"5MP", 2592, 1944, 4, 4, 1, 0},    // PY260 only - unreachable on OV5640, left as inherited
   // Custom sizes past the driver's framesize_t. That enum lives in the precompiled
   // esp32-camera library, so a size it lacks has to be carried here instead. Rows below this
   // point are never handed to the driver - setSensorSize() maps them onto a base size and
   // then overrides only the registers that differ
-  {"1280X960", 1280, 960, 24, 3, 1, 39} // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39 predicted (XGA timing)
+  {"1280X960", 1280, 960, 24, 3, 1, 39} // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39.03 MEASURED 27 Aug, exact 12-39 (scaler pass is 1:1, exempt from the scaler halving)
 };
 
 // 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
