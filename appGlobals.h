@@ -286,6 +286,7 @@ const char* sensorStateStr();
 
 // motion detection parameters
 extern int moveStartChecks; // checks per second for start motion
+extern int moveStopChecks; // checks per second while recording
 extern int moveStopSecs; // secs without motion before a triggered recording closes
 extern int zoneCount; // zones changed at once to signal motion
 extern int zoneMask; // view-order bitmask of the 4x4 zones participating in detection

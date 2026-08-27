@@ -35,6 +35,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "stopPlaying")) stopPlaying();
   else if (!strcmp(variable, "motionVal")) motionVal = intVal;
   else if (!strcmp(variable, "moveStartChecks")) moveStartChecks = intVal;
+  else if (!strcmp(variable, "moveStopChecks")) moveStopChecks = intVal > 0 ? intVal : moveStopChecks;
   else if (!strcmp(variable, "moveStopSecs")) moveStopSecs = intVal > 0 ? intVal : moveStopSecs;
   else if (!strcmp(variable, "zoneCount")) zoneCount = (intVal >= 1 && intVal <= 16) ? intVal : zoneCount;
   else if (!strcmp(variable, "zoneMask")) zoneMask = intVal & 0xFFFF;
@@ -796,6 +797,7 @@ responseTimeoutSecs~10~2~N~Server response timeout (secs)
 maxFrames~3600~1~N~Max frames in recording
 dashCamOn~0~98~~na
 moveStartChecks~5~1~N~Checks per second for start motion
+moveStopChecks~2~1~N~Checks per second while recording
 moveStopSecs~10~98~~na
 detectMotionFrames~3~1~N~Num changed checks to start motion
 detectNightFrames~10~1~N~Min dark frames to indicate night

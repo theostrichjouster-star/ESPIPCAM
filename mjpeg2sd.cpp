@@ -24,6 +24,11 @@ bool forceRecord = false; // Recording enabled by rec button
 
 // motion detection parameters
 int moveStartChecks = 5; // checks per second for start motion
+// While recording, a check only feeds the stop timer and the motion edges, so it can run
+// slower: each check costs ~13ms of the capture task (SCCB reads), which at 5/s cost
+// ~1.4fps of a Busy-100% recording. At 2/s the cost is ~0.5fps and re-asserting motion
+// after a lull still takes only detectMotionFrames/2 = 1.5s of the moveStopSecs window
+int moveStopChecks = 2; // checks per second while recording
 // A motion triggered recording runs while movement continues and closes after moveStopSecs
 // without it. Detection stays live through the recording - a zone check is ~20 SCCB reads
 // with no frame decode, so there is nothing left that needs suspending. This also removes
@@ -203,11 +208,12 @@ static void openAvi() {
 }
 
 static inline bool doMonitor() {
-  // pace the zone checks: 1 frame in N so they run at moveStartChecks per second. The same
-  // rate applies in every state - detection now runs through recordings and live views too,
-  // a zone check being ~2-3ms of SCCB with no frame decode
+  // pace the zone checks: 1 frame in N so they run at moveStartChecks per second while
+  // watching for motion, dropping to moveStopChecks per second while a recording is open -
+  // there a check only feeds the stop timer, and its ~13ms SCCB cost competes with saving
+  // frames (measured 1.4fps at 5 checks/s, HD q6, Busy 100%)
   static uint16_t motionCnt = 0;
-  uint16_t checkRate = FPS / moveStartChecks;
+  uint16_t checkRate = FPS / (isCapturing ? moveStopChecks : moveStartChecks);
   if (!checkRate) checkRate = 1;
   if (++motionCnt / checkRate) motionCnt = 0; // time to check for motion
   return !(bool)motionCnt;
@@ -679,7 +685,8 @@ void dumpMotionStats() {
   LOG_INF("Zone detection %s, sensor %s (%ux%u), app FPS %u", zoneDetectOK ? "available" : "UNAVAILABLE - needs the OV5640 zone grid",
     frameData[sensorFS].frameSizeStr, frameData[sensorFS].frameWidth, frameData[sensorFS].frameHeight, FPS);
   LOG_INF("Capture size: %s, state: %s", frameData[fsizePtr].frameSizeStr, sensorStateStr());
-  LOG_INF("moveStartChecks %d -> check every %u frame(s) = %0.1f checks/sec", moveStartChecks, checkRate, perSec);
+  LOG_INF("moveStartChecks %d -> check every %u frame(s) = %0.1f checks/sec (%d/sec while recording)",
+    moveStartChecks, checkRate, perSec, moveStopChecks);
   if (mCheckCnt) {
     float perCheck = (float)mTimeTot / mCheckCnt / 1000.0f; // us -> ms
     LOG_INF("%lu checks, %lu ms total, %0.2f ms per check", mCheckCnt, mTimeTot / 1000, perCheck);
