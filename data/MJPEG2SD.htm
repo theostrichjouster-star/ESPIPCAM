@@ -2176,10 +2176,13 @@
       }
 
       function estFrameKB(pixels, q) {
-        // bytes per pixel by JPEG quality, anchored on measured points (HD q6 of a lit,
-        // detailed scene ~130KB = 0.145 B/px) and linearly interpolated between anchors.
-        // Estimates only - the badge is advisory, never a gate
-        const curve = [[6, 0.145], [8, 0.12], [10, 0.10], [15, 0.075], [20, 0.06], [30, 0.045], [63, 0.03]];
+        // bytes per pixel by JPEG quality, anchored on measured lit-scene points (27 Aug:
+        // HD q6 130KB = 0.145 B/px, QSXGA q6 764KB = 0.156, FHD q10 102KB) and linearly
+        // interpolated. Deliberately anchored at the heavy end: FHD's crop measured ~2x
+        // lighter (143KB q6) because entropy follows scene content more than pixel count,
+        // so the badge overestimates there - the safe direction for an advisory that warns
+        // about storage. Estimates only, never a gate
+        const curve = [[6, 0.155], [8, 0.13], [10, 0.11], [15, 0.08], [20, 0.065], [30, 0.05], [63, 0.03]];
         let bpp = curve[curve.length - 1][1];
         for (let i = 0; i < curve.length; i++) {
           if (q <= curve[i][0]) {
