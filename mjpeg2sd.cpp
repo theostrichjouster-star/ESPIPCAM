@@ -47,6 +47,20 @@ static bool zoneDetectOK = false; // sensor has the zone grid (OV5640) - set by 
 // 3600 caps it at 3 minutes at the 20fps default, ~6-7 under heavy shedding
 int maxFrames = 3600; // maximum number of frames in video before auto close
 
+// The sensor is tuned this factor ABOVE the requested fps while the frame timer stays at
+// the request: one frame is taken per timer tick off a GRAB_LATEST queue, so the surplus
+// means every tick finds a fresh frame and the delivered rate is the timer's. Measured
+// without it: recordings ran 0.7-1.3% under the request (ticks that found no frame when a
+// zone check or SD write stalled the task). Costs 5% of the maximum exposure; the surplus
+// frames feed the AEC/AWB. Ceiling requests get no overdrive and run ~1% low by design
+#define FPS_OVERDRIVE 1.05f
+
+uint8_t fpsCeiling(framesize_t fs) {
+  // the top of the fps slider: the tuned ceiling when tuning is on and the size has one,
+  // else the driver-clock default rate
+  return (tunedFps && frameData[fs].maxTunedFPS) ? frameData[fs].maxTunedFPS : frameData[fs].defaultFPS;
+}
+
 // status & control fields
 uint8_t FPS = 0;
 // The rate the user chose for the capture resolution. FPS itself now follows sensorFS, so
@@ -462,7 +476,15 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // applyAecLimits() runs after this and derives banding steps and the exposure ceiling from
   // whatever landed, so they stay consistent by construction. The 40MHz in-spec-everywhere
   // variant (retired hdProfile 2) remains reproducible at runtime via camPll if the zombie
-  // investigation ever needs it again - see BOARD_TESTING.md
+  // investigation ever needs it again - see BOARD_TESTING.md.
+  //
+  // The sensor is tuned FPS_OVERDRIVE above the request while the frame timer stays at the
+  // request itself: the capture task takes one frame per timer tick off a GRAB_LATEST
+  // queue, so with a surplus every tick finds a fresh frame and the delivered rate IS the
+  // timer rate. The measured 0.7-1.3% delivery deficit came from ticks that found no frame
+  // when sensor and timer ran identical rates. The surplus also feeds the AEC/AWB more frames
+  // than get recorded; the cost is 5% off the maximum exposure. Ceiling requests get no
+  // overdrive (the VTS floor caps them) and deliver ~1% low, by design
   uint8_t fps = desiredFPS(fs);
   if (fps < 1) fps = 1;
   s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
@@ -493,16 +515,19 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     int rows = yEnd - ySt + 1;
     vtsFloor = (lf == 2) ? rows + 16 : rows / 2 + 8;
   }
-  int vts = (int)(80000000UL / ((uint32_t)hts * lf * fps));
+  int vts = (int)(80e6f / ((float)hts * lf * fps * FPS_OVERDRIVE));
   if (vts < vtsFloor) {
-    LOG_WRN("Tuned timing: %ufps is beyond the %s ceiling %.1f - delivering the ceiling",
-      fps, frameData[fs].frameSizeStr, 80e6 / ((float)hts * lf * vtsFloor));
+    float ceilFps = 80e6f / ((float)hts * lf * vtsFloor);
+    // an overdrive-only clamp is expected near the ceiling; only a request the sensor
+    // itself cannot reach is worth a warning
+    if ((float)fps > ceilFps) LOG_WRN("Tuned timing: %ufps is beyond the %s ceiling %.1f - delivering the ceiling",
+      fps, frameData[fs].frameSizeStr, ceilFps);
     vts = vtsFloor;
   }
   if (vts > 0xFFFF) vts = 0xFFFF; // 16 bit register; ~0.02fps floor at HD, never plausible
   if (!senWrite16(s, 0x380E, vts)) LOG_WRN("Tuned timing: VTS %d did not read back", vts);
-  else LOG_INF("Tuned timing %s: PIXCLK 80MHz, HTS %d x%d, VTS %d -> %.2ffps",
-    frameData[fs].frameSizeStr, hts, lf, vts, 80e6 / ((float)hts * lf * vts));
+  else LOG_INF("Tuned timing %s: PIXCLK 80MHz, HTS %d x%d, VTS %d -> sensor %.2ffps for request %u",
+    frameData[fs].frameSizeStr, hts, lf, vts, 80e6 / ((float)hts * lf * vts), fps);
 }
 
 static bool scalerClockSize(framesize_t fs) {
@@ -534,7 +559,10 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
     LOG_WRN("Scaler clock: HTS %d / VTS %d readback implausible - clock left alone", hts, vts);
     return;
   }
-  float targetMHz = (float)fps * hts * lf * vts / 1e6f; // the SCLK that delivers fps exactly
+  // the sensor runs FPS_OVERDRIVE above the request; the frame timer paces delivery at
+  // the request itself (see applyTunedTiming - same scheme, clock instead of VTS)
+  float plainMHz = (float)fps * hts * lf * vts / 1e6f; // the SCLK that matches the request exactly
+  float targetMHz = plainMHz * FPS_OVERDRIVE;
   // both ends are measured, not derived: 80 is the verified ceiling (image cliff 88-92);
   // below ~10 the sensor degrades - 8.1MHz ran grainy with a 2.5% rate sag and 6.1MHz
   // produced a solid false-colour frame with no scene content at all
@@ -542,11 +570,14 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
   int mul = 0, sysDiv = 0;
   if (targetMHz > 80.0f || targetMHz < SCLK_FLOOR_MHZ) {
     // outside the achievable range: clamp, like the tuned path's ceiling clamp.
-    // The floor combo is the verified 5fps point (SCLK 10.13, counted 4.961)
+    // The floor combo is the verified 5fps point (SCLK 10.13, counted 4.961). Below it
+    // the frame TIMER still paces the requested 1-4fps exactly - the sensor just free-runs
+    // at ~5. An overdrive-only ceiling bust is expected and silent; only a request the
+    // sensor itself cannot reach warns
     bool tooFast = targetMHz > 80.0f;
     mul = tooFast ? 120 : 76;
     sysDiv = tooFast ? 1 : 5;
-    LOG_WRN("Scaler clock: %ufps is beyond the %s range - delivering %.2ffps", fps,
+    if (tooFast && plainMHz > 80.0f) LOG_WRN("Scaler clock: %ufps is beyond the %s range - delivering %.2ffps", fps,
       frameData[fs].frameSizeStr, (mul * 2e6f / 3 / sysDiv) / ((float)hts * lf * vts));
   } else {
     for (int sd = 1; sd <= 15; sd++) {
@@ -575,9 +606,9 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
     return;
   }
   float sclkMHz = mul * 2.0f / 3 / sysDiv;
-  LOG_INF("Scaler clock %s: SCLK %.2fMHz (mul %d sys_div %d), HTS %d x%d, VTS %d -> %.2ffps",
+  LOG_INF("Scaler clock %s: SCLK %.2fMHz (mul %d sys_div %d), HTS %d x%d, VTS %d -> sensor %.2ffps for request %u",
     frameData[fs].frameSizeStr, sclkMHz, mul, sysDiv, hts, lf, vts,
-    sclkMHz * 1e6f / ((float)hts * lf * vts));
+    sclkMHz * 1e6f / ((float)hts * lf * vts), fps);
 }
 
 static void applySensorTuning(sensor_t* s, framesize_t fs) {
@@ -659,11 +690,12 @@ static void settleSensor() {
   // it froze sensorFS for the rest of the session: the sensor stopped following fsizePtr
   if (isPlaying) return;
   if (!isCapturing && (pendingFS >= 0 || pendingFPS >= 0)) {
-    // choices made mid-recording, applied now that the clip has closed. Size first with the
-    // usual reset to the new size's default rate, then an explicit rate choice on top of it
+    // choices made mid-recording, applied now that the clip has closed. Size first - the
+    // user's rate survives the switch, clamped to the new size's ceiling - then an
+    // explicit rate choice on top of it
     if (pendingFS >= 0) {
       fsizePtr = pendingFS;
-      captureFPS = frameData[fsizePtr].defaultFPS;
+      if (captureFPS > fpsCeiling((framesize_t)fsizePtr)) captureFPS = fpsCeiling((framesize_t)fsizePtr);
       pendingFS = -1;
     }
     if (pendingFPS >= 0) {
@@ -1398,9 +1430,9 @@ uint8_t setFPS(uint8_t val) {
 }
 
 uint8_t setFPSlookup(uint8_t val) {
-  // set FPS from framesize lookup
+  // set FPS from framesize lookup - the user's rate survives, clamped to the new ceiling
   fsizePtr = val;
-  captureFPS = frameData[fsizePtr].defaultFPS; // new capture size, so a new default rate
+  if (captureFPS > fpsCeiling((framesize_t)fsizePtr)) captureFPS = fpsCeiling((framesize_t)fsizePtr);
   return setFPS(captureFPS);
 }
 

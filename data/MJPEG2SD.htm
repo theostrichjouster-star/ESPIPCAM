@@ -1005,19 +1005,12 @@
                   </div>
                   <div class="input-group" id="fps-group">
                       <label for="fps">FPS</label>
-                      <!-- populated by updateFPS's opts for the selected resolution: with
-                           tunedFps the firmware hits each listed rate exactly by retiming
-                           the sensor's VTS, so the menu only ever offers what the size can
-                           deliver. The static options below just cover the pre-response
-                           moment on first load -->
-                      <select title="Camera frames per second - the menu lists the rates the selected resolution can actually deliver" id="fps" class="selectField">
-                        <option value="30">30 fps</option>
-                        <option value="25">25 fps</option>
-                        <option value="20">20 fps</option>
-                        <option value="15">15 fps</option>
-                        <option value="10" selected="selected">10 fps</option>
-                        <option value="5">5 fps</option>
-                      </select>
+                      <!-- range set by updateFPS's fpsCeil for the selected resolution: with
+                           tunedFps the firmware delivers any rate on the slider by retiming
+                           the sensor (slightly overdriven, the frame timer paces delivery),
+                           so the slider only ever offers what the size can deliver. The
+                           static range below just covers the pre-response moment on load -->
+                      <input title="Camera frames per second - the slider tops out at the rate the selected resolution can actually deliver" type="range" id="fps" min="1" max="30" value="10">
                   </div>
                   <div class="input-group" id="quality-group">
                       <label for="quality">Quality</label>
@@ -1721,10 +1714,18 @@
           else if (key == "delete" || key == "uploadMove" || key == "upload") sdFile(key, value);
           else if (key == 'timezoneSel') fromUser = setTz(value);
           else if (key == "framesize") fromUser = setFrameSize(key, value, fromUser);
-          // updateFPS response extras: the per-resolution rate menu, the live manual
+          // updateFPS response extras: the per-resolution fps ceiling, the live manual
           // exposure ceiling (VTS-4 read off the sensor), and the measured storage budget
           // for the SD bus clock actually set. All server-pushed, none is a control
-          else if (key == "opts") { rebuildFpsMenu(value); return; }
+          else if (key == "fpsCeil") {
+            // re-range the fps slider for the selected resolution. The current rate rides
+            // in the same response's fps field (already clamped by the firmware), which
+            // updateStatus applies by id - here just move the ceiling and keep the thumb
+            const cur = Math.min(Number(statusData['fps'] ?? $('#fps').value) || 10, Number(value));
+            changeRange('fps', "1", value, cur.toString());
+            updateBudget();
+            return;
+          }
           else if (key == "aecMax") {
             const cur = Math.min(Number($('#aec_value').value) || 204, Number(value));
             changeRange('aec_value', "0", value, cur.toString());
@@ -2179,27 +2180,11 @@
         return false;
       }
 
-      /************ per-resolution rate menu and storage estimate ************/
+      /************ per-resolution rate slider range and storage estimate ************/
 
       let budgetKBs = 4420; // measured SD ceiling in KB/s, refreshed by updateFPS responses
-
-      function rebuildFpsMenu(csv) {
-        // repopulate the FPS dropdown from the rates the firmware says this resolution can
-        // deliver. Display only: keeps the device's current rate if listed, else shows the
-        // nearest lower menu rate - nothing is sent unless the user picks an option
-        const sel = $('#fps');
-        const want = Number(statusData['fps'] ?? sel.value);
-        sel.innerHTML = '';
-        csv.split(',').forEach(v => {
-          const o = document.createElement('option');
-          o.value = v;
-          o.text = v + ' fps';
-          sel.add(o);
-        });
-        const vals = [...sel.options].map(o => Number(o.value));
-        sel.value = vals.includes(want) ? want : (vals.find(v => v <= want) ?? vals[vals.length - 1]);
-        updateBudget();
-      }
+      // the fps slider's range comes from updateFPS's fpsCeil response, handled in
+      // processStatus - the firmware delivers any integer rate from 1 to that ceiling
 
       /************ motion detection zone selector ************/
 

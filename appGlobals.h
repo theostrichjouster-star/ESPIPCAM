@@ -258,6 +258,7 @@ void lencFhd(const char* val); // experimental: A/B the LENC rescale for the FHD
 void setCamPll(const char* csv);
 uint8_t setFPS(uint8_t val);
 uint8_t setFPSlookup(uint8_t val);
+uint8_t fpsCeiling(framesize_t fs); // top of the fps slider for a size, see mjpeg2sd.cpp
 void setInputPeripheral(uint8_t cmd, uint32_t controlVal);
 void setLamp(uint8_t lampVal);
 void setLightsRC(bool lightsOn);
