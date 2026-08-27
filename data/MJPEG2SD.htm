@@ -53,6 +53,27 @@
 
       html body {height: 100%;}
 
+      /* motion detection zone selector - 4x4 grid matching the sensor's AEC zone layout */
+      .zonegrid {
+        display: grid;
+        grid-template-columns: repeat(4, 2.1rem);
+        grid-auto-rows: 1.5rem;
+        gap: 3px;
+      }
+      .zonegrid .zcell {
+        background: var(--buttonActive);
+        border: 1px solid var(--itemBorder);
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      .zonegrid .zcell:hover {
+        background: var(--buttonHover);
+      }
+      .zonegrid .zcell.zoff {
+        background: var(--itemInactive);
+        opacity: 0.4;
+      }
+
       body {
         font-family: Helvetica  !important;
         background: var(--pageBackground);
@@ -1207,9 +1228,13 @@
                     <label for="motionVal">Motion Sensitivity</label>
                     <input title="Set motion detection sensitivity" type="range" id="motionVal" min="1" max="10" value="7">
                   </div>
-                  <div class="input-group" id="captureSecs-group">
-                    <label for="captureSecs">Capture Seconds</label>
-                    <input title="How long a motion triggered recording runs for" type="range" id="captureSecs" min="5" max="60" value="15">
+                  <div class="input-group" id="moveStopSecs-group">
+                    <label for="moveStopSecs">Post-motion Seconds</label>
+                    <input title="How long a motion triggered recording continues after motion stops - each new motion extends it" type="range" id="moveStopSecs" min="2" max="60" value="10">
+                  </div>
+                  <div class="input-group" id="zoneGrid-group">
+                    <label for="zoneGrid">Detection Zones</label>
+                    <div id="zoneGrid" class="zonegrid" title="Click zones to include/exclude them from motion detection - layout matches the image"></div>
                   </div>
                   <div class="input-group" id="record-group">
                       <label for="record">Save Capture</label>
@@ -1706,6 +1731,7 @@
             return;
           }
           else if (key == "budgetKBs") { budgetKBs = Number(value); updateBudget(); return; }
+          else if (key == "zoneMask") { if (!fromUser) { setZoneMask(value); return; } }
           else if (key == "get-still") getStill();
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
@@ -2173,6 +2199,43 @@
         const vals = [...sel.options].map(o => Number(o.value));
         sel.value = vals.includes(want) ? want : (vals.find(v => v <= want) ?? vals[vals.length - 1]);
         updateBudget();
+      }
+
+      /************ motion detection zone selector ************/
+
+      let zoneMaskVal = 65535; // view-order bitmask, bit 0 = top-left zone; kept by firmware
+
+      function paintZoneGrid() {
+        $$('#zoneGrid .zcell').forEach((c, i) => {
+          c.classList.toggle('zoff', !((zoneMaskVal >> i) & 1));
+        });
+      }
+
+      function initZoneGrid() {
+        // built lazily on the first zoneMask status value. Cells are laid out in view order
+        // (matching the displayed image); the firmware maps them onto the sensor's zones
+        const grid = $('#zoneGrid');
+        if (!grid || grid.childElementCount) return;
+        for (let i = 0; i < 16; i++) {
+          const c = document.createElement('div');
+          c.className = 'zcell';
+          c.addEventListener('click', () => {
+            const next = zoneMaskVal ^ (1 << i);
+            if (!(next & 0xFFFF)) return; // never allow an empty mask - nothing could trigger
+            zoneMaskVal = next;
+            paintZoneGrid();
+            sendControl('zoneMask', zoneMaskVal);
+          });
+          grid.appendChild(c);
+        }
+        paintZoneGrid();
+      }
+
+      function setZoneMask(value) {
+        zoneMaskVal = Number(value) & 0xFFFF;
+        if (!zoneMaskVal) zoneMaskVal = 0xFFFF; // a stored empty mask would disable detection silently
+        initZoneGrid();
+        paintZoneGrid();
       }
 
       function estFrameKB(pixels, q) {

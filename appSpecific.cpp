@@ -13,7 +13,6 @@ static char variable[FILE_NAME_LEN];
 static char value[FILE_NAME_LEN];
 static char alertCaption[100];
 static bool alertReady = false;
-static bool depthColor = true;
 bool useUart = false; // auxiliary board support removed; kept for the INCLUDE_PERIPH heartbeat test
 volatile audioAction THIS_ACTION = PASS_ACTION;
 static void stopRC();
@@ -36,18 +35,12 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "stopPlaying")) stopPlaying();
   else if (!strcmp(variable, "motionVal")) motionVal = intVal;
   else if (!strcmp(variable, "moveStartChecks")) moveStartChecks = intVal;
-  else if (!strcmp(variable, "captureSecs")) captureSecs = intVal > 0 ? intVal : captureSecs;
+  else if (!strcmp(variable, "moveStopSecs")) moveStopSecs = intVal > 0 ? intVal : moveStopSecs;
+  else if (!strcmp(variable, "zoneCount")) zoneCount = (intVal >= 1 && intVal <= 16) ? intVal : zoneCount;
+  else if (!strcmp(variable, "zoneMask")) zoneMask = intVal & 0xFFFF;
   else if (!strcmp(variable, "maxFrames")) maxFrames = intVal > 0 ? intVal : maxFrames;
   else if (!strcmp(variable, "detectMotionFrames")) detectMotionFrames = intVal;
   else if (!strcmp(variable, "detectNightFrames")) detectNightFrames = intVal;
-  else if (!strcmp(variable, "detectNumBands")) detectNumBands = intVal;
-  else if (!strcmp(variable, "detectStartBand")) detectStartBand = intVal;
-  else if (!strcmp(variable, "detectEndBand")) detectEndBand = intVal;
-  else if (!strcmp(variable, "detectChangeThreshold")) detectChangeThreshold = intVal;
-  else if (!strcmp(variable, "depthColor")) {
-    depthColor = (bool)intVal;
-    colorDepth = depthColor ? RGB888_BYTES : GRAYSCALE_BYTES;
-  }
   else if (!strcmp(variable, "enableMotion")) {
     // Turn on/off motion detection
     useMotion = (intVal) ? true : false;
@@ -77,28 +70,17 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "record")) doRecording = (intVal) ? true : false;   
   else if (!strcmp(variable, "forceRecord")) forceRecord = (intVal) ? true : false; 
   else if (!strcmp(variable, "dbgMotion")) {
-    // Show Motion streams the detector's own change map, so it needs detection to be
-    // running, and detection only ever runs at MOTION_DETECT_FS. Requiring the capture size
-    // to be that size too means no sensor switch ever happens while this is on, so the view
-    // is never interrupted by a recording.
-    // Refusals used to be silent - the flag was just dropped and the browser never told, so
-    // the checkbox stayed on while the stream quietly served the ordinary live view. Say
-    // why, and push the real state back so the toggle cannot lie
+    // Show Motion streams the detector's zone overlay, which works at any frame size now -
+    // it only needs detection to be running. A refusal is said out loud and the real state
+    // pushed back, so the toggle cannot lie
     if (intVal && !useMotion) {
       LOG_WRN("Show Motion needs motion detection enabled");
-      dbgMotion = false;
-      wsAsyncSendJson("ustatus", "\"dbgMotion\":0");
-    } else if (intVal && (framesize_t)fsizePtr != MOTION_DETECT_FS) {
-      LOG_WRN("Show Motion needs frame size %s, detection only runs at that size",
-        frameData[MOTION_DETECT_FS].frameSizeStr);
       dbgMotion = false;
       wsAsyncSendJson("ustatus", "\"dbgMotion\":0");
     } else {
       dbgMotion = (bool)intVal;
       LOG_INF("%s Show Motion", dbgMotion ? "Enabling" : "Disabling");
     }
-    // doRecording is deliberately left alone. At MOTION_DETECT_FS there is no sensor switch
-    // between detecting and capturing, so recording and Show Motion coexist
   }
   // peripherals
 #if INCLUDE_PERIPH
@@ -196,7 +178,6 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     tunedFps = intVal;
     if (playbackHandle != NULL) retimePending = true; // capture task re-times on next frame
   }
-  else if (!strcmp(variable, "mdAtCapture")) mdAtCapture = intVal; // effective from the next idle transition
   else if (!strcmp(variable, "framesize")) {
     // Compare pixels, not enum index. The custom sizes sit past framesize_t so they are
     // numerically above maxFS while being far smaller than it - an index test would reject
@@ -216,19 +197,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
       fsizePtr = intVal;
       if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills only, no AVI recording",
         frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
-      if (dbgMotion && (framesize_t)fsizePtr != MOTION_DETECT_FS) {
-        // Show Motion is only offered at the detection size, so that a recording never
-        // switches the sensor out from under it
-        dbgMotion = false;
-        LOG_WRN("Show Motion turned off - only available at frame size %s",
-          frameData[MOTION_DETECT_FS].frameSizeStr);
-        wsAsyncSendJson("ustatus", "\"dbgMotion\":0");
-      }
       // Deliberately does NOT touch the sensor. settleSensor() in the capture task owns
-      // sensorFS and applies this on the next frame. Setting the hardware here behind its
-      // back leaves sensorFS stale, and checkMotion() then decodes the new, larger frame
-      // using the detection size's scaling and overruns rgbBuf - confirmed on hardware,
-      // selecting FHD left the sensor at 1920x1080 while sensorFS still said VGA
+      // sensorFS and applies this on the next frame - setting the hardware here behind its
+      // back leaves sensorFS stale (zoneMotion also keys its reference off sensorFS)
       if (playbackHandle != NULL) {
         // update default FPS for this frame size
         captureFPS = frameData[fsizePtr].defaultFPS;
@@ -324,10 +295,15 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   } 
+  else if (!strcmp(variable, "zoneStats")) {
+    // detector snapshot as JSON for threshold tuning - pollable, unlike the logged avgZones
+    zoneStatsJson(jsonBuff, JSON_BUFF_LEN);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, jsonBuff);
+  }
   else if (!strcmp(variable, "updateFPS")) {
     // Report the capture resolution's rate menu and headroom. Must not go through
-    // setFPSlookup(), which calls setFPS() and so retunes the live frame timer - a UI poll
-    // while idle at MOTION_DETECT_FS would otherwise yank the timer to the capture rate.
+    // setFPSlookup(), which calls setFPS() and so retunes the live frame timer on a UI poll.
     // opts: the standard rates at or under the size's tuned ceiling when tunedFps is on,
     // else just the single measured driver-clock rate (stock behaviour). aecMax: the manual
     // exposure ceiling in lines, VTS-4 read from the LIVE sensor so the slider tracks
@@ -365,9 +341,8 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
       httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
       httpd_resp_send(req, (const char*)alertBuffer, alertBufferSize);
       uint32_t jpegTime = millis() - startTime;
-      // report the size actually delivered. While motion detection is armed the sensor
-      // sits at MOTION_DETECT_FS, so a still is that size, not the capture resolution -
-      // naming fsizePtr here would confidently report a size that was never captured
+      // report the size actually delivered - sensorFS is the hardware truth, and naming
+      // fsizePtr would confidently report a size that was never captured on any mismatch
       LOG_INF("%s JPEG: %uB in %lums", frameData[sensorFS].frameSizeStr, alertBufferSize, jpegTime);
       alertBufferSize = 0;
     } else LOG_WRN("Failed to get still");
@@ -767,7 +742,7 @@ ae_level~-2~98~~na
 aec~1~98~~na
 tunedFps~0~98~~na
 sdBusDiv~4~98~~na
-mdAtCapture~0~98~~na
+zoneMask~65535~98~~na
 aec2~0~98~~na
 aec_value~204~98~~na
 agc~1~98~~na
@@ -821,14 +796,10 @@ responseTimeoutSecs~10~2~N~Server response timeout (secs)
 maxFrames~3600~1~N~Max frames in recording
 dashCamOn~0~98~~na
 moveStartChecks~5~1~N~Checks per second for start motion
-captureSecs~15~1~N~Motion recording length (secs)
-detectMotionFrames~5~1~N~Num changed frames to start motion
+moveStopSecs~10~98~~na
+detectMotionFrames~3~1~N~Num changed checks to start motion
 detectNightFrames~10~1~N~Min dark frames to indicate night
-detectNumBands~10~1~N~Total num of detection bands
-detectStartBand~3~1~N~Top band where motion is checked
-detectEndBand~8~1~N~Bottom band where motion is checked
-detectChangeThreshold~15~1~N~Pixel difference to indicate change
-depthColor~0~1~C~Color depth for motion detection: Gray <> RGB
+zoneCount~2~1~N~Zones changed at once to signal motion
 streamVid~0~8~C~Enable NVR Video stream: /sustain?video=1
 streamAud~0~8~C~Enable NVR Audio stream: /sustain?audio=1
 smtpUse~0~2~C~Enable email sending

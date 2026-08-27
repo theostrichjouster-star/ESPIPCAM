@@ -143,39 +143,12 @@
 // fewer audio chunks than video frames, so the index needs well under 2 entries per frame
 #define AUD_CHUNK_MIN 8000
 
-// Largest frame motion detection will process, as a pixel count rather than a framesize_t
-// index - framesize_t is not ordered by size, so an index test blocks P_HD (0.92MP)
-// despite it being smaller than SXGA.
-// The value is HD, and it is set by measurement not by preference. Decoding a frame at or
-// above roughly 1.3MP hard hangs the board - no HTTP, no ping, no serial, no panic, no
-// reboot - intermittently. FHD survived 153 checks once and died in under 10 another time.
-// Ruled out: heap and PSRAM exhaustion, duty cycle (VGA runs 1.28x over its frame interval
-// and is fine), check duration (P_HD takes 331ms and is fine), and the frame buffer leak
-// fixed in processFrame(). Root cause is still unknown. Every size at or below this ran
-// hundreds of checks without incident, so the cap stays here until that is understood.
-// This is lower than the maxVideoFS video cap on purpose: recording a size and running
-// motion detection on it are separate permissions.
-#define MOTION_MAX_PIXELS 921600UL
-// rgbBuf holds the decoded motion bitmap. Sizing this from the nominal frame dimensions
-// is wrong: the decoder pads width and height up to the 16 pixel MCU grid before scaling,
-// so SVGA 800x600 becomes 800x608 and decodes at 1/8 to 100x76, not 100x75. The margin
-// below covers that padding, and checkMotion() range checks the padded dimensions too.
-// MOTION_MAX_PIXELS/64 is the 1/8 case; sizes that use a smaller scaleFactor decode a
-// larger fraction of a smaller frame and still land well under it. Worst case across
-// everything within the cap is HD and P_HD at 160x90 and 90x160, 43,200 bytes of 49,344
-#define MOTION_MCU_PX 16 // jpeg minimum coded unit, 4:2:0
-#define MOTION_RGB_BUF_SIZE (((MOTION_MAX_PIXELS / 64) + 2048) * RGB888_BYTES)
-// The size the sensor is held at while armed and idle, so motion detection never decodes
-// the user's capture resolution. Fixed, not user exposed.
-// VGA is chosen by measurement, not by pixel count. Three 45s windows each, recording active:
-//   QVGA 320x240 @ scaleFactor 2 (/4)  ->  80x60 bitmap  ->  59.9 ms per check
-//   VGA  640x480 @ scaleFactor 3 (/8)  ->  80x60 bitmap  ->  36.5 ms per check
-//   QVGA 320x240 @ scaleFactor 3 (/8)  ->  40x30 bitmap  ->  17.5 ms per check
-// /8 lets the decoder take its DC only fast path, one coefficient per 8x8 block, while /4
-// needs a real partial IDCT - so QVGA at /4 costs 65% more than VGA despite carrying a
-// quarter of the pixels. VGA is the smallest row in frameData using scaleFactor 3, and it
-// yields the same 80x60 comparator source that QVGA at /4 does, for less time.
-#define MOTION_DETECT_FS FRAMESIZE_VGA
+// Motion detection is the OV5640's own 4x4 AEC zone grid (0x5691-0x56A1) compared between
+// checks - no JPEG decode, so it works at every frame size and keeps running during
+// recording and live view. The decode-based detector this replaced hard hung the board
+// intermittently at or above ~1.3MP (root cause never found), which forced a pixel cap at
+// HD and a VGA detection round-trip; both are gone with the decoder. Measurements and the
+// hang history are in BOARD_TESTING.md.
 #define MIC_GAIN_CENTER 3 // mid point
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3 
@@ -260,7 +233,6 @@ bool getPIRval();
 size_t getAudioChunk(uint8_t** buf, size_t minLen);
 bool aviIndexNearFull();
 bool videoSizeAllowed(uint8_t fsize);
-bool motionSizeAllowed(uint8_t fsize);
 void dumpMotionStats();
 void intercom();
 bool isNight(uint8_t nightSwitch);
@@ -280,6 +252,7 @@ void dumpCamRegs();
 void setCamReg(const char* csv);
 void getCamReg(const char* addr);
 void avgZones(const char* unused); // diagnostic: dump the AEC 4x4 zone grid, see mjpeg2sd.cpp
+void zoneStatsJson(char* buff, size_t buffLen); // detector snapshot as JSON for threshold tuning
 void xclkStat(const char* unused); // diagnostic: measure XCLK / VSYNC off the pins, see mjpeg2sd.cpp
 void lencFhd(const char* val); // experimental: A/B the LENC rescale for the FHD crop, see mjpeg2sd.cpp
 void setCamPll(const char* csv);
@@ -301,7 +274,6 @@ size_t updateWavHeader();
 size_t writeAviIndex(byte* clientBuf, size_t buffSize);
 
 #ifndef AUXILIARY
-bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly = false);
 void keepFrame(camera_fb_t* fb);
 void setSensorSize(framesize_t newFS);
 uint16_t jpegWidth(const uint8_t* buf, size_t len); // width from the JPEG SOF, not fb->width
@@ -314,15 +286,13 @@ const char* sensorStateStr();
 
 // motion detection parameters
 extern int moveStartChecks; // checks per second for start motion
-extern int captureSecs; // fixed duration of a motion triggered recording
+extern int moveStopSecs; // secs without motion before a triggered recording closes
+extern int zoneCount; // zones changed at once to signal motion
+extern int zoneMask; // view-order bitmask of the 4x4 zones participating in detection
 
 // motion recording parameters
-extern int detectMotionFrames; // min sequence of changed frames to confirm motion 
+extern int detectMotionFrames; // min sequence of tripped checks to confirm motion
 extern int detectNightFrames; // frames of sequential darkness to avoid spurious day / night switching
-extern int detectNumBands;
-extern int detectStartBand;
-extern int detectEndBand; // inclusive
-extern int detectChangeThreshold; // min difference in pixel comparison to indicate a change
 
 // status & control fields
 extern const char* appConfig;
@@ -338,21 +308,17 @@ extern bool isCapturing;
 extern uint8_t lightLevel;  
 extern uint8_t lampLevel;  
 extern int micGain;
-extern float motionVal;  // motion sensitivity setting - min percentage of changed pixels that constitute a movement
-extern int motionPeakChange; // highest changed pixel count since the last stats dump
-extern int motionThreshold; // the threshold that count was measured against
+extern float motionVal;  // motion sensitivity setting - maps to the per-zone delta threshold
 extern uint8_t nightSwitch; // initial white level % for night/day switching
 extern bool nightTime; 
 extern bool stopPlayback;
-extern bool useMotion; // whether to use camera for motion detection (with motionDetect.cpp)  
-extern uint8_t colorDepth;
+extern bool useMotion; // whether to use camera for motion detection (with motionDetect.cpp)
 extern int dashCamOn; // enable continuous recording, with given interval
 extern int maxFrames;
 extern int tunedFps; // fps choices drive the sensor's own timing, see applyTunedTiming()
 extern volatile bool retimePending; // fps changed - capture task retimes on the next frame
 extern volatile int pendingFS; // size chosen mid-recording, applied when the clip closes
 extern volatile int pendingFPS; // rate chosen mid-recording, applied when the clip closes
-extern int mdAtCapture; // detect motion at the capture size instead of dropping to VGA
 extern uint8_t xclkMhz;
 extern char camModel[];
 extern bool doKeepFrame;
@@ -365,9 +331,8 @@ extern uint8_t vidStreams;
 #ifndef AUXILIARY
 extern framesize_t maxFS;
 extern framesize_t maxVideoFS; // AVI recording cap, stills are not capped
-// what the sensor is set to right now, which is not the same thing as fsizePtr. fsizePtr
-// stays the user's chosen capture resolution; sensorFS drops to MOTION_DETECT_FS whenever
-// the device is armed and idle, so nothing decodes a large frame
+// what the sensor is set to right now. It follows fsizePtr in every state, but only the
+// capture task moves it - so it is the hardware truth while fsizePtr is the user's intent
 extern framesize_t sensorFS;
 #endif
 
@@ -542,33 +507,11 @@ struct frameStruct {
 // can give. It indicates frame starvation, not load, and is not a headroom measure.
 //
 // Values below are the measured rate with a little margin for dim light, where the AEC extra
-// lines lengthen the frame. VGA stays at 20 because it is MOTION_DETECT_FS and the detection
-// cost was tuned against that rate.
+// lines lengthen the frame.
 //
-// scaleFactor is passed straight to the jpeg decoder as jpg_scale_t, which only defines
-// 0..3 (JPG_SCALE_NONE..JPG_SCALE_8X). A 4 is out of range and the decode fails outright,
-// so any size motion detection is allowed to see must be 3 or below. Every row at or below
-// the MOTION_MAX_PIXELS cap is 3 or below, so no reachable decode can fail that way.
-// UXGA and P_FHD are 3 rather than 4 as a leftover from when the motion cap was FHD. They
-// now sit above the motion cap but below the video cap, so they can be recorded but never
-// decoded, and their scaleFactor is unused - left at 3 so the rows stay correct if the cap
-// is ever raised. Note they would NOT fit rgbBuf at 1/8 (90,000 and 97,200 bytes against
-// 49,344), which is what motionSizeAllowed() and the padded range check in checkMotion()
-// are there to prevent. The rows above the video cap keep 4 and are unreachable entirely.
-//
-// scaleFactor dominates motion detection cost, and NOT in the direction pixel count
-// suggests. Measured on hardware, three 45 second windows each, recording active:
-//   QVGA 320x240 @ scaleFactor 2 (/4)  ->  80x60 bitmap  ->  59.9 ms per check
-//   VGA  640x480 @ scaleFactor 3 (/8)  ->  80x60 bitmap  ->  36.5 ms per check
-//   QVGA 320x240 @ scaleFactor 3 (/8)  ->  40x30 bitmap  ->  17.5 ms per check
-// QVGA at /4 is 65% MORE expensive than VGA despite having a quarter of the pixels,
-// because /8 lets the decoder take the DC only fast path - one coefficient per 8x8
-// block - while /4 needs a real partial IDCT. Four times the blocks at near zero cost
-// each beats a quarter of the blocks at full IDCT cost. VGA is the smallest row in this
-// table that uses /8, which makes it the cheapest detection size that still feeds the
-// comparator an 80x60 source. QVGA at /8 is faster still but only produces 40x30, and
-// that detail loss was judged not worth the 19 ms. Since 19439ee checkMotion() compares the
-// decoded bitmap at its native size, so a coarser source really is a coarser compare.
+// scaleFactor and sampleRate are vestigial: they parameterised the JPEG-decode motion
+// detector, which has been replaced by the sensor's own zone grid (no decode at any size).
+// The columns are kept so the rows keep their shape; nothing reads them any more.
 const frameStruct frameData[] = {
   // maxTunedFPS 0 on every ISP-scaler size (96X96..XGA except the pass-throughs): measured
   // 27 Aug 2026, sizes doing real ISP downscaling deliver exactly HALF the computed rate
@@ -585,7 +528,7 @@ const frameStruct frameData[] = {
   {"320X320", 320, 320, 20, 2, 1, 0}, // PY260 only
   {"CIF", 400, 296, 20, 2, 1, 0},
   {"HVGA", 480, 320, 20, 2, 1, 0},
-  {"VGA", 640, 480, 20, 3, 1, 0},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2 | tuned MEASURED HALVING at VTS 1941 - untuned, and it is MOTION_DETECT_FS
+  {"VGA", 640, 480, 20, 3, 1, 0},     // PY260 | measured 20.0 @ 45% busy, ceiling 22.2 | tuned MEASURED HALVING at VTS 1941 - untuned
   {"SVGA", 800, 600, 21, 3, 1, 0},    // measured 22.1, already at HTS_FLOOR | scaler size, untuned
   {"XGA", 1024, 768, 24, 3, 1, 0},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it | scaler size, untuned
   {"HD", 1280, 720, 30, 3, 1, 52},    // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52.06 MEASURED 27 Aug, exact 12-52

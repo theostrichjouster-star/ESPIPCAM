@@ -130,7 +130,7 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
     if (dbgMotion && !taskNum) {
       // motion tracking stream on task 0 only, wait for new move mapping image
       if (xSemaphoreTake(motionSemaphore, pdMS_TO_TICKS(MAX_FRAME_WAIT)) == pdFAIL) continue;
-      // use image created by checkMotion()
+      // use zone overlay image created by zoneMotion()
       jpgLen = motionJpegLen;
       if (!jpgLen) continue;
       jpgBuf = motionJpeg;

@@ -24,12 +24,15 @@ bool forceRecord = false; // Recording enabled by rec button
 
 // motion detection parameters
 int moveStartChecks = 5; // checks per second for start motion
-// A motion triggered recording now runs for a fixed time rather than for as long as
-// movement persists. Detection is suspended while capturing - the sensor is at the user's
-// resolution then, and decoding that is what the redesign exists to avoid - so there is
-// nothing left to watch for a stop condition. Continuous movement produces a series of
-// captureSecs files rather than one long one
-int captureSecs = 15; // fixed duration of a motion triggered recording
+// A motion triggered recording runs while movement continues and closes after moveStopSecs
+// without it. Detection stays live through the recording - a zone check is ~20 SCCB reads
+// with no frame decode, so there is nothing left that needs suspending. This also removes
+// the stale-state false retrigger the old suspend-then-resume design produced (28 Aug:
+// every motion recording was followed 0.4s later by a 15s clip of nothing)
+int moveStopSecs = 10; // secs without motion before a triggered recording closes
+int zoneCount = 2; // zones changed at once to signal motion (with zone delta from motionVal)
+int zoneMask = 0xFFFF; // view-order bitmask of the 4x4 zones participating in detection
+static bool zoneDetectOK = false; // sensor has the zone grid (OV5640) - set by prepCam()
 // audio chunks are written every AUD_CHUNK_MIN bytes rather than every frame, so above
 // 4fps the index needs well under 2 entries per frame. Overflowing it now closes the
 // recording rather than rebooting, so this is a target rather than a hard ceiling
@@ -64,7 +67,7 @@ static uint32_t startTime; // total overall time
 static uint32_t dTimeTot; // total frame decode/monitor time
 // dTimeTot starts before esp_camera_fb_get(), so it bundles the wait for a frame in with
 // the motion check and cannot be used to size detection cost - a stalled sensor or SD
-// card shows up there as "monitoring time". These isolate the checkMotion() call itself
+// card shows up there as "monitoring time". These isolate the zoneMotion() call itself
 static uint32_t mTimeTot;  // time actually spent in motion checks, in microseconds
 static uint32_t mCheckCnt; // number of motion checks performed
 static uint32_t badFrameCnt; // frames rejected as zero length or oversized
@@ -118,7 +121,7 @@ framesize_t maxFS = FRAMESIZE_SVGA; // default, sizes the camera frame buffers
 // the frame fits the buffer sized for it by prepCam() - verified, not assumed, in the sweep
 framesize_t maxVideoFS = FRAMESIZE_QSXGA;
 // what the sensor is set to right now. Initialised by prepCam() once fsizePtr is known
-framesize_t sensorFS = MOTION_DETECT_FS;
+framesize_t sensorFS = FRAMESIZE_VGA; // placeholder until prepCam()/startSDtasks() pin it
 
 /**************** timers & ISRs ************************/
 
@@ -200,9 +203,9 @@ static void openAvi() {
 }
 
 static inline bool doMonitor() {
-  // monitor incoming frames for motion. Only ever reached while armed and idle, so there
-  // is no separate during-capture rate any more - a recording runs for a fixed captureSecs
-  // and detection is suspended for its whole duration
+  // pace the zone checks: 1 frame in N so they run at moveStartChecks per second. The same
+  // rate applies in every state - detection now runs through recordings and live views too,
+  // a zone check being ~2-3ms of SCCB with no frame decode
   static uint16_t motionCnt = 0;
   uint16_t checkRate = FPS / moveStartChecks;
   if (!checkRate) checkRate = 1;
@@ -233,46 +236,19 @@ uint16_t jpegWidth(const uint8_t* buf, size_t len) {
 }
 
 static bool detectionActive() {
-  // armed and idle is the only state that decodes. With motion detection off the sensor
-  // stays at the user's resolution, so a still or a stream is instant rather than paying
-  // for a switch it gains nothing from
+  // Zone detection runs in every state - recording, live view and NVR included - because a
+  // check is a handful of SCCB reads with no frame decode and no resolution change. Only
+  // dashcam mode and a sensor without the zone grid opt out. The sensor now always sits at
+  // the user's capture resolution: the old VGA detection round-trip, its transition-frame
+  // flushing on every recording, and the decode pixel cap are all gone with the decoder
   if (!useMotion || dashCamOn) return false;
-  if (isCapturing) {
-    // A capture normally stops detection, because the sensor is at the user's capture
-    // resolution then and decoding that is the whole thing this design avoids. That
-    // reasoning does not apply when the capture size IS the detection size: no switch
-    // happens, and the frames being written to the file are the same frames being analysed.
-    // Only taken for Show Motion - an ordinary fixed length capture gains nothing from
-    // detection and it would cost ~15% duty cycle for no benefit
-    if (!(dbgMotion && (framesize_t)fsizePtr == MOTION_DETECT_FS)) return false;
-  }
-  // dbgMotion streams the detector's own bitmap to the browser, so detection has to keep
-  // running for that view to show anything at all. It is a diagnostic mode, so the live
-  // view being at the detection size is the point rather than a cost
-  if (dbgMotion) return true;
-  return !viewerActive();
-}
-
-static inline bool mdAtCaptureActive() {
-  // detect at the capture size only when that size is one the decoder is allowed to touch -
-  // MOTION_MAX_PIXELS caps at HD because decoding at or above ~1.3MP intermittently hard hangs
-  // the board (see appGlobals.h). Above the cap the VGA drop stays, exactly as before
-  return mdAtCapture && motionSizeAllowed(fsizePtr);
-}
-
-static framesize_t desiredSensorFS() {
-  // derived from the same predicate, so the sensor is at the detection size exactly when
-  // detection runs - the two cannot drift apart.
-  // With mdAtCapture the sensor holds the capture size through idle detection: stills and
-  // streams are instant at full resolution, there are no transition glitch frames to flush,
-  // and the retimed HD profile is never clobbered by a VGA round trip
-  return (detectionActive() && !mdAtCaptureActive()) ? MOTION_DETECT_FS : (framesize_t)fsizePtr;
+  return zoneDetectOK;
 }
 
 static inline uint8_t desiredFPS(framesize_t forFS) {
-  // the detection size runs at its own default; the capture size runs at whatever the user
-  // chose, which is what captureFPS preserves across switches
-  return (forFS == MOTION_DETECT_FS) ? frameData[MOTION_DETECT_FS].defaultFPS : captureFPS;
+  // the sensor always runs the capture size now, at whatever rate the user chose,
+  // which is what captureFPS preserves across playback and boot
+  return captureFPS;
 }
 
 // The lowest line length the sensor will honour. The driver programs HTS 2644 for XGA and HD
@@ -453,7 +429,6 @@ static void applyAecLimits(sensor_t* s);
 static int senLineFactor(sensor_t* s);
 
 int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
-int mdAtCapture = 0; // config: detect motion at the capture size instead of dropping to VGA
 volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
 // a size or rate chosen MID-RECORDING is deferred here rather than applied, so one AVI keeps
 // one geometry and one timing throughout - its header carries a single WxH and fps, and
@@ -596,8 +571,7 @@ static void settleSensor() {
   // Must be isPlaying, not doPlayback. doPlayback means "a playable file is selected" - it
   // is set just by picking a file in the browser, and stopPlaying() only clears it inside
   // if (isPlaying), so a selection that never plays leaves it true indefinitely. Guarding on
-  // it froze sensorFS for the rest of the session: the sensor stopped following fsizePtr and
-  // stopped returning to MOTION_DETECT_FS
+  // it froze sensorFS for the rest of the session: the sensor stopped following fsizePtr
   if (isPlaying) return;
   if (!isCapturing && (pendingFS >= 0 || pendingFPS >= 0)) {
     // choices made mid-recording, applied now that the clip has closed. Size first with the
@@ -613,7 +587,7 @@ static void settleSensor() {
       if (tunedFps) retimePending = true;
     }
   }
-  framesize_t want = desiredSensorFS();
+  framesize_t want = (framesize_t)fsizePtr; // the sensor always follows the capture size
   if (want != sensorFS) {
     setSensorSize(want); // runs applySensorTuning, so any pending retime is covered
     retimePending = false;
@@ -657,35 +631,65 @@ bool videoSizeAllowed(uint8_t fsize) {
       <= (uint32_t)frameData[maxVideoFS].frameWidth * frameData[maxVideoFS].frameHeight;
 }
 
-bool motionSizeAllowed(uint8_t fsize) {
-  // was fsizePtr > FRAMESIZE_SXGA, which blocked P_HD (0.92MP) even though it is smaller
-  // than SXGA (1.31MP) - framesize_t is ordered by neither width nor pixel count. Same
-  // pixel limit as video, so anything that can be recorded can also be detected on
-  return (uint32_t)frameData[fsize].frameWidth * frameData[fsize].frameHeight <= MOTION_MAX_PIXELS;
+// Zone detector shared state - file scope so dumpMotionStats() and zoneStatsJson() can
+// report it alongside the capture task that owns it
+static uint8_t zref[16]; // reference zone grid from the last clean check
+static bool zrefValid = false;
+static uint32_t zconsecCnt = 0; // consecutive tripped checks, reported by zoneStatsJson
+static int zonePeakDelta = 0; // largest in-mask per-zone delta since the last stats dump
+static int zonePeakMoved = 0; // most zones moved in one check since the last stats dump
+static bool haveMotion = false; // detector output, refreshed at the check rate
+
+static inline int zoneThresh() {
+  // the Motion Sensitivity slider (1-10) maps onto the per-zone luminance delta that counts
+  // as movement. Default motionVal 8 -> 4, near the 5 the tier-1 pre-filter proved (5x the
+  // measured +-1 zone noise floor on a static scene)
+  int t = 12 - (int)motionVal;
+  return (t < 2) ? 2 : t;
+}
+
+static int zoneViewToPhys(int i) {
+  // zoneMask is VIEW order - the grid the user clicks matches the image they see. The zone
+  // grid follows the readout, so hmirror/vflip are undone here from the live sensor state
+  // and a flip never silently moves the masked region. Bench-verified polarity: if the
+  // corner-wave test shows the stats window is pre-flip instead, swap this to identity
+  sensor_t* s = esp_camera_sensor_get();
+  int r = i / 4, c = i % 4;
+  if (s != NULL) {
+    if (s->status.hmirror) c = 3 - c;
+    if (s->status.vflip) r = 3 - r;
+  }
+  return r * 4 + c;
+}
+
+static uint16_t zoneMaskPhys() {
+  // the view-order mask translated to the sensor's zone order
+  uint16_t m = 0;
+  for (int v = 0; v < 16; v++)
+    if ((zoneMask >> v) & 1) m |= 1 << zoneViewToPhys(v);
+  return m;
 }
 
 void dumpMotionStats() {
-  // on demand, so the idle (not recording) cost can be measured - that is the steady
-  // state load, and it is when doMonitor() runs checks most often
+  // on demand; the measurement window resets on each dump
   uint16_t checkRate = FPS / moveStartChecks;
   if (!checkRate) checkRate = 1;
   float perSec = (float)FPS / checkRate;
   LOG_INF("******** Motion detection stats ********");
-  // report the size actually being detected on, which is sensorFS, not the capture size
-  LOG_INF("Detect size: %s (%ux%u), app FPS %u, enabled: %s", frameData[sensorFS].frameSizeStr,
-    frameData[sensorFS].frameWidth, frameData[sensorFS].frameHeight, FPS,
-    motionSizeAllowed(sensorFS) ? "yes" : "no - above pixel cap");
+  LOG_INF("Zone detection %s, sensor %s (%ux%u), app FPS %u", zoneDetectOK ? "available" : "UNAVAILABLE - needs the OV5640 zone grid",
+    frameData[sensorFS].frameSizeStr, frameData[sensorFS].frameWidth, frameData[sensorFS].frameHeight, FPS);
   LOG_INF("Capture size: %s, state: %s", frameData[fsizePtr].frameSizeStr, sensorStateStr());
   LOG_INF("moveStartChecks %d -> check every %u frame(s) = %0.1f checks/sec", moveStartChecks, checkRate, perSec);
   if (mCheckCnt) {
     float perCheck = (float)mTimeTot / mCheckCnt / 1000.0f; // us -> ms
     LOG_INF("%lu checks, %lu ms total, %0.2f ms per check", mCheckCnt, mTimeTot / 1000, perCheck);
     LOG_INF("Detection duty cycle: %0.1f%% of wall clock", perCheck * perSec / 10.0f);
-  } else LOG_WRN("No checks recorded - motion off, night gated, or size above cap");
-  // for tuning motionVal: the peak is the closest any check came to tripping, so a peak
-  // well under the threshold means the sensitivity is too low to ever fire on that scene
-  LOG_INF("Sensitivity motionVal %.0f -> threshold %d changed pixels, peak seen %d",
-    motionVal, motionThreshold, motionPeakChange);
+  } else LOG_WRN("No checks recorded - motion off or night gated");
+  // for tuning: the peaks are the closest any check came to tripping, so peaks well under
+  // the thresholds mean the sensitivity is too low to ever fire on that scene
+  LOG_INF("Thresholds: zone delta >= %d (motionVal %.0f), zones >= %d, %d consecutive checks, mask 0x%04X",
+    zoneThresh(), motionVal, zoneCount, detectMotionFrames, zoneMask);
+  LOG_INF("Peak seen: zone delta %d, zones moved %d", zonePeakDelta, zonePeakMoved);
   LOG_INF("Light level %u, night %s (lswitch %u)%s", lightLevel, nightTime ? "yes" : "no",
     nightSwitch, nightTime ? " - DETECTION SUSPENDED" : "");
   // any nonzero count here used to leak a frame buffer permanently, FB_CNT of them
@@ -698,10 +702,11 @@ void dumpMotionStats() {
   // means it is not running - which is how a stuck guard silently froze the sensor once
   // already. Every symptom of that bug was "sensorFS is not what the state implies", and
   // nothing asserted it
-  if (!isPlaying && sensorFS != desiredSensorFS()) LOG_WRN("Sensor is %s but state wants %s - settleSensor not reconciling",
-    frameData[sensorFS].frameSizeStr, frameData[desiredSensorFS()].frameSizeStr);
+  if (!isPlaying && sensorFS != (framesize_t)fsizePtr) LOG_WRN("Sensor is %s but capture size is %s - settleSensor not reconciling",
+    frameData[sensorFS].frameSizeStr, frameData[fsizePtr].frameSizeStr);
   LOG_INF("***************************************");
-  mTimeTot = mCheckCnt = badFrameCnt = staleFrameCnt = motionPeakChange = 0; // reset the measurement window
+  mTimeTot = mCheckCnt = badFrameCnt = staleFrameCnt = 0; // reset the measurement window
+  zonePeakDelta = zonePeakMoved = 0;
 }
 
 void keepFrame(camera_fb_t* fb) {
@@ -831,8 +836,8 @@ static bool closeAvi() {
     mqttPublishPath("record", "off");
   }
 #endif
-  // a motion capture now runs for a fixed captureSecs, so there is no short recording to
-  // discard - the only file worth throwing away is one with nothing in it
+  // a motion capture runs at least until the stop timer expires, so there is no short
+  // recording to discard - the only file worth throwing away is one with nothing in it
   if (frameCnt) {
     // name file to include actual dateTime, FPS, duration, and frame count
     int alen = snprintf(aviFileName, FILE_NAME_LEN - 1, "%s_%s_%u_%lu%s%s.%s",
@@ -895,36 +900,91 @@ static bool closeAvi() {
   }
 }
 
-static bool zonePreFilter() {
-  // Tier 1 of detection at the capture size: decide whether this check needs a JPEG decode at
-  // all, from the sensor's own 4x4 zone luminance grid (section 7.28, 0x5691-0x56A0). The
-  // sensor computes the grid continuously for its AEC at any resolution, so sampling it is
-  // ~20 SCCB reads (~2-3ms) against a 60-90ms HD decode. Returns true when a decode is
-  // warranted: zones moved, the periodic floor is due, or the zones cannot be trusted.
+static void buildZoneOverlay(uint8_t* z, bool refOk, int zoneT, uint16_t maskPhys) {
+  // Show Motion view: a 96x96 image of 16 blocks in VIEW order - gray = zone luminance,
+  // red = zone moved this check, dimmed = masked out of detection. Encoded into the same
+  // motionJpeg buffer the stream task already consumes via motionSemaphore
+  if (motionJpeg == NULL) motionJpeg = (uint8_t*)ps_malloc(32 * 1024);
+  static uint8_t* ovBuf = NULL;
+  if (ovBuf == NULL) ovBuf = (uint8_t*)ps_malloc(96 * 96 * 3);
+  if (motionJpeg == NULL || ovBuf == NULL) return;
+  if (motionJpegLen) return; // previous overlay not yet taken by the stream task
+  for (int v = 0; v < 16; v++) {
+    int p = zoneViewToPhys(v);
+    int d = refOk ? abs((int)z[p] - (int)zref[p]) : 0;
+    bool moved = refOk && d >= zoneT && ((maskPhys >> p) & 1);
+    bool active = (maskPhys >> p) & 1;
+    uint8_t g = active ? z[p] : z[p] / 3;
+    uint8_t rC = moved ? 255 : g, gC = moved ? g / 2 : g, bC = moved ? g / 2 : g;
+    int row0 = (v / 4) * 24, col0 = (v % 4) * 24;
+    for (int y = row0; y < row0 + 24; y++) {
+      uint8_t* px = ovBuf + (y * 96 + col0) * 3;
+      for (int x = 0; x < 24; x++) { *px++ = rC; *px++ = gC; *px++ = bC; }
+    }
+  }
+  uint8_t* jpg = NULL;
+  size_t jpgLen = 0;
+  if (fmt2jpg(ovBuf, 96 * 96 * 3, 96, 96, PIXFORMAT_RGB888, 80, &jpg, &jpgLen)) {
+    if (jpgLen && jpgLen < 32 * 1024) {
+      memcpy(motionJpeg, jpg, jpgLen);
+      motionJpegLen = jpgLen;
+      xSemaphoreGive(motionSemaphore);
+    }
+    free(jpg);
+  }
+}
+
+static bool zoneMotion(bool motionStatus) {
+  // The whole detector: the sensor's own 4x4 zone luminance grid (section 7.28,
+  // 0x5691-0x56A0) compared against the previous check. ~20 SCCB reads (~2-3ms), no frame
+  // decode, so it works at every frame size and keeps running through recordings and live
+  // views. Replaces the JPEG-decode detector - see BOARD_TESTING.md for the decode hang
+  // that capped detection at HD and the stale-state retrigger the suspend design produced.
   //
-  // Two gates make the zones trustworthy, both measured this week:
+  // Two gates make the zones trustworthy, both measured:
   //  - AEC deadband (section 4.5): while YAVG sits inside {0x3A1E..0x3A1B} the AEC holds
-  //    exposure, and on a static scene the 16 zones are stable to +-1 count. Outside the band
-  //    the AEC is re-exposing and every zone moves at once - an optical event, not motion.
+  //    exposure, and on a static scene the 16 zones are stable to +-1 count. Outside the
+  //    band the AEC is re-exposing and every zone moves at once - an optical event, not
+  //    motion. That includes the re-exposure a person entering causes, so a trigger can
+  //    lag the entry by the AEC settle time (~0.5-1s worst case).
   //  - AF state: a focus hunt also moves every zone at once. Codes from the AF library's
-  //    app-note derived header: 0x70 idle, 0x10 focused, anything else is a hunt in progress.
-  //  When a gate fails the reference is dropped and the decode runs, so gated intervals fall
-  //  back to exactly the pre-filter-free behaviour rather than going blind.
-  //
-  // The reference updates every clean tick, so a very slow mover may never beat ZONE_T against
-  // the previous tick - that is what the DECODE_FLOOR is for: an unconditional decode at least
-  // every 2s bounds the miss window for anything the grid is too coarse or too slow to see.
-  const int ZONE_T = 5;              // per-zone delta to count, 5x the measured noise floor
-  const int ZONE_N = 2;              // zones over ZONE_T to trip a decode
-  const uint32_t DECODE_FLOOR_MS = 2000;
-  static uint8_t refZones[16];
-  static bool refValid = false;
-  static uint32_t lastDecode = 0;
+  //    app-note derived header: 0x70 idle, 0x10 focused, anything else is a hunt.
+  // A failed gate is indeterminate: the reference is dropped and the existing motion state
+  // is returned unchanged - no trip, no un-trip, never a false edge. Crucially it also
+  // PAUSES the consecutive-trip streak rather than resetting it: real movement perturbs
+  // the AEC continuously, so checks alternate between tripped and out-of-band - measured
+  // on the first walk test, where 14 zones moved at delta 52 yet the trigger never fired
+  // because every re-exposure zeroed the streak. False-trigger immunity is unharmed: after
+  // a gate failure the reference must rebuild before any comparison can trip, so a global
+  // optical event (lights, AF) still produces no edge.
+  static uint8_t refFS = 255; // reference is meaningless across a size change
   sensor_t* s = esp_camera_sensor_get();
-  if (s == NULL || s->get_reg == NULL) return true; // cannot read the grid: decode as before
+  if (s == NULL || s->get_reg == NULL) return motionStatus;
   int yavg = s->get_reg(s, 0x56A1, 0xFF);
   int bandHi = s->get_reg(s, 0x3A1B, 0xFF);
   int bandLo = s->get_reg(s, 0x3A1E, 0xFF);
+  // YAVG is pre-gamma, so it reads ~3x lower than the decoded-image mean the old detector
+  // used (measured: YAVG 33 on a scene the old path called light 33-45%). Scale against 96
+  // rather than 255 so lswitch keeps its existing calibration; clamp at 100. The
+  // AEC-normalised caveat is unchanged: this measures exposure output, not room brightness
+  if (yavg >= 0) lightLevel = (yavg >= 96) ? 100 : (yavg * 100) / 96;
+  nightTime = isNight(nightSwitch);
+  // the night gate blocks detection outright, and lightLevel measures auto exposure output
+  // rather than room brightness, so it can latch in ordinary indoor light. Say so once per
+  // transition - otherwise detection silently does nothing and looks like a sensitivity bug
+  static bool warnedNight = false;
+  if (nightTime && !warnedNight) {
+    LOG_WRN("Motion detection suspended - night mode (light %u%% below lswitch %u)", lightLevel, nightSwitch);
+    warnedNight = true;
+  } else if (!nightTime && warnedNight) {
+    LOG_INF("Motion detection resumed - daylight (light %u%%)", lightLevel);
+    warnedNight = false;
+  }
+  if (nightTime) {
+    zrefValid = false;
+    zconsecCnt = 0;
+    return false;
+  }
   bool gatesOk = (yavg >= 0 && yavg >= bandLo && yavg <= bandHi);
 #if INCLUDE_AF
   if (gatesOk) {
@@ -933,38 +993,113 @@ static bool zonePreFilter() {
   }
 #endif
   if (!gatesOk) {
-    refValid = false;
-    lastDecode = millis();
-    return true;
+    // reference dropped, streak PAUSED - see the header comment for why it must not reset
+    zrefValid = false;
+    return motionStatus;
   }
   uint8_t z[16];
   for (int i = 0; i < 16; i++) {
     int v = s->get_reg(s, 0x5691 + i, 0xFF);
-    if (v < 0) { refValid = false; return true; } // SCCB glitch: decode as before
+    if (v < 0) { zrefValid = false; return motionStatus; } // SCCB glitch
     z[i] = (uint8_t)v;
   }
-  bool trip = false;
-  if (refValid) {
-    int moved = 0;
-    for (int i = 0; i < 16; i++) if (abs((int)z[i] - (int)refZones[i]) >= ZONE_T) moved++;
-    trip = (moved >= ZONE_N);
+  if (sensorFS != refFS) {
+    refFS = sensorFS;
+    zrefValid = false; // zones now describe a different framing - no false trip on a size change
+    zconsecCnt = 0;
   }
-  bool hadRef = refValid;
-  memcpy(refZones, z, sizeof(refZones));
-  refValid = true;
-  if (trip || !hadRef || millis() - lastDecode >= DECODE_FLOOR_MS) {
-    lastDecode = millis();
-    return true;
+  int zoneT = zoneThresh();
+  uint16_t maskPhys = zoneMaskPhys();
+  bool tripped = false;
+  if (zrefValid) {
+    int moved = 0, maxDelta = 0;
+    for (int i = 0; i < 16; i++) {
+      if (!((maskPhys >> i) & 1)) continue; // masked out of the region of interest
+      int d = abs((int)z[i] - (int)zref[i]);
+      if (d > maxDelta) maxDelta = d;
+      if (d >= zoneT) moved++;
+    }
+    tripped = (moved >= zoneCount);
+    if (maxDelta > zonePeakDelta) zonePeakDelta = maxDelta;
+    if (moved > zonePeakMoved) zonePeakMoved = moved;
+    if (tripped) {
+      zconsecCnt++;
+      // need a minimum sequence of tripped checks to signal valid movement
+      if (!motionStatus && zconsecCnt >= (uint32_t)detectMotionFrames) {
+        LOG_INF("Motion detected: %d zones moved >= %d (zoneCount %d, %lu consecutive), light %u%%",
+          moved, zoneT, zoneCount, zconsecCnt, lightLevel);
+        motionStatus = true;
+#if INCLUDE_MQTT
+        if (mqtt_active) {
+          sprintf(jsonBuff, "{\"MOTION\":\"ON\", \"TIME\":\"%s\"}", esp_log_system_timestamp());
+          mqttPublish(jsonBuff);
+          mqttPublishPath("motion", "on");
+        }
+#endif
+      }
+    } else {
+      zconsecCnt = 0;
+      if (motionStatus) {
+        LOG_INF("Motion ended: %d zones moved, below zoneCount %d", moved, zoneCount);
+        motionStatus = false;
+#if INCLUDE_MQTT
+        if (mqtt_active) {
+          sprintf(jsonBuff, "{\"MOTION\":\"OFF\", \"TIME\":\"%s\"}", esp_log_system_timestamp());
+          mqttPublish(jsonBuff);
+          mqttPublishPath("motion", "off");
+        }
+#endif
+      }
+    }
   }
-  return false; // scene quiet by the sensor's own account - skip the decode
+  if (dbgMotion) buildZoneOverlay(z, zrefValid, zoneT, maskPhys); // before the reference update, so deltas show
+  memcpy(zref, z, sizeof(zref));
+  zrefValid = true;
+  return motionStatus;
+}
+
+void zoneStatsJson(char* buff, size_t buffLen) {
+  // JSON snapshot for threshold tuning: live zones, deltas against the detector's current
+  // reference, the trust gates, thresholds in force, and the detector state. Safe from the
+  // web task - SCCB reads only, same as camRegRd
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->get_reg == NULL) {
+    snprintf(buff, buffLen, "{\"err\":\"no sensor\"}");
+    return;
+  }
+  uint8_t z[16];
+  for (int i = 0; i < 16; i++) {
+    int v = s->get_reg(s, 0x5691 + i, 0xFF);
+    z[i] = (v < 0) ? 0 : (uint8_t)v;
+  }
+  int yavg = s->get_reg(s, 0x56A1, 0xFF);
+  int bandHi = s->get_reg(s, 0x3A1B, 0xFF);
+  int bandLo = s->get_reg(s, 0x3A1E, 0xFF);
+  bool aecStable = (yavg >= 0 && yavg >= bandLo && yavg <= bandHi);
+  int afStat = -1;
+#if INCLUDE_AF
+  afStat = ov5640AF.getFWStatus();
+#endif
+  uint16_t maskPhys = zoneMaskPhys();
+  char* p = buff;
+  p += sprintf(p, "{\"zones\":[");
+  for (int i = 0; i < 16; i++) p += sprintf(p, "%u%s", z[i], (i < 15) ? "," : "");
+  p += sprintf(p, "],\"deltas\":[");
+  for (int i = 0; i < 16; i++)
+    p += sprintf(p, "%d%s", zrefValid ? abs((int)z[i] - (int)zref[i]) : 0, (i < 15) ? "," : "");
+  p += sprintf(p, "],\"yavg\":%d,\"bandLo\":%d,\"bandHi\":%d,\"aecStable\":%d,\"afStat\":%d,", yavg, bandLo, bandHi, aecStable ? 1 : 0, afStat);
+  p += sprintf(p, "\"zoneThresh\":%d,\"zoneCount\":%d,\"consecNeeded\":%d,", zoneThresh(), zoneCount, detectMotionFrames);
+  p += sprintf(p, "\"zoneMask\":%d,\"maskPhys\":%u,\"refValid\":%d,\"consec\":%lu,", zoneMask, maskPhys, zrefValid ? 1 : 0, zconsecCnt);
+  p += sprintf(p, "\"motion\":%d,\"capturing\":%d,\"light\":%u,\"night\":%d,\"detectOK\":%d}",
+    haveMotion ? 1 : 0, isCapturing ? 1 : 0, lightLevel, nightTime ? 1 : 0, zoneDetectOK ? 1 : 0);
 }
 
 static boolean processFrame() {
   // get camera frame
-  static bool haveMotion = false;
-  // whether the open recording was started by motion, and so runs to a fixed frame limit
-  // rather than for as long as the record button is held
+  // whether the open recording was started by motion, and so closes on the extending
+  // timer (moveStopSecs after the last motion) rather than when the record button is let go
   static bool motionTriggered = false;
+  static uint32_t lastMotionMs = 0; // refreshed by every check that reports motion
   bool res = true;
   uint32_t dTime = millis();
 
@@ -1013,24 +1148,18 @@ static boolean processFrame() {
     doKeepFrame = false;
   }
 
-  // Motion detection runs only while armed and idle. Recording, live view, NVR and
-  // dashcam all skip the decode entirely, so no frame at the capture resolution ever
-  // reaches the decoder - that is what makes the large frame hang unreachable. It is also
-  // what makes turning motion detection off genuinely free: the lightLevelOnly path used
-  // to return after the decode rather than before it, so it cost the same as a real check
+  // Zone detection runs in every state - a check is ~20 SCCB reads, no frame decode, so
+  // recording, live view and NVR carry it for free. The old decode detector, its VGA
+  // round-trip and its large-frame hang are gone with the decoder (see BOARD_TESTING.md)
   int reasonId = 0;
   bool prevMotion = haveMotion;
   if (detectionActive()) {
-    // with mdAtCapture the decode is skipped whenever the sensor's own zone grid says the
-    // scene is quiet - on a skip haveMotion is left untouched, so edges are unaffected
-    if (doMonitor() && (!mdAtCaptureActive() || zonePreFilter())) {
-      uint32_t mTime = micros(); // micros, as a check can be only a few ms
-      // The second argument is the PREVIOUS motion state, which checkMotion() uses to find
-      // the start and stop edges - not "are we capturing". Passing a literal false made
-      // every check look like a fresh start, so the motion log repeated several times a
-      // second and MQTT republished MOTION:ON on every check, while the stop edge could
-      // never fire at all
-      if (checkMotion(fb, haveMotion)) reasonId = 1; // check 1 in N frames
+    if (doMonitor()) {
+      uint32_t mTime = micros(); // micros, as a check is only a few ms
+      // The argument is the PREVIOUS motion state, which zoneMotion() uses to find the
+      // start and stop edges - passing a literal false would make every check look like
+      // a fresh start and repeat the motion log and MQTT on every check
+      if (zoneMotion(haveMotion)) reasonId = 1; // check 1 in N frames
       mTimeTot += micros() - mTime;
       mCheckCnt++;
 #if INCLUDE_PERIPH
@@ -1038,14 +1167,13 @@ static boolean processFrame() {
 #endif
       haveMotion = (reasonId) ? true : false;
     }
-  }
+  } else haveMotion = false; // disarmed mid-event: a stale true must not hold a recording open
 
   // process motion status
+  if (haveMotion) lastMotionMs = millis(); // feeds the extending stop timer below
   if (haveMotion && !prevMotion) {
-    // Start of movement detection. The frame kept here is the detection frame, so the
-    // alert image is at MOTION_DETECT_FS - deliberately, since switching the sensor up
-    // just to grab a thumbnail would cost a frame interval for detail an alert image
-    // does not need. The still handler reports the real size rather than assuming fsizePtr
+    // start of movement: the frame in hand is at the capture resolution now, so the alert
+    // image is full size. The still handler reports the real size rather than assuming
     keepFrame(fb);
 #if INCLUDE_PERIPH
     buzzerAlert(true); // sound buzzer if enabled
@@ -1059,22 +1187,24 @@ static boolean processFrame() {
 #endif
   }
 
-  // Recording status. A motion triggered capture runs for a fixed captureSecs and is ended
-  // by the frame limit, not by movement stopping - detection is suspended for its whole
-  // duration, so there is no motion signal left to watch. A forced capture (record button
-  // or dashcam) still runs for as long as it is held on
+  // Recording status. A motion triggered capture records while movement continues: every
+  // check reporting motion refreshes lastMotionMs, and the recording closes once
+  // moveStopSecs pass without it - detection keeps running throughout, which is what makes
+  // this possible (and removes the old suspend-then-resume stale-state retrigger). The
+  // frame limit and AVI index remain as hard caps; a cap-close with motion still present
+  // chains straight into a new file on the next pass. A forced capture (record button or
+  // dashcam) still runs for as long as it is held on.
   // doRecording is the Save Capture toggle, and is also cleared when the SD card fills and
-  // when there is no card at all. It now gates motion triggered recordings, which it never
-  // actually did before: its only read was inside the doMonitor() rate expression, so
-  // turning Save Capture off still recorded, and a full card still recorded. The record
-  // button bypasses it, being an explicit user action
+  // when there is no card at all. The record button bypasses it, being an explicit user action
   bool prevCapture = isCapturing;
   if (!isCapturing) {
     if ((haveMotion && doRecording) || forceRecord) {
       isCapturing = true;
       motionTriggered = haveMotion && !forceRecord;
     }
-  } else if (!motionTriggered && !forceRecord) isCapturing = false;
+  } else if (motionTriggered) {
+    if (!forceRecord && millis() - lastMotionMs > (uint32_t)moveStopSecs * 1000) isCapturing = false;
+  } else if (!forceRecord) isCapturing = false;
 
   if (isCapturing && !videoSizeAllowed(fsizePtr)) {
     // refuse the recording, but leave stills running at this size.
@@ -1084,12 +1214,10 @@ static boolean processFrame() {
     isCapturing = forceRecord = motionTriggered = false;
   }
   if (isCapturing && !prevCapture) {
-    // New movement has occurred or record button pressed. The frame in hand is a detection
-    // frame at MOTION_DETECT_FS, so hand it back and switch the sensor up before opening
-    // the file - nothing at the detection size is ever written into a recording. This pass
-    // saves no frame; the next notify delivers one at the capture resolution
+    // New movement has occurred or record button pressed. The sensor is already at the
+    // capture resolution, so this pass just opens the file; the frame in hand is handed
+    // back and the next notify delivers the first saved frame
     esp_camera_fb_return(fb);
-    haveMotion = false; // consumed - the frame limit ends this capture now, not movement
     stopPlaying(); // terminate any playback
     stopPlayback = true; // stop any subsequent playback
     if (!dashCamOn) LOG_ALT("Capture started by %s%s%s%s", reasonId == 0 ? "Button" : "", reasonId == 1 ? "Camera " : "", reasonId == 2 ? "PIR" : "", reasonId == 3 ? "Accelerometer" : "");
@@ -1101,12 +1229,10 @@ static boolean processFrame() {
     }
 #endif
     wsAsyncSendJson("ustatus", "\"showRecord\":1");
-    setSensorSize((framesize_t)fsizePtr);
-    if (!dashCamOn) {
-      // FPS now follows the capture size, so derive the limit after the switch
-      frameLimit = captureSecs * FPS;
-      if (frameLimit > maxFrames) frameLimit = maxFrames;
-    }
+    setSensorSize((framesize_t)fsizePtr); // defensive no-op - settleSensor keeps the sensor there
+    // the extending timer governs a motion recording's length; maxFrames (and the AVI
+    // index) stay as the hard cap, which at 30fps is 120s per file before chaining
+    if (!dashCamOn) frameLimit = maxFrames;
     openAvi();
     return true;
   }
@@ -1144,18 +1270,9 @@ static boolean processFrame() {
     stopPlayback = false; // allow for playbacks
   }
 
-  // A connected viewer pins the sensor to the capture resolution, which suspends motion
-  // recording for as long as it stays connected. That is a big enough behaviour change to
-  // say out loud rather than leave the user wondering why nothing recorded
-  static bool prevViewer = false;
-  bool nowViewer = viewerActive();
-  if (nowViewer != prevViewer) {
-    prevViewer = nowViewer;
-    if (useMotion) LOG_ALT("%s video stream %s - motion recording %s", nvrActive() ? "NVR" : "Browser",
-      nowViewer ? "connected" : "disconnected", nowViewer ? "suspended" : "resumed");
-  }
   // settle the sensor for whatever state we are now in. No-op when already correct, and
-  // safe here because the frame buffer has been handed back above
+  // safe here because the frame buffer has been handed back above. (Viewers no longer
+  // suspend motion recording - zone detection runs through them)
   settleSensor();
   return res;
 }
@@ -1434,8 +1551,7 @@ static bool startSDtasks() {
     return false;
   }
   // set initial camera framesize and FPS from configs. sensorFS tracks what the sensor is
-  // actually set to - processFrame() drops it to MOTION_DETECT_FS on the first frame if
-  // the device comes up armed and idle
+  // actually set to, and it stays at the capture size in every state now
   sensor_t * s = esp_camera_sensor_get();
   framesize_t bootFS = (framesize_t)fsizePtr;
   s->set_framesize(s, hwFrameSize(bootFS));
@@ -2330,6 +2446,7 @@ bool prepCam() {
           break;
         case (OV5640_PID): {
           strcpy(camModel, "OV5640");
+          zoneDetectOK = true; // the 4x4 AEC zone grid (0x5691+) that motion detection reads
 #if INCLUDE_AF
           // enable autofocus for OV5640 if equipped - see https://github.com/0015/ESP32-OV5640-AF
           ov5640AF.start(s);
@@ -2348,6 +2465,9 @@ bool prepCam() {
           sprintf(camModel, "PID=0x%X", s->id.PID);
           break;
       }
+      // motion detection is the OV5640's zone grid now - say so once when it is absent,
+      // rather than letting an armed board silently never trigger
+      if (!zoneDetectOK) LOG_WRN("Motion detection unavailable - needs the OV5640 zone grid, sensor is %s", camModel);
       // set frame size to configured value, mapped the same way every other caller maps it.
       // The config can hold an app-only size past the driver's enum (see FS_1280X960), and
       // handing that straight to the driver made it log "Invalid framesize: 25" and clamp to
