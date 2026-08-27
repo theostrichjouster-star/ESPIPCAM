@@ -257,12 +257,13 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     // during esp_camera_init, so the part never runs at the power-on figure. Confirmed by
     // reading the register back off both boards.
     // The extension appears as the AEC extra lines dumpCamRegs() reports, so it is visible.
-    // Defaulted ON since 27 Aug 2026, and the old hold-the-frame-rate rationale for off is
-    // gone twice over: applyAecLimits() caps the ceiling at VTS-4 so night mode can never
-    // extend the frame under tuned timing, and with the bit OFF the AEC refuses to integrate
-    // into a long tuned frame at all - it parks exposure near zero and runs 27-30x gain
-    // (vertical FPN stripes, washed-out color; see applyAecLimits). Off remains selectable
-    // but buys nothing and costs image quality below ~24fps
+    // Defaulted OFF, and it spent one day (27 Aug 2026) defaulted on - that was a wrong fix
+    // for the low-fps gain-parking, which is really the AEC engine handed an exposure ceiling
+    // beyond its 1964-row range (see applyAecLimits, which now clamps it). Night mode papers
+    // over that case by abandoning band quantisation, so the AEC picks exposures that are no
+    // multiple of the mains half cycle and mains-lit scenes get rolling flicker bands - the
+    // "vertical striping" that took a firmware A/B against 6624230 to pin down. Leave it off
+    // unless exposure beyond 1964 rows matters more than flicker-free light
     else if (!strcmp(variable, "aec2")) res = s->set_aec2(s, intVal);
     else if (!strcmp(variable, "dcw")) res = s->set_dcw(s, intVal);
     else if (!strcmp(variable, "bpc")) res = s->set_bpc(s, intVal);
@@ -742,7 +743,7 @@ aec~1~98~~na
 tunedFps~0~98~~na
 sdBusDiv~4~98~~na
 zoneMask~65535~98~~na
-aec2~1~98~~na
+aec2~0~98~~na
 aec_value~204~98~~na
 agc~1~98~~na
 agc_gain~0~98~~na

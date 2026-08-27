@@ -2012,7 +2012,29 @@ static void applyAecLimits(sensor_t* s) {
   int lf = senLineFactor(s);
   int b50 = c.pixClk / (100 * hts * lf);    // lines per 50Hz half cycle
   int b60 = c.pixClk / (120 * hts * lf);    // lines per 60Hz half cycle
+  // The ceiling is min(the frame, the AEC engine's own range). The engine limit is real and
+  // its failure mode is nasty: hand it a max exposure it cannot reach and it stops stepping
+  // exposure in band multiples ALTOGETHER - in the dark it parks exposure sub-band and runs
+  // gain at 27-30x of the 32x ceiling (column FPN, washed-out color), in the light it picks
+  // freeform values that are no multiple of the mains half cycle (rolling flicker bands, the
+  // "vertical striping" of 27 Aug 2026). Bisected on hardware at HD/VTS 3698 by moving ONLY
+  // 0x3A02/0x3A14 and forcing a re-seek: 1228/1552/1940 all step in exact band multiples at
+  // low gain; 2328 collapsed to 280 lines at 15x in a lit scene; 3694 chose 1444, no band
+  // multiple. The bracket 1940-2328 agrees with the datasheet features table, "maximum
+  // exposure interval: 1964 x tROW", so the spec figure is used. Enabling night mode
+  // (0x3A00[2]) instead "fixes" only the dark case, by abandoning band quantisation - which
+  // trades the gain-parking for the flicker bands, and is how the first fix went wrong.
+  //
+  // Two subtleties cost a day between them. The AEC never re-seeks from a stable point - any
+  // exposure it holds survives limit writes, mode bits and aec toggles until the scene or a
+  // manual perturbation moves yavg out of the stable band, so a bad exposure can outlive the
+  // config that caused it and a good test must force a re-seek. And the band-max pair really
+  // is reversed relative to the step pair (table 7-9: 60Hz count at 0x3A0D, 50Hz at 0x3A0E) -
+  // a swapped count over-promises bands beyond the ceiling, which is the same unsatisfiable
+  // config and parked the AEC at fps 19 even though its 1942-line ceiling was in range
+  #define AEC_ENGINE_MAX_ROWS 1964
   int maxExp = vts - 4;                     // datasheet 4.6.2: exposure must leave 4 lines
+  if (maxExp > AEC_ENGINE_MAX_ROWS) maxExp = AEC_ENGINE_MAX_ROWS;
   // 10 bit fields, and a zero step would make the AEC divide by it
   if (b50 < 1 || b60 < 1 || b50 > 0x3FF || b60 > 0x3FF || maxExp < 1 || maxExp > 0xFFFF) {
     LOG_WRN("AEC limits not applied: B50 %d, B60 %d, max exposure %d out of range", b50, b60, maxExp);
@@ -2022,26 +2044,40 @@ static void applyAecLimits(sensor_t* s) {
   ok &= senWrite16(s, OV5640_AEC_B60_STEP, b60);
   ok &= senWrite16(s, OV5640_AEC_MAX_EXPO, maxExp);
   ok &= senWrite16(s, OV5640_AEC_MAX_EXPO_50, maxExp);
-  // Night mode (0x3A00[2], the aec2 setting) must be ON for the AEC to actually use a long
-  // tuned frame. Measured 27 Aug 2026 in a dim scene at HD: with it off and VTS at 3698, the
-  // AEC parked exposure at 172 lines of the 3694 allowed and ran gain at 27-30x of the 32x
-  // ceiling - column FPN (vertical stripes) and washed-out color - no matter what the limit
-  // registers said; correct band steps, a full register reload and banding-off all left it
-  // parked, and every forced re-convergence returned to the same point. Healthy below VTS
-  // ~1233 (tuned 30fps and every stock mode), broken by 1946 (19fps); threshold not bisected
-  // further. With the bit set the same scene went to 1444 lines at 2.4x within seconds.
-  // Frame rate is safe: night mode extends the frame via 0x350C/D only to reach the ceiling
-  // in 0x3A02/0x3A14, which is set to VTS-4 above, so it can never stretch past the frame -
-  // confirmed 0x350C/D stayed zero and delivery held at the timer rate.
-  // Reasserted here from the user's aec2 choice (default now on) because set_framesize()
-  // reloads 0x3A00 along with everything else; an explicit aec2=0 is still honored, and with
-  // it the low-fps gain-parking above - that is what turning it off means on this sensor
-  s->set_reg(s, OV5640_AEC_CTRL00, 0x04, s->status.aec2 ? 0x04 : 0x00);
-  // read modify write the two count registers, which are [5:0] with the rest reserved
+  // read modify write the two count registers, which are [5:0] with the rest reserved.
+  // floor(maxExp/step) guarantees count x step <= maxExp, keeping the config satisfiable
   int c50 = s->get_reg(s, OV5640_AEC_MAX_B50, 0xFF);
   int c60 = s->get_reg(s, OV5640_AEC_MAX_B60, 0xFF);
   if (c50 >= 0) s->set_reg(s, OV5640_AEC_MAX_B50, 0x3F, (maxExp / b50) & 0x3F);
   if (c60 >= 0) s->set_reg(s, OV5640_AEC_MAX_B60, 0x3F, (maxExp / b60) & 0x3F);
+  // The AEC never re-seeks from a stable point, so an exposure chosen under the PREVIOUS
+  // steps outlives every correction above - measured on boot, where convergence starts under
+  // the driver's reset-table steps before this runs: it held 885 lines, exactly 3 of the
+  // driver's 295-line bands and no multiple of the real 388, which is mild mains flicker held
+  // indefinitely on a static scene. If the held exposure is off the current grid, snap it to
+  // the nearest band multiple through a brief manual pulse (datasheet 4.6.2: exposure writes
+  // need 0x3503[0]); the AEC resumes from the snapped value and trims gain, not exposure,
+  // because a band multiple is a point its own stepping can hold
+  int e0 = camReg(s, OV5640_AEC_PK_EXPOSURE), e1 = camReg(s, OV5640_AEC_PK_EXPOSURE + 1);
+  int e2 = camReg(s, OV5640_AEC_PK_EXPOSURE + 2), bandSel = camReg(s, 0x3C0C);
+  if (e0 >= 0 && e1 >= 0 && e2 >= 0 && bandSel >= 0) {
+    int expo = ((e0 & 0x0F) << 12) | (e1 << 4) | (e2 >> 4); // [19:4] lines, [3:0] fraction
+    int step = (bandSel & 1) ? b50 : b60; // 0x3C0C[0]: the band the engine is quantising to
+    // below one band the engine's own auto-band-off applies and freeform is by design
+    if (expo > step) {
+      int n = (expo + step / 2) / step;
+      if (n * step > maxExp) n = maxExp / step;
+      int snapped = n * step;
+      if (n >= 1 && abs(snapped - expo) > 3) {
+        s->set_reg(s, 0x3503, 0x01, 0x01);
+        s->set_reg(s, OV5640_AEC_PK_EXPOSURE, 0xFF, (snapped >> 12) & 0x0F);
+        s->set_reg(s, OV5640_AEC_PK_EXPOSURE + 1, 0xFF, (snapped >> 4) & 0xFF);
+        s->set_reg(s, OV5640_AEC_PK_EXPOSURE + 2, 0xFF, (snapped << 4) & 0xF0);
+        s->set_reg(s, 0x3503, 0x01, 0x00);
+        LOG_INF("AEC exposure snapped %d -> %d lines (%d x %d line band)", expo, snapped, n, step);
+      }
+    }
+  }
   if (!ok) LOG_WRN("AEC limits did not read back: B50 %d B60 %d maxExp %d", b50, b60, maxExp);
   else LOG_VRB("AEC limits for HTS %d VTS %d: B50 %d, B60 %d, max exposure %d (%d/%d steps)",
     hts, vts, b50, b60, maxExp, maxExp / b50, maxExp / b60);
