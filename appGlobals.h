@@ -589,10 +589,10 @@ const frameStruct frameData[] = {
   {"SVGA", 800, 600, 21, 3, 1, 0},    // measured 22.1, already at HTS_FLOOR | scaler size, untuned
   {"XGA", 1024, 768, 24, 3, 1, 0},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it | scaler size, untuned
   {"HD", 1280, 720, 30, 3, 1, 52},    // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52.06 MEASURED 27 Aug, exact 12-52
-  {"SXGA", 1280, 1024, 11, 3, 1, 18}, // measured 11.3 cropped, 4.6 before it | tuned 18 predicted (cropped full-res class verified at FHD/QSXGA)
-  {"UXGA", 1600, 1200, 9, 3, 1, 15},  // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below | tuned 15 predicted
-  {"FHD", 1920, 1080, 10, 3, 1, 17},  // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before | tuned 17.00 MEASURED 27 Aug, exact 10-17
-  {"P_HD", 720, 1280, 9, 3, 1, 14},   // measured 9.9 cropped, 5.0 before | tuned 14 predicted
+  {"SXGA", 1280, 1024, 11, 3, 1, 17}, // measured 11.3 cropped, 4.6 before it | tuned 17 predicted at the 2200 full-res HTS floor (AEC stats floor - see applyCropWindow)
+  {"UXGA", 1600, 1200, 9, 3, 1, 14},  // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below | tuned 14 predicted at HTS 2200
+  {"FHD", 1920, 1080, 10, 3, 1, 16},  // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before | tuned: 15.0 verified at the 2200 floor, 16 ceiling (HTS 2200 x2 x VTS 1112)
+  {"P_HD", 720, 1280, 9, 3, 1, 13},   // measured 9.9 cropped, 5.0 before | tuned 13 predicted at HTS 2200
   {"P_3MP", 864, 1536, 4, 3, 1, 0},   // OV3660 only - not selectable on this sensor, set by analogy
   {"QXGA", 2048, 1536, 7, 4, 1, 11},  // was stills only - 7.2 predicted cropped at driver clock | tuned 11 predicted
   {"QHD", 2560, 1440, 2, 4, 1, 9},    // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin | tuned 9 predicted (no crop possible - full array read)

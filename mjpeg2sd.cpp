@@ -407,12 +407,20 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
   // up a colour and luminance error. Untested fix: scale each register by 2560/1920
   int isp01 = s->get_reg(s, 0x5001, 0xFF);
   if (isp01 >= 0 && (isp01 & 0x20)) s->set_reg(s, 0x5001, 0xFF, isp01 & ~0x20);
-  // A narrower window needs fewer clocks per line. Measured floor is 2060 on a 1984 column
-  // crop, 2700 on the uncropped 2624 columns, and 2060 on the 1312 columns of a binned read,
-  // which all fit max(2060, columns + 76). Only the FHD point is measured directly; the rule
-  // is the conservative reading of the three, and HTS is left alone if it is already lower
+  // A narrower window needs fewer clocks per line, but full resolution has TWO floors and
+  // the binding one is not the readout. HTS 2060 on a 1984 column crop reads out perfectly -
+  // clean frames, exact rates - while the AEC goes blind: below ~2200 the sensor's Y-AVERAGE
+  // statistics engine stops updating (YAVG pins near its last value while the zone grid at
+  // 0x5691+ still tracks the scene), the AEC servos the pinned YAVG straight into its
+  // deadband and holds exposure ~4.5x low. Found 27 Aug 2026 on a lit flat field: HD read
+  // 4.61ms exposure, cropped FHD 1.29ms at the same gain, image mean 24/255. Bisected:
+  // HTS 2200 clean, 2100 partially diverged, 2080/2064/2060 fully blind - every automated
+  // frame check passed throughout, only the exposure showed it. 2200 keeps ~5% margin above
+  // the 2100 cliff edge. Binned sizes are untouched (their stats run fine at 2060 - HD
+  // agreed zones==YAVG on the same scene)
+  #define HTS_FLOOR_FULLRES 2200
   int htsFloor = needW + 76;
-  if (htsFloor < HTS_FLOOR) htsFloor = HTS_FLOOR;
+  if (htsFloor < HTS_FLOOR_FULLRES) htsFloor = HTS_FLOOR_FULLRES;
   int hts = senReg16(s, 0x380C);
   if (hts > htsFloor && !senWrite16(s, 0x380C, htsFloor)) LOG_WRN("Crop HTS %d did not take", htsFloor);
   LOG_VRB("Cropped %s to %dx%d at %d,%d, VTS %d, HTS %d", frameData[forFS].frameSizeStr,
