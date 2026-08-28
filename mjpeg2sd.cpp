@@ -235,6 +235,28 @@ uint16_t sdBudgetKBs() {
   return (sdBusKHz() > 50000) ? 4420 : 3550;
 }
 
+uint16_t frameWindowKB(int fs) {
+  // The sensor's JPEG frame-window cliff per size, in KB: the largest frame PROVEN to
+  // deliver (random-pattern descend, 28 Aug - BOARD_TESTING 20). A frame past the
+  // cliff is truncated in flight and the driver delivers NOTHING, so the badge warns
+  // and the governor pre-arms at GOV_WINDOW_PCT of these. Measured constant per size
+  // across fps AND clock (HD identical at 5/10/30fps, 21-80MHz), and NOT a readout
+  // property: HD dies at ~295KB where 1280X960 survives 383KB on identical sensor
+  // timing - it follows the output size. QVGA's cliff is unreachable (its frames
+  // cannot physically get that big); unmeasured sizes return 0 = no prediction.
+  // QSXGA's real cliff is masked by maxFrameBuffSize (983KB); 946 is the largest
+  // frame the dim soak delivered there.
+  switch (fs) {
+    case FRAMESIZE_VGA: return 266;
+    case FRAMESIZE_HD: return 291;
+    case FRAMESIZE_FHD: return 443;
+    case FRAMESIZE_QSXGA: return 946;
+    default:
+      if (fs == FS_1280X960) return 383;
+      return 0;
+  }
+}
+
 void govRebaseQuality(int q) {
   // a user quality change mid-recording re-bases the governor; any active boost
   // reapplies on top of the new base at the next tick
@@ -258,7 +280,13 @@ static void sdGovernor() {
   sensor_t* s = esp_camera_sensor_get();
   if (s == NULL) return;
   uint16_t budget = sdBudgetKBs();
-  if (demandKBs > (uint32_t)budget * GOV_PUSH_PCT / 100) {
+  // pre-arm: frames approaching the sensor's JPEG frame window get compressed BEFORE
+  // they cross it - past the cliff they stop arriving entirely and only the no-frame
+  // watchdog can act. 80% of a proven-delivered figure leaves real margin
+#define GOV_WINDOW_PCT 80
+  uint16_t capKB = frameWindowKB(fsizePtr);
+  bool windowNear = capKB && sdGovFrameKB > (uint32_t)capKB * GOV_WINDOW_PCT / 100;
+  if (windowNear || demandKBs > (uint32_t)budget * GOV_PUSH_PCT / 100) {
     govLowTicks = 0;
     if (sdGovBoost < GOV_MAX_BOOST) {
       sdGovBoost++;
@@ -268,7 +296,9 @@ static void sdGovernor() {
       s->set_quality(s, q);
       LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u", q, sdGovBoost, demandKBs, budget);
     }
-  } else if (demandKBs < (uint32_t)budget * GOV_RELAX_PCT / 100 && sdGovBoost) {
+  } else if (demandKBs < (uint32_t)budget * GOV_RELAX_PCT / 100 && sdGovBoost && !windowNear) {
+    // !windowNear: at low fps the SD demand can be tiny while frames sit just under
+    // the frame window - easing the boost there would grow them straight over it
     if (++govLowTicks >= GOV_RELAX_TICKS) {
       govLowTicks = 0;
       sdGovBoost--;

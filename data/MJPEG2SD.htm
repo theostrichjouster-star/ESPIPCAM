@@ -1734,6 +1734,7 @@
           else if (key == "budgetKBs") { budgetKBs = Number(value); updateBudget(); return; }
           else if (key == "frameKB") { liveFrameKB = Number(value); updateBudget(); return; }
           else if (key == "govBoost") { govBoost = Number(value); updateBudget(); return; }
+          else if (key == "frameCapKB") { frameCapKB = Number(value); updateBudget(); return; }
           else if (key == "zoneMask") { if (!fromUser) { setZoneMask(value); return; } }
           else if (key == "get-still") getStill();
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
@@ -2187,6 +2188,7 @@
       let budgetKBs = 4420; // measured SD ceiling in KB/s, refreshed by updateFPS responses
       let liveFrameKB = 0; // firmware's last-second average frame KB while recording, else 0
       let govBoost = 0; // SD governor's active quality boost steps, 0 outside recordings
+      let frameCapKB = 0; // measured JPEG frame-window cliff for the current size, 0 = none
       // the fps slider's range comes from updateFPS's fpsCeil response, handled in
       // processStatus - the firmware delivers any integer rate from 1 to that ceiling
 
@@ -2260,12 +2262,16 @@
         const perFrame = liveFrameKB > 0 ? liveFrameKB : estFrameKB(m[1] * m[2], Number($('#quality').value));
         const kbs = Number($('#fps').value) * perFrame;
         const over = kbs > budgetKBs;
+        // the sensor's JPEG frame window is a harder limit than the SD budget: a frame
+        // past it is truncated in flight and never arrives at all
+        const windowNear = frameCapKB > 0 && perFrame > frameCapKB * 0.8;
         el.innerHTML = (kbs / 1024).toFixed(2) + ' of ' + (budgetKBs / 1024).toFixed(2) + ' MB/s'
                      + (govBoost ? ' (q+' + govBoost + ')' : '');
-        el.style.color = over ? '#e05a4e' : '';
+        el.style.color = over ? '#e05a4e' : (windowNear ? '#e0a24e' : '');
         el.title = over ? 'Estimated rate exceeds the measured SD ceiling - expect dropped frames'
-                        : (govBoost ? 'SD governor is compressing harder to hold the frame rate'
-                                    : 'Within the measured SD ceiling');
+                 : windowNear ? 'Frames are nearing the sensor JPEG window (' + frameCapKB + 'KB) - past it they vanish; raise the quality number'
+                 : (govBoost ? 'SD governor is compressing harder to hold the frame rate'
+                             : 'Within the measured SD ceiling');
       }
 
       function setAgc(key, value) {

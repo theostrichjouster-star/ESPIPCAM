@@ -253,6 +253,7 @@ void setCamReg(const char* csv);
 void getCamReg(const char* addr);
 void setExtDVDD(int val); // per-board NVS key: OV5640 internal regulator bypass for external DVDD
 uint16_t sdBudgetKBs(); // measured SD write ceiling for the live bus clock - UI badge and governor
+uint16_t frameWindowKB(int fs); // measured JPEG frame-window cliff per size, 0 = no prediction
 void govRebaseQuality(int q); // user quality change mid-recording re-bases the SD governor
 void avgZones(const char* unused); // diagnostic: dump the AEC 4x4 zone grid, see mjpeg2sd.cpp
 void zoneStatsJson(char* buff, size_t buffLen); // detector snapshot as JSON for threshold tuning

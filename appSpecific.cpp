@@ -331,8 +331,8 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     // the device's actual rate is the truth - a default would overwrite it in the browser.
     // frameKB / govBoost: live SD-governor telemetry, both 0 outside a recording, so the
     // badge falls back to its static estimate exactly when there is nothing better
-    sprintf(jsonBuff, "{\"fps\":\"%u\",\"fpsCeil\":\"%u\",\"aecMax\":\"%d\",\"budgetKBs\":\"%u\",\"frameKB\":\"%u\",\"govBoost\":\"%u\"}",
-      captureFPS, fpsCeiling((framesize_t)fsizePtr), aecMax, sdBudgetKBs(), sdGovFrameKB, sdGovBoost);
+    sprintf(jsonBuff, "{\"fps\":\"%u\",\"fpsCeil\":\"%u\",\"aecMax\":\"%d\",\"budgetKBs\":\"%u\",\"frameKB\":\"%u\",\"govBoost\":\"%u\",\"frameCapKB\":\"%u\"}",
+      captureFPS, fpsCeiling((framesize_t)fsizePtr), aecMax, sdBudgetKBs(), sdGovFrameKB, sdGovBoost, frameWindowKB(fsizePtr));
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   }
