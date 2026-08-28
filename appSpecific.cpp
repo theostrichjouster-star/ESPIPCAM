@@ -324,6 +324,7 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     if (sen != NULL && sen->get_reg != NULL) {
       int hi = sen->get_reg(sen, 0x380E, 0xFF), lo = sen->get_reg(sen, 0x380F, 0xFF);
       if (hi >= 0 && lo >= 0) aecMax = ((hi << 8) | lo) - 4; // datasheet 4.6.2
+      if (aecMax > 1964) aecMax = 1964; // the AEC engine cap (applyAecLimits) - lines above it are unreachable
     }
     // captureFPS, not the row default: on a size change the framesize handler has already
     // clamped captureFPS to the new ceiling before the UI asks, and on a plain page load

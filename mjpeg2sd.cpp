@@ -545,11 +545,34 @@ volatile bool retimePending = false; // fps changed - capture task retimes on th
 volatile int pendingFS = -1;
 volatile int pendingFPS = -1;
 
+static bool pickPll(float targetMHz, int* mulOut, int* sysDivOut) {
+  // mul/sys_div pair for the closest SCLK to targetMHz on the pre_div 3 tree at XCLK
+  // 20MHz: SCLK MHz = mul x 2/3 / sys_div. Selection window: mul 75-150 keeps VCO in the
+  // datasheet's 500-1000 best range (even values only above 127 per section 7.1), SCLK
+  // capped at the verified 80MHz (image cliff 88-92). The window spans a full 2x, so
+  // consecutive sys_div steps can never leave an unreachable gap; smallest workable
+  // sys_div = lowest in-range VCO. Shared by applyScalerClock and the exposure-first
+  // low-fps regime of applyTunedTiming
+  for (int sd = 1; sd <= 15; sd++) {
+    int m = (int)(targetMHz * 1.5f * sd + 0.5f);
+    if (m > 127) m &= ~1; // even only above 127
+    if (m < 75 || m > 150) continue; // VCO outside 500-1000
+    if (m * 2.0f / 3 / sd > 80.05f) continue; // above the verified SCLK ceiling
+    *mulOut = m;
+    *sysDivOut = sd;
+    return true;
+  }
+  return false;
+}
+
 static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // The generalisation of the retired hdProfile/fhdProfile pair: at every video size, the
-  // fps setting IS the sensor's frame timing, hit exactly by computing VTS on the in-spec
-  // PLL. Replaces "the timer asks and the sensor delivers whatever the driver's clock tree
-  // happens to produce" with timing that agrees by construction.
+  // fps setting IS the sensor's frame timing. Two regimes: high fps computes VTS on the
+  // 80MHz PLL; low fps (where that VTS would cross the 1964-row AEC engine cap) holds VTS
+  // at the cap and slows the clock instead, so the exposure ceiling keeps tracking the
+  // frame period (exposure-first, 28 Aug). Replaces "the timer asks and the sensor
+  // delivers whatever the driver's clock tree happens to produce" with timing that agrees
+  // by construction.
   //
   // PLL: pre_div 3 / sys_div 1 / mul 120 at XCLK 20MHz -> REFIN 6.67MHz, VCO 800MHz (the
   // section 2.5 maximum, exactly in spec against the driver's nominal 2000) and PIXCLK 80MHz
@@ -575,15 +598,6 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // overdrive (the VTS floor caps them) and deliver ~1% low, by design
   uint8_t fps = desiredFPS(fs);
   if (fps < 1) fps = 1;
-  s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
-  s->set_reg(s, 0x3035, 0xFF, 0x11); // sys_div 1
-  s->set_reg(s, 0x3036, 0xFF, 120);  // mul -> VCO 800MHz, PIXCLK 80MHz
-  delay(50); // let the PLL relock, same settle setCamPll() uses
-  int gotMul = s->get_reg(s, 0x3036, 0xFF);
-  if (gotMul != 120) {
-    LOG_WRN("Tuned timing: PLL mul wrote 120 but reads %d - VTS left alone", gotMul);
-    return;
-  }
   int hts = senReg16(s, 0x380C);
   int vtsNow = senReg16(s, 0x380E);
   int lf = senLineFactor(s);
@@ -603,7 +617,37 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     int rows = yEnd - ySt + 1;
     vtsFloor = (lf == 2) ? rows + 16 : rows / 2 + 8;
   }
+// VTS-4 == the 1964-row AEC engine cap (applyAecLimits): rows above this are blanking
+// the AEC can never convert to exposure
+#define AEC_VTS_CEIL 1968
   int vts = (int)(80e6f / ((float)hts * lf * fps * FPS_OVERDRIVE));
+  int mul = 120, sysDiv = 1; // PIXCLK 80MHz, the high-fps default
+  if (vts > AEC_VTS_CEIL) {
+    // Exposure-first low-fps regime. VTS-only stretching froze the exposure ceiling at
+    // 1964 x tROW once VTS crossed the engine cap (HD: 50.6ms for everything under
+    // ~19fps). Hold VTS at the cap instead and put the rest of the frame period into
+    // line TIME by slowing the clock: min(VTS-4, 1964) x tROW then tracks ~the whole
+    // frame period at any rate (95ms at HD 10fps, ~400ms at 1fps).
+    // HTS is left strictly alone: the binned line cost flips from 1x to 2x HTS above
+    // ~2300 (VSYNC-counted 28 Aug: exact 80MHz at HTS 2277, exactly-half 40MHz at 2644+,
+    // chaotic fractional rates 2340-2500), so programmed HTS above 2277 is never valid
+    // on a binned size. The clock path has no such cliff - scaler sizes run it 10-80MHz
+    // and HD ran the retired 40MHz profile
+    int targetVts = (AEC_VTS_CEIL > vtsFloor) ? AEC_VTS_CEIL : vtsFloor;
+    float targetMHz = (float)fps * FPS_OVERDRIVE * hts * lf * targetVts / 1e6f;
+    if (targetMHz >= 10.0f) {
+      // pickPll cannot fail for 10-80 (the mul window spans 2x per sys_div step), but
+      // if it ever does the mul 120 default stands and the naive VTS keeps the rate
+      // correct with the old capped-exposure behavior
+      if (pickPll(targetMHz, &mul, &sysDiv)) vts = targetVts;
+    } else {
+      // below the verified 10MHz SCLK floor (fps 1-2 at most sizes): floor the clock
+      // and grow VTS past the cap. The exposure ceiling is capped at 1964 rows, but
+      // tROW is now so long the ceiling still lands in the hundreds of ms
+      mul = 76; sysDiv = 5; // 10.13MHz, the verified floor combo (see applyScalerClock)
+      vts = (int)((mul * 2e6f / 3 / sysDiv) / ((float)hts * lf * fps * FPS_OVERDRIVE));
+    }
+  }
   if (vts < vtsFloor) {
     float ceilFps = 80e6f / ((float)hts * lf * vtsFloor);
     // an overdrive-only clamp is expected near the ceiling; only a request the sensor
@@ -613,9 +657,24 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     vts = vtsFloor;
   }
   if (vts > 0xFFFF) vts = 0xFFFF; // 16 bit register; ~0.02fps floor at HD, never plausible
+  s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
+  s->set_reg(s, 0x3035, 0xFF, (sysDiv << 4) | 0x01); // [7:4] sys_div, [3:0] MIPI div stays 1
+  s->set_reg(s, 0x3036, 0xFF, mul);
+  delay(50); // let the PLL relock, same settle setCamPll() uses
+  int gotMul = s->get_reg(s, 0x3036, 0xFF);
+  if (gotMul != mul) {
+    LOG_WRN("Tuned timing: PLL mul wrote %d but reads %d - VTS left alone", mul, gotMul);
+    return;
+  }
+  float sclkMHz = mul * 2.0f / 3 / sysDiv;
   if (!senWrite16(s, 0x380E, vts)) LOG_WRN("Tuned timing: VTS %d did not read back", vts);
-  else LOG_INF("Tuned timing %s: PIXCLK 80MHz, HTS %d x%d, VTS %d -> sensor %.2ffps for request %u",
-    frameData[fs].frameSizeStr, hts, lf, vts, 80e6 / ((float)hts * lf * vts), fps);
+  else {
+    int expLines = vts - 4;
+    if (expLines > 1964) expLines = 1964; // the AEC engine cap, applyAecLimits
+    LOG_INF("Tuned timing %s: SCLK %.2fMHz, HTS %d x%d, VTS %d -> sensor %.2ffps for request %u, max exposure %.0fms",
+      frameData[fs].frameSizeStr, sclkMHz, hts, lf, vts, sclkMHz * 1e6f / ((float)hts * lf * vts), fps,
+      (float)expLines * hts * lf * 1000.0f / (sclkMHz * 1e6f));
+  }
 }
 
 static bool scalerClockSize(framesize_t fs) {
@@ -667,22 +726,11 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
     sysDiv = tooFast ? 1 : 5;
     if (tooFast && plainMHz > 80.0f) LOG_WRN("Scaler clock: %ufps is beyond the %s range - delivering %.2ffps", fps,
       frameData[fs].frameSizeStr, (mul * 2e6f / 3 / sysDiv) / ((float)hts * lf * vts));
-  } else {
-    for (int sd = 1; sd <= 15; sd++) {
-      int m = (int)(targetMHz * 1.5f * sd + 0.5f);
-      if (m > 127) m &= ~1; // even only above 127
-      if (m < 75 || m > 150) continue; // VCO outside 500-1000
-      if (m * 2.0f / 3 / sd > 80.05f) continue; // above the verified SCLK ceiling
-      mul = m;
-      sysDiv = sd;
-      break; // smallest workable sys_div = lowest in-range VCO
-    }
-    if (!mul) {
-      // unreachable given the 2x-wide mul window, but never leave the PLL unprogrammed
-      mul = 120;
-      sysDiv = 1;
-      LOG_WRN("Scaler clock: no divider fit for %ufps - delivering the ceiling", fps);
-    }
+  } else if (!pickPll(targetMHz, &mul, &sysDiv)) {
+    // unreachable given the 2x-wide mul window, but never leave the PLL unprogrammed
+    mul = 120;
+    sysDiv = 1;
+    LOG_WRN("Scaler clock: no divider fit for %ufps - delivering the ceiling", fps);
   }
   s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
   s->set_reg(s, 0x3035, 0xFF, (sysDiv << 4) | 0x01); // [7:4] sys_div, [3:0] MIPI div stays 1
