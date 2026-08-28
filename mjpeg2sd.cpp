@@ -127,6 +127,30 @@ static uint16_t govLastFrameCnt;
 static uint32_t lastGoodFrameMs = 0;
 static uint16_t rescueClipCnt = 0; // rescues during the open recording, for closeAvi
 
+// Supply sag state. On battery the rail decays gradually, and the brownout comparator
+// armed at its warning level (utilsLog.cpp) is the only sensor this board has. Once it
+// trips, the recording is landed while the SD card is still in spec and the device parks:
+// no further recordings, no further SD writes, sensor to standby to stop our own draw
+// dragging the rail down further. Deliberately one-way - a rail that has sagged this far
+// is at end of life, and resuming 5MP capture into it is how cards get corrupted
+bool supplyParked = false;
+static uint32_t supplyParkedMs = 0;
+// a controlled restart during a recording must not orphan the file - set by appShutdown()
+// and actioned by processFrame from the capture task's own context
+static volatile bool shutdownPending = false;
+// FatFS only persists the directory entry and FAT chain on sync, so an un-synced file can
+// read as empty however much data reached the card. Flushing bounds what an abrupt loss
+// costs to this interval. Not free, and not purely a win: every flush is another FAT
+// write, and a cut DURING a FAT write is the one failure that damages more than the
+// current file. 2s is the middle of that trade, measured to cost nothing at HD/30/q6
+#define AVI_FLUSH_SECS 2
+static uint32_t lastFlushMs = 0;
+// after a brownout boot, hold recording off briefly so a dying pack cannot drive a
+// boot-record-brownout loop across the SD card
+#define BROWNOUT_HOLDOFF_SECS 60
+static bool holdoffActive = false;
+static bool holdoffSavedRecording = false;
+
 // SD card storage
 // iSDbuffer is used by the playback path, which treats the upper half as a double
 // buffer, so it must stay at (RAMSIZE + CHUNK_HDR) * 2. The AVI capture path has its
@@ -277,6 +301,12 @@ static void sdGovernor() {
   govLastVidSize = vidSize;
   govLastFrameCnt = frameCnt;
   govWindowMs = now;
+  // persist the directory entry and FAT chain so an abrupt loss costs at most this
+  // interval rather than the whole clip (see AVI_FLUSH_SECS)
+  if (now - lastFlushMs >= AVI_FLUSH_SECS * 1000) {
+    lastFlushMs = now;
+    aviFile.flush();
+  }
   sensor_t* s = esp_camera_sensor_get();
   if (s == NULL) return;
   uint16_t budget = sdBudgetKBs();
@@ -339,8 +369,17 @@ static void openAvi() {
   govWindowMs = millis();
   rescueClipCnt = 0; // no-frame watchdog steps within this clip, for the stats below
   haveWav = false;
+  // Provisional header into the reserved space. Costs no extra write - this block is
+  // written anyway - and buys two things: an interrupted file no longer opens with the
+  // PREVIOUS recording's header sitting at offset 0 (sdWriteBuf is never cleared, which
+  // made an orphan look like a valid file of the wrong geometry), and recoverAvi() can
+  // read the real fps and frame size back out of it. Must precede prepAviIndex(), because
+  // buildAviHdr() finishes by resetting moviSize/idxPtr/idxOffset
+  buildAviHdr(FPS, fsizePtr, 0, 0);
+  memcpy(sdWriteBuf, aviHeader, AVI_HEADER_LEN);
   highPoint = AVI_HEADER_LEN; // allot space for AVI header
   prepAviIndex();
+  lastFlushMs = millis();
 }
 
 static inline bool doMonitor() {
@@ -1082,6 +1121,112 @@ static void saveFrame(camera_fb_t* fb) {
   LOG_VRB("============================");
 }
 
+bool recoverAvi() {
+  // Rebuild an AVI that lost power before closeAvi() could run. The recorded stream is
+  // self describing - saveFrame() writes '00dc' + 4 byte length + JPEG (+ pad), audio
+  // writes '01wb' - so the frames can be walked and everything closeAvi() would have
+  // written can be reconstructed: index, header, final name.
+  // MUST run before startSDtasks(), because openAvi() opens AVITEMP FILE_WRITE and would
+  // truncate the evidence on the first recording of the new boot
+  if (!STORAGE.exists(AVITEMP)) return false;
+  File rf = STORAGE.open(AVITEMP, FILE_READ);
+  if (!rf) {
+    LOG_WRN("Interrupted recording %s present but cannot be opened", AVITEMP);
+    return false;
+  }
+  size_t fileSize = rf.size();
+  uint8_t hdr[AVI_HEADER_LEN];
+  uint8_t recFPSv = FPS ? FPS : 20;
+  uint8_t recFS = fsizePtr;
+  bool haveHdr = false;
+  if (fileSize > AVI_HEADER_LEN && rf.read(hdr, AVI_HEADER_LEN) == AVI_HEADER_LEN
+      && !memcmp(hdr, "RIFF", 4) && !memcmp(hdr + 8, "AVI ", 4)) {
+    // provisional header written by openAvi(): recover the true geometry and rate
+    uint16_t w = 0, h = 0;
+    uint32_t dwScale = 0, dwRate = 0;
+    memcpy(&w, hdr + 0x40, 2);
+    memcpy(&h, hdr + 0x44, 2);
+    memcpy(&dwScale, hdr + 0x80, 4);
+    memcpy(&dwRate, hdr + 0x84, 4);
+    for (int i = 0; i <= FS_1280X960; i++) {
+      if (frameData[i].frameWidth == w && frameData[i].frameHeight == h) { recFS = i; haveHdr = true; break; }
+    }
+    if (dwScale && dwRate) {
+      uint32_t r = dwRate / dwScale;
+      if (r >= 1 && r <= 120) recFPSv = (uint8_t)r;
+    }
+  }
+  if (!haveHdr) LOG_WRN("Interrupted recording has no usable header - assuming %s @ %ufps",
+    frameData[recFS].frameSizeStr, recFPSv);
+  // walk the chunk stream from the end of the reserved header space
+  prepAviIndex();
+  uint16_t frames = 0;
+  uint32_t audChunks = 0;
+  size_t pos = AVI_HEADER_LEN;
+  uint8_t chunkHdr[CHUNK_HDR];
+  rf.seek(pos, SeekSet);
+  while (pos + CHUNK_HDR <= fileSize) {
+    if (rf.read(chunkHdr, CHUNK_HDR) != CHUNK_HDR) break;
+    bool isVid = !memcmp(chunkHdr, dcBuf, 4);
+    bool isAud = !memcmp(chunkHdr, wbBuf, 4);
+    if (!isVid && !isAud) break; // end of valid data - the rest is stale buffer content
+    uint32_t len = 0;
+    memcpy(&len, chunkHdr + 4, 4);
+    // Strictness is what stops the tail of the last 32KB block being read as frames:
+    // a plausible length is not enough, a video chunk must also start with a JPEG SOI
+    if (!len || len > maxFrameBuffSize || pos + CHUNK_HDR + len > fileSize) break;
+    if (isVid) {
+      uint8_t soi[2];
+      if (rf.read(soi, 2) != 2 || soi[0] != 0xFF || soi[1] != 0xD8) break;
+    }
+    buildAviIdx(len, isVid);
+    if (isVid) frames++; else audChunks++;
+    if (frames && aviIndexNearFull()) {
+      LOG_WRN("Recovery stopped at %u frames - index buffer full", frames);
+      break;
+    }
+    pos += CHUNK_HDR + len;
+    rf.seek(pos, SeekSet);
+  }
+  rf.close();
+  if (!frames) {
+    STORAGE.remove(AVITEMP);
+    LOG_ALT("Interrupted recording held no complete frames - discarded");
+    return false;
+  }
+  // reopen read/write and append everything closeAvi() would have written
+  File wf = STORAGE.open(AVITEMP, "r+");
+  if (!wf) {
+    LOG_WRN("Cannot reopen %s to repair it - left in place", AVITEMP);
+    return false;
+  }
+  uint32_t vidDuration = (uint32_t)(((uint64_t)frames * 1000) / (recFPSv ? recFPSv : 1));
+  finalizeAviIndex(frames);
+  wf.seek(pos, SeekSet); // index goes immediately after the last valid chunk
+  size_t readLen = 0;
+  do {
+    readLen = writeAviIndex(iSDbuffer, RAMSIZE);
+    if (readLen) wf.write(iSDbuffer, readLen);
+  } while (readLen > 0);
+  buildAviHdr(recFPSv, recFS, frames, vidDuration);
+  wf.seek(0, SeekSet);
+  wf.write(aviHeader, AVI_HEADER_LEN);
+  wf.close();
+  // Anything after the index is stale buffer content that Arduino's File cannot truncate
+  // away. Harmless: players honour the RIFF size just stamped into the header
+  char recovered[FILE_NAME_LEN];
+  dateFormat(partName, sizeof(partName), true);
+  STORAGE.mkdir(partName);
+  dateFormat(partName, sizeof(partName), false);
+  snprintf(recovered, FILE_NAME_LEN - 1, "%s_%s_%u_%lu_R.%s", partName,
+    frameData[recFS].frameSizeStr, recFPSv, (unsigned long)(vidDuration / 1000), AVI_EXT);
+  if (STORAGE.rename(AVITEMP, recovered))
+    LOG_ALT("Recovered interrupted recording: %s (%u frames, %lus, %s)", recovered, frames,
+      (unsigned long)(vidDuration / 1000), fmtSize(pos));
+  else LOG_WRN("Recovered the recording but could not rename %s", AVITEMP);
+  return true;
+}
+
 static bool closeAvi() {
   // closes the recorded file
   recordingCamMode(false); // unfreeze AWB, restore continuous AF
@@ -1401,8 +1546,31 @@ void zoneStatsJson(char* buff, size_t buffLen) {
 // stepping back down would re-kill frames - the rescued quality stands until the user
 // changes quality/size/fps themselves. WRN-logged per step, counted per clip.
 // (State lives with the governor block near the top of the file.)
+static void sagShutdown() {
+  // Stage 1 response, in task context: the ISR only set a flag, so there is a stack,
+  // flash access and time here. Called from processFrame with the recording still open,
+  // so the normal close path finalises the file immediately after this returns
+  supplyParked = true;
+  supplyParkedMs = millis();
+  LOG_ALT("SUPPLY SAG at brownout level %u (trip %lu) - landing recording and parking",
+    brownoutArmedLevel(), sagTripCount);
+  doRecording = false; // block new recordings, including motion triggered ones
+  // Sensor to software standby: the 5MP array plus its PSRAM traffic is the dominant
+  // draw, and shedding it stops us pulling the rail down any further. Reversible, but
+  // nothing here re-enables it - recovery is a power cycle onto a charged pack
+  sensor_t* s = esp_camera_sensor_get();
+  if (s != NULL && s->set_reg != NULL) s->set_reg(s, 0x3008, 0xFF, 0x42); // standby
+  // Re-arm as the terminal killswitch. All SD writes have stopped by now, so the only
+  // thing left to protect against is the final collapse, where a dirty reboot with flash
+  // and RF powered down is the right answer. WiFi stays up until then, deliberately: on
+  // a battery board with no serial it is the only interface and the only OTA path
+  armBrownout(7, true);
+  flush_log(false); // get this into the SD log while there is still a supply to do it
+}
+
 static void noFrameRescue() {
   uint32_t now = millis();
+  if (supplyParked) return; // parked: no frames expected, nothing to rescue
   if (!lastGoodFrameMs) { lastGoodFrameMs = now; return; } // arm on first miss after boot
   // threshold rides out retime/PLL transients (~1s) and the frame gaps of low rates
   uint32_t thresh = FPS ? 4000u / FPS : 2000;
@@ -1533,7 +1701,10 @@ static boolean processFrame() {
   // when there is no card at all. The record button bypasses it, being an explicit user action
   bool prevCapture = isCapturing;
   if (!isCapturing) {
-    if ((haveMotion && doRecording) || forceRecord) {
+    // supplyParked also gates the record button, which otherwise bypasses doRecording -
+    // an explicit user action cannot make a failing supply safe to write to
+    if (supplyParked) forceRecord = false;
+    else if ((haveMotion && doRecording) || forceRecord) {
       isCapturing = true;
       motionTriggered = haveMotion && !forceRecord;
     }
@@ -1547,6 +1718,23 @@ static boolean processFrame() {
     if (!prevCapture) LOG_WRN("Video recording unavailable at %s, above the %s cap - stills are unaffected",
       frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
     isCapturing = forceRecord = motionTriggered = false;
+  }
+  // Supply sag (Stage 1). Placed here deliberately: after prevCapture has been taken, so
+  // the close path below finalises the open file properly - a sag must never leave the
+  // orphan that boot recovery then has to repair - and before the start branch, so a
+  // recording cannot begin on a rail that is already failing
+  if (supplySagging) {
+    supplySagging = false;
+    sagShutdown();
+    isCapturing = forceRecord = motionTriggered = false;
+  }
+  // a controlled restart (web reset, OTA, mqtt) asked for the recording to be landed
+  if (shutdownPending) isCapturing = forceRecord = motionTriggered = false;
+  // brownout holdoff expiry - millis() is uptime, so this is simply "60s since boot"
+  if (holdoffActive && millis() > (uint32_t)BROWNOUT_HOLDOFF_SECS * 1000) {
+    holdoffActive = false;
+    doRecording = holdoffSavedRecording;
+    LOG_ALT("Brownout holdoff expired - recording re-armed");
   }
   if (isCapturing && !prevCapture) {
     // New movement has occurred or record button pressed. The sensor is already at the
@@ -1908,6 +2096,16 @@ bool prepRecording() {
   for (int i = 0; i < vidStreams; i++) frameSemaphore[i] = xSemaphoreCreateBinary();
   reloadConfigs(); // apply camera config
   if (!startSDtasks()) return false;
+  if (hadBrownout()) {
+    // The supply failed on the previous boot. Recording straight back into a sagging
+    // battery is how a boot-record-brownout loop grinds the SD card, so hold off briefly
+    // and let the pack settle - long enough to break the loop, short enough that a camera
+    // which sagged once is not dead in the field
+    holdoffSavedRecording = doRecording;
+    holdoffActive = true;
+    doRecording = false;
+    LOG_ALT("Previous boot ended in a brownout - recording held off for %ds", BROWNOUT_HOLDOFF_SECS);
+  }
 
   if ((fs::LittleFSFS*)&STORAGE == &LittleFS) {
     // prevent recording
@@ -1934,7 +2132,20 @@ bool prepRecording() {
 }
 
 void appShutdown() {
-  // nothing to flush on shutdown - motion recordings are closed by processFrame().
+  // A recording open at restart time used to be orphaned: this function did nothing about
+  // it and processFrame never got another pass, so a plain web reset or an OTA left an
+  // unplayable AVITEMP behind with no power failure involved at all. Ask the capture task
+  // to land it and wait briefly - closing from here would race the task that owns the
+  // file, and an orphan is recoverable at next boot anyway (recoverAvi)
+  if (isCapturing) {
+    shutdownPending = true;
+    doRecording = false;
+    uint32_t waitStart = millis();
+    while (isCapturing && millis() - waitStart < 1500) delay(50);
+    if (isCapturing) LOG_WRN("Recording still open at shutdown - leaving it for boot recovery");
+    else LOG_INF("Recording closed cleanly for shutdown");
+  }
+  // nothing else to flush on shutdown - motion recordings are closed by processFrame().
   // The sensor, however, must not carry tuned state across a soft restart: the ESP resets but
   // the OV5640 keeps power, and with the PLL retimed by the HD profile the next boot's camera
   // probe can intermittently read a garbage PID and fail 0x106 ESP_ERR_NOT_SUPPORTED (observed

@@ -166,6 +166,22 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "camRegRd")) getCamReg(value);
   // per-board provisioning, stored in NVS not the config file - see setExtDVDD()
   else if (!strcmp(variable, "extDVDD")) setExtDVDD(intVal);
+  // debug: exercise the supply sag path without a failing supply. Sets the same flag the
+  // brownout ISR sets, so the whole Stage 1 sequence runs for real - close, park, re-arm
+  else if (!strcmp(variable, "sagTest")) supplySagging = (bool)intVal;
+  // debug: dirty reboot with no cleanup - the same esp_restart_noos() the terminal
+  // brownout stage uses. Leaves whatever the filesystem had actually flushed, which is
+  // how a recording looks after a power cut, so boot recovery can be tested repeatably
+  // without pulling the plug. Not a full substitute: a real cut can also tear the SD
+  // block that is in flight, which this cannot reproduce
+  else if (!strcmp(variable, "crashTest")) {
+    LOG_ALT("Debug: dirty reboot requested, no cleanup - emulating supply loss");
+    delay(50);
+    debugDirtyReboot();
+  }
+  // debug: arm the comparator at a given level for the false trip soak. Never terminal
+  // from here - a web request must not be able to arm the killswitch
+  else if (!strcmp(variable, "bodLevel")) armBrownout((uint8_t)intVal, false);
   else if (!strcmp(variable, "sdBusClk")) sdBusClk(value); // 0 reports, 2-16 sets the host divider (transient)
   // the persisted counterpart: the saved row reapplies the divider on every boot via the
   // config load, which runs after the SD is mounted. Default 4 = the stock 40MHz - safe for
@@ -449,6 +465,13 @@ char* buildAppJsonString(bool filter) {
   p += sprintf(p, "\"SVactive\":\"%d\",", SVactive);
 #endif
   p += sprintf(p, "\"sustainId\":\"%u\",", sustainId);
+  // Supply telemetry. With no battery divider the comparator band is the only rail
+  // reading there is, and on a battery run over wifi it is the only way to watch the
+  // descent - so it goes in the status poll, not just the log. band 0 = healthy
+  p += sprintf(p, "\"sagBand\":\"%u\",", brownoutProbeBand());
+  p += sprintf(p, "\"sagTrips\":\"%lu\",", sagTripCount);
+  p += sprintf(p, "\"sagParked\":\"%u\",", supplyParked ? 1 : 0);
+  p += sprintf(p, "\"bodLevel\":\"%u\",", brownoutArmedLevel());
   // Extend info
 #ifndef AUXILIARY
   // the sensor changes size on its own now, and nothing else in the UI reports that

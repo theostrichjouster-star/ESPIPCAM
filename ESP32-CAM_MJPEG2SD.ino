@@ -12,6 +12,13 @@ void setup() {
 #ifndef AUXILIARY
     LOG_INF("Selected board %s", CAM_BOARD);
     prepCam();
+    // Repair a recording interrupted by supply loss. After prepCam(), which is what sets
+    // maxFrameBuffSize - the sanity bound the chunk walk validates lengths against, so
+    // running earlier would reject every frame and discard the very file being rescued.
+    // Still well before anything opens AVITEMP for write. Deliberately here rather than
+    // in prepRecording(): that runs only if the web server started, and the boot after a
+    // power failure is exactly when it might not
+    recoverAvi();
 #endif
   }
 

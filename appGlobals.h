@@ -246,6 +246,7 @@ extern char otaLatestTag[];
 extern char otaStatus[];
 extern bool otaUpdateAvailable;
 bool prepRecording();
+bool recoverAvi(); // repair a recording interrupted by supply loss - call before capture starts
 void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
 void dumpCamRegs();
@@ -311,6 +312,7 @@ extern uint8_t FPS;
 extern uint8_t captureFPS; // user's chosen rate for the capture resolution
 extern uint8_t fsizePtr; // index to frameData[] for record
 extern bool isCapturing;
+extern bool supplyParked; // supply sagged: recordings blocked, sensor shed, awaiting power
 extern uint8_t sdGovBoost; // SD governor's active quality boost steps, 0 outside recordings
 extern uint16_t sdGovFrameKB; // last-second average frame KB while recording, else 0
 extern uint8_t lightLevel;  

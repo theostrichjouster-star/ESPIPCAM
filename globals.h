@@ -184,6 +184,15 @@ void remoteServerReset();
 void removeChar(char* s, char c);
 void replaceChar(char* s, char c, char r);
 void resetCrashLoop();
+// supply sag detection via the brownout comparator - the only rail sensor on a board
+// with no battery divider. See utilsLog.cpp for the level/voltage table
+void armBrownout(uint8_t level, bool terminal);
+uint8_t brownoutArmedLevel();
+uint8_t brownoutProbeBand();
+bool hadBrownout();
+void debugDirtyReboot(); // debug: no-cleanup reboot, emulates supply loss for recovery tests
+extern volatile bool supplySagging;
+extern volatile uint32_t sagTripCount;
 void reset_log();
 void resetWatchDog(int wdIndex, uint32_t wdTimeout = 1);
 void stopWatchDog(); // disable the watchdog for teardown paths, see utils.cpp

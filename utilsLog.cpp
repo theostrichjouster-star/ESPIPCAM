@@ -300,35 +300,128 @@ esp_sleep_wakeup_cause_t wakeupResetReason() {
 #include "soc/rtc_periph.h"
 #include "hal/brownout_hal.h"
 
-#define BROWNOUT_DET_LVL 7
+// The brownout comparator is the only supply sensor this board has - there is no battery
+// divider wired - so it is used as a staged sag detector rather than only as a killswitch.
+// Measured S3 trip points: lvl 3 ~2.98V, 4 ~2.84V, 5 ~2.67V, 6 ~2.56V, 7 ~2.44V.
+// Level 3 is the last point where everything is still in spec (the S3 wants >=3.0V and the
+// SD card >=2.7V), which is why the WARNING stage sits there and the file is closed while
+// the card can still be written. Level 7 is far below the card's minimum and is only good
+// as the terminal backstop, which is what this used to be armed at permanently
+#define BROWNOUT_WARN_LVL 3 // ~2.98V - sag warning, still safe to write SD
+#define BROWNOUT_DET_LVL 7  // ~2.44V - terminal backstop, dirty reboot
+
+volatile bool supplySagging = false;   // set by the ISR, actioned in task context
+volatile uint32_t sagTripCount = 0;    // total trips since boot (soak instrumentation)
+static volatile bool brownoutTerminal = false; // true once armed as the killswitch
+static uint8_t armedLevel = BROWNOUT_WARN_LVL;
+static bool isrRegistered = false;
 
 IRAM_ATTR static void notifyBrownout(void *arg) {
-  esp_cpu_stall(!xPortGetCoreID());  // Stop the other core.
+  // The trip condition is level based, so the interrupt must be silenced immediately or it
+  // re-enters for as long as the rail stays low. Warning stages therefore only record the
+  // event and hand off to task context, where there is a stack, flash access and time to
+  // close the recording - the terminal stage keeps the original dirty reboot
+  brownout_ll_intr_enable(false);
+  brownout_ll_intr_clear();
+  sagTripCount++;
+  supplySagging = true;
+  if (brownoutTerminal) {
+    esp_cpu_stall(!xPortGetCoreID());  // Stop the other core.
+    esp_reset_reason_set_hint(ESP_RST_BROWNOUT);
+    brownoutStatus = 'B';
+    esp_restart_noos(); // dirty reboot
+  }
+}
+
+void armBrownout(uint8_t level, bool terminal) {
+  // (re)arm the comparator at a given level. flash_power_down / rf_power_down MUST stay
+  // false for a warning stage: they tell the hardware to drop flash and the radio on trip,
+  // which would strand the code that is supposed to close the file (it executes from
+  // flash) and kill wifi, the only interface a battery powered board has
+  brownoutTerminal = terminal;
+  armedLevel = level;
+  brownout_hal_config_t cfg = {
+    .threshold = level,
+    .enabled = true,
+    .reset_enabled = terminal, // let hardware reset if software is past saving itself
+    .flash_power_down = terminal,
+    .rf_power_down = terminal,
+  };
+  brownout_hal_config(&cfg);
+  brownout_ll_intr_clear();
+  if (!isrRegistered) {
+    rtc_isr_register(notifyBrownout, NULL, RTC_CNTL_BROWN_OUT_INT_ENA_M, RTC_INTR_FLAG_IRAM);
+    isrRegistered = true;
+  }
+  brownout_ll_intr_enable(true);
+}
+
+uint8_t brownoutArmedLevel() {
+  return armedLevel;
+}
+
+bool hadBrownout() {
+  // a brownout on a previous boot, surviving in RTC memory across the dirty reboot
+  return brownoutStatus == 'B' || brownoutStatus == 'R';
+}
+
+uint8_t brownoutProbeBand() {
+  // Coarse rail reading, and the only voltage telemetry available without a divider: walk
+  // the threshold down and report the lowest level that still trips, ie how far the rail
+  // has fallen. 0 = healthy (above ~2.98V, nothing trips).
+  // Safe only because warning stages neither reset nor power anything down; every exit
+  // path restores the armed warning level.
+  // Rate limited and cached: this is called from the status poll, and re-arming the
+  // comparator on every browser refresh is both wasteful and a needless window in which
+  // the armed level is not the warning level
+  static uint8_t cachedBand = 0;
+  static uint32_t lastProbeMs = 0;
+  if (brownoutTerminal) return cachedBand; // never probe once the killswitch is armed
+  uint32_t now = millis();
+  if (lastProbeMs && now - lastProbeMs < 30000) return cachedBand;
+  lastProbeMs = now;
+  // A genuine trip may be pending in supplySagging, waiting for the capture task to
+  // action it. The probe uses that same flag, so it must be preserved across the walk or
+  // a status poll landing at the wrong moment would silently discard a real sag
+  bool pendingSag = supplySagging;
+  uint8_t restore = armedLevel;
+  uint8_t band = 0;
+  for (uint8_t lvl = BROWNOUT_WARN_LVL; lvl <= BROWNOUT_DET_LVL; lvl++) {
+    supplySagging = false;
+    armBrownout(lvl, false);
+    delayMicroseconds(200); // let the comparator settle before believing it
+    if (!supplySagging) break; // rail is above this level - done
+    band = lvl; // tripped, so the rail is below this level's threshold
+  }
+  armBrownout(restore, false);
+  supplySagging = pendingSag; // never lose a real trip to a probe
+  cachedBand = band;
+  return band;
+}
+
+void debugDirtyReboot() {
+  // Debug: reboot with no cleanup at all, exactly as the terminal brownout stage does -
+  // same reset hint and same RTC flag, so the whole post-brownout boot path is exercised.
+  // Lives here because esp_restart_noos() needs the private system header this file
+  // already pulls in. Leaves the filesystem holding only what was actually flushed,
+  // which is how a recording looks after a supply loss, so boot recovery can be tested
+  // repeatably without pulling the plug
   esp_reset_reason_set_hint(ESP_RST_BROWNOUT);
   brownoutStatus = 'B';
-  esp_restart_noos(); // dirty reboot
+  esp_restart_noos();
 }
 
 static void initBrownout(void) {
-  // brownout warning only output once to prevent bootloop
+  // Report only once to prevent a bootloop of warnings, but ALWAYS arm the detector: the
+  // old code only configured it when brownoutStatus was clear, so after the first sag set
+  // 'B' (then 'R') the custom detector was never re-armed again for the rest of the
+  // discharge - it went missing exactly when a battery needs it most
   if (brownoutStatus == 'R') LOG_WRN("Brownout warning previously notified");
   else if (brownoutStatus == 'B') {
     LOG_WRN("Brownout occurred due to inadequate power supply");
     brownoutStatus = 'R';
-  } else {
-    brownout_hal_config_t cfg = {
-      .threshold = BROWNOUT_DET_LVL,
-      .enabled = true,
-      .reset_enabled = false,
-      .flash_power_down = true,
-      .rf_power_down = true,
-    };
-    brownout_hal_config(&cfg);
-    brownout_ll_intr_clear();
-    rtc_isr_register(notifyBrownout, NULL, RTC_CNTL_BROWN_OUT_INT_ENA_M, RTC_INTR_FLAG_IRAM);
-    brownout_ll_intr_enable(true);
-    brownoutStatus = 0; 
-  }
+  } else brownoutStatus = 0;
+  armBrownout(BROWNOUT_WARN_LVL, false);
 }
 
 static void boardInfo() {
@@ -350,7 +443,18 @@ static void boardInfo() {
 
 void logSetup() {
   // prep logging environment
-  if (crashLoop == MAGIC_NUM) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Crash loop detected, check log %s", (brownoutStatus == 'B' || brownoutStatus == 'R') ? "(brownout)" : " ");
+  // A supply failure is not a software crash loop, and must not be treated as one. Any
+  // uncleaned reboot leaves crashLoop set (resetCrashLoop only runs on a controlled
+  // restart), and a startupFailure here makes startWebServer() return false, which stops
+  // setup() ever calling prepRecording() - so a battery board that browned out would come
+  // back web-only and never record or self-repair again. Brownouts get the 60s recording
+  // holdoff in prepRecording() as their loop guard instead, which is the right shape
+  // NOTHING here may log: the queues LOG_* posts to are created further down this
+  // function, and logging before that asserts in xQueueReceive on a NULL handle - an
+  // unrecoverable boot loop, because the condition that reaches it survives in RTC memory.
+  // printResetReason() already reports the brownout once logging is alive
+  bool supplyReboot = (brownoutStatus == 'B' || brownoutStatus == 'R');
+  if (crashLoop == MAGIC_NUM && !supplyReboot) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Crash loop detected, check log");
   crashLoop = MAGIC_NUM;
   if (logHandle == NULL) {
     set_arduino_panic_handler(appPanicHandler, NULL);
