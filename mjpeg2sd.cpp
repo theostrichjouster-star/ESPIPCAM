@@ -123,6 +123,9 @@ static uint8_t govLowTicks;   // consecutive under-GOV_RELAX_PCT ticks
 static uint32_t govWindowMs;  // start of the current 1s measurement window
 static uint32_t govLastVidSize;
 static uint16_t govLastFrameCnt;
+// no-frame watchdog state (see noFrameRescue above processFrame)
+static uint32_t lastGoodFrameMs = 0;
+static uint16_t rescueClipCnt = 0; // rescues during the open recording, for closeAvi
 
 // SD card storage
 // iSDbuffer is used by the playback path, which treats the upper half as a double
@@ -304,6 +307,7 @@ static void openAvi() {
   sdGovFrameKB = 0;
   govLastVidSize = govLastFrameCnt = 0;
   govWindowMs = millis();
+  rescueClipCnt = 0; // no-frame watchdog steps within this clip, for the stats below
   haveWav = false;
   highPoint = AVI_HEADER_LEN; // allot space for AVI header
   prepAviIndex();
@@ -1127,6 +1131,7 @@ static bool closeAvi() {
       }
       LOG_INF("Average SD write speed: %lu kB/s", ((vidSize / wTimeTot) * 1000) / 1024);
       if (govMaxBoost) LOG_INF("SD governor: max quality boost %u (quality %u of base %u)", govMaxBoost, govBaseQ + govMaxBoost, govBaseQ);
+      if (rescueClipCnt) LOG_WRN("No-frame rescue fired %u times during this clip - frames exceeded the sensor's JPEG window", rescueClipCnt);
       LOG_INF("File open / completion times: %lu ms / %lu ms", oTime, cTime);
       LOG_INF("Busy: %lu%%", std::min(100 * (wTimeTot + fTimeTot + dTimeTot + oTime + cTime) / vidDuration, (uint32_t)100));
       checkMemory();
@@ -1357,6 +1362,35 @@ void zoneStatsJson(char* buff, size_t buffLen) {
     haveMotion ? 1 : 0, isCapturing ? 1 : 0, lightLevel, nightTime ? 1 : 0, zoneDetectOK ? 1 : 0);
 }
 
+// No-frame watchdog. An oversized JPEG is truncated inside the sensor's frame window
+// and the driver then delivers NOTHING - not degraded frames (see BOARD_TESTING 19-20).
+// Nothing else can recover from that state: settleSensor runs at the END of
+// processFrame so pending retimes never apply, and the SD governor accounts bytes that
+// never arrive. When frames stop, step JPEG quality UP (more compression) until they
+// return. The rescue is STICKY by design: the frame window is a hard cliff, so
+// stepping back down would re-kill frames - the rescued quality stands until the user
+// changes quality/size/fps themselves. WRN-logged per step, counted per clip.
+// (State lives with the governor block near the top of the file.)
+static void noFrameRescue() {
+  uint32_t now = millis();
+  if (!lastGoodFrameMs) { lastGoodFrameMs = now; return; } // arm on first miss after boot
+  // threshold rides out retime/PLL transients (~1s) and the frame gaps of low rates
+  uint32_t thresh = FPS ? 4000u / FPS : 2000;
+  if (thresh < 2000) thresh = 2000;
+  if (now - lastGoodFrameMs < thresh) return;
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL) return;
+  int q = s->status.quality + 2;
+  if (q > 63) q = 63;
+  if (q == s->status.quality) { lastGoodFrameMs = now; return; } // already at the cap
+  s->set_quality(s, q);
+  govRebaseQuality(q); // sticky: the rescue is the governor's new base, closeAvi keeps it
+  if (isCapturing) rescueClipCnt++;
+  LOG_WRN("No frames for %lums - quality %d rescue%s", now - lastGoodFrameMs, q,
+    isCapturing ? " (mid-recording)" : "");
+  lastGoodFrameMs = now; // pace one step per threshold
+}
+
 static boolean processFrame() {
   // get camera frame
   // whether the open recording was started by motion, and so closes on the extending
@@ -1367,8 +1401,14 @@ static boolean processFrame() {
   uint32_t dTime = millis();
 
   camera_fb_t* fb = esp_camera_fb_get();
-  if (fb == NULL) return false;
+  if (fb == NULL) {
+    noFrameRescue();
+    return false;
+  }
   if (!fb->len || fb->len > maxFrameBuffSize) {
+    // counts as a miss for the watchdog too: a stream of oversized frames starves a
+    // recording exactly like absent ones, and the same rescue (smaller frames) fixes both
+    noFrameRescue();
     // Must hand the buffer back even when rejecting the frame. There are only FB_CNT of
     // them and the driver never reclaims one that is still checked out, so a handful of
     // bad frames leaves esp_camera_fb_get() with nothing to return and the capture task
@@ -1379,6 +1419,8 @@ static boolean processFrame() {
     esp_camera_fb_return(fb);
     return false;
   }
+  lastGoodFrameMs = millis(); // feeds the no-frame watchdog; stale-size flushes below
+  // still count - the sensor-to-driver path is provably moving
 
   // Drop frames left over from before a sensor switch. Tested against the geometry we
   // switched away from rather than against the size we expect, because frameData and the
