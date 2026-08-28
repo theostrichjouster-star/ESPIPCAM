@@ -229,7 +229,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     }
   }
   else if (s) {
-    if (!strcmp(variable, "quality")) res = s->set_quality(s, intVal);
+    if (!strcmp(variable, "quality")) { res = s->set_quality(s, intVal); govRebaseQuality(intVal); }
     else if (!strcmp(variable, "contrast")) res = s->set_contrast(s, intVal);
     else if (!strcmp(variable, "brightness")) res = s->set_brightness(s, intVal);
     else if (!strcmp(variable, "saturation")) res = s->set_saturation(s, intVal);
@@ -327,9 +327,11 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     }
     // captureFPS, not the row default: on a size change the framesize handler has already
     // clamped captureFPS to the new ceiling before the UI asks, and on a plain page load
-    // the device's actual rate is the truth - a default would overwrite it in the browser
-    sprintf(jsonBuff, "{\"fps\":\"%u\",\"fpsCeil\":\"%u\",\"aecMax\":\"%d\",\"budgetKBs\":\"%d\"}",
-      captureFPS, fpsCeiling((framesize_t)fsizePtr), aecMax, (sdBusKHz() > 50000) ? 4420 : 3550);
+    // the device's actual rate is the truth - a default would overwrite it in the browser.
+    // frameKB / govBoost: live SD-governor telemetry, both 0 outside a recording, so the
+    // badge falls back to its static estimate exactly when there is nothing better
+    sprintf(jsonBuff, "{\"fps\":\"%u\",\"fpsCeil\":\"%u\",\"aecMax\":\"%d\",\"budgetKBs\":\"%u\",\"frameKB\":\"%u\",\"govBoost\":\"%u\"}",
+      captureFPS, fpsCeiling((framesize_t)fsizePtr), aecMax, sdBudgetKBs(), sdGovFrameKB, sdGovBoost);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   }

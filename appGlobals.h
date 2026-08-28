@@ -252,6 +252,8 @@ void dumpCamRegs();
 void setCamReg(const char* csv);
 void getCamReg(const char* addr);
 void setExtDVDD(int val); // per-board NVS key: OV5640 internal regulator bypass for external DVDD
+uint16_t sdBudgetKBs(); // measured SD write ceiling for the live bus clock - UI badge and governor
+void govRebaseQuality(int q); // user quality change mid-recording re-bases the SD governor
 void avgZones(const char* unused); // diagnostic: dump the AEC 4x4 zone grid, see mjpeg2sd.cpp
 void zoneStatsJson(char* buff, size_t buffLen); // detector snapshot as JSON for threshold tuning
 void xclkStat(const char* unused); // diagnostic: measure XCLK / VSYNC off the pins, see mjpeg2sd.cpp
@@ -308,6 +310,8 @@ extern uint8_t FPS;
 extern uint8_t captureFPS; // user's chosen rate for the capture resolution
 extern uint8_t fsizePtr; // index to frameData[] for record
 extern bool isCapturing;
+extern uint8_t sdGovBoost; // SD governor's active quality boost steps, 0 outside recordings
+extern uint16_t sdGovFrameKB; // last-second average frame KB while recording, else 0
 extern uint8_t lightLevel;  
 extern uint8_t lampLevel;  
 extern int micGain;

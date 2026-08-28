@@ -97,6 +97,33 @@ static uint32_t cTime; // file closing time
 static uint32_t sTime; // file streaming time
 static uint32_t frameInterval; // units of us between frames
 
+// SD write budget governor. Holds the user's frame rate when frame bytes outgrow the SD
+// write ceiling by stepping JPEG quality (more compression) for the rest of the clip,
+// instead of letting FATFS backpressure shed frames silently - the dim-scene soak stored
+// 0.7fps of a requested 6 when high-gain noise doubled QSXGA frames to 946KB. MJPEG
+// frames are standalone so quality may change mid-clip; fps may not (the AVI header
+// carries one rate). Boost is bounded, hysteretic, and restored when the clip closes.
+// Quality NUMBER up = more compression on this driver.
+#define GOV_MAX_BOOST 4   // quality steps above the user's setting
+#define GOV_PUSH_PCT 90   // demand above this % of budget raises the boost. Must sit BELOW
+                          // the saturation plateau: a backpressured card delivers ~94-98%
+                          // of the nominal budget, so 95 made most ticks hover just under
+                          // the trigger and the ramp took 15s (Test A, 28 Aug)
+#define GOV_RELAX_PCT 60  // demand below this % for GOV_RELAX_TICKS lowers it. Must sit
+                          // below PUSH/(1 + one step's effect): a quality step at QSXGA
+                          // moves demand ~50%, and 75 made the governor flap q10<->q12
+                          // every few seconds in the dim Test B (28 Aug) - easing at 74%
+                          // landed straight back above 90% and re-boosted
+#define GOV_RELAX_TICKS 2 // consecutive quiet ticks before easing off
+uint8_t sdGovBoost = 0;    // current boost, 0 = user quality untouched (reported by updateFPS)
+uint16_t sdGovFrameKB = 0; // last-second average frame KB while recording, else 0 (updateFPS)
+static uint8_t govBaseQ;      // the user's quality, captured at clip open / user change
+static uint8_t govMaxBoost;   // clip peak, for the closeAvi stats
+static uint8_t govLowTicks;   // consecutive under-GOV_RELAX_PCT ticks
+static uint32_t govWindowMs;  // start of the current 1s measurement window
+static uint32_t govLastVidSize;
+static uint16_t govLastFrameCnt;
+
 // SD card storage
 // iSDbuffer is used by the playback path, which treats the upper half as a double
 // buffer, so it must stay at (RAMSIZE + CHUNK_HDR) * 2. The AVI capture path has its
@@ -198,6 +225,58 @@ static void recordingCamMode(bool starting) {
 
 /**************** capture AVI  ************************/
 
+uint16_t sdBudgetKBs() {
+  // measured sustained SD write ceiling for the bus clock in force: 4420 KB/s at 53.3MHz
+  // (sdBusDiv 3), 3550 at the stock 40MHz. Single source for the UI badge (updateFPS)
+  // and the governor, so the two can never disagree
+  return (sdBusKHz() > 50000) ? 4420 : 3550;
+}
+
+void govRebaseQuality(int q) {
+  // a user quality change mid-recording re-bases the governor; any active boost
+  // reapplies on top of the new base at the next tick
+  govBaseQ = q;
+}
+
+static void sdGovernor() {
+  // 1Hz while recording: compare the last second's write demand to the SD ceiling and
+  // trade JPEG quality for frame delivery when frames outgrow it. A saturated card
+  // delivers ~100% of budget by definition, so sustained saturation keeps raising the
+  // boost until frames shrink below the ceiling - which is the recovery path
+  uint32_t now = millis();
+  if (now - govWindowMs < 1000) return;
+  uint32_t winBytes = vidSize - govLastVidSize;
+  uint16_t winFrames = frameCnt - govLastFrameCnt;
+  uint32_t demandKBs = (uint32_t)(((uint64_t)winBytes * 1000) / (now - govWindowMs)) / 1024;
+  sdGovFrameKB = winFrames ? winBytes / winFrames / 1024 : 0;
+  govLastVidSize = vidSize;
+  govLastFrameCnt = frameCnt;
+  govWindowMs = now;
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL) return;
+  uint16_t budget = sdBudgetKBs();
+  if (demandKBs > (uint32_t)budget * GOV_PUSH_PCT / 100) {
+    govLowTicks = 0;
+    if (sdGovBoost < GOV_MAX_BOOST) {
+      sdGovBoost++;
+      if (sdGovBoost > govMaxBoost) govMaxBoost = sdGovBoost;
+      int q = govBaseQ + sdGovBoost;
+      if (q > 63) q = 63;
+      s->set_quality(s, q);
+      LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u", q, sdGovBoost, demandKBs, budget);
+    }
+  } else if (demandKBs < (uint32_t)budget * GOV_RELAX_PCT / 100 && sdGovBoost) {
+    if (++govLowTicks >= GOV_RELAX_TICKS) {
+      govLowTicks = 0;
+      sdGovBoost--;
+      int q = govBaseQ + sdGovBoost;
+      if (q > 63) q = 63;
+      s->set_quality(s, q);
+      LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u", q, sdGovBoost, demandKBs, budget);
+    }
+  } else govLowTicks = 0;
+}
+
 static void openAvi() {
   // derive filename from date & time, store in date folder
   // time to open a new file on SD increases with the number of files already present
@@ -216,6 +295,15 @@ static void openAvi() {
   // initialisation of counters
   startTime = millis();
   frameCnt = fTimeTot = wTimeTot = dTimeTot = vidSize = 0;
+  // governor starts each file from the user's quality; boost is re-earned per window.
+  // status.quality is safe as the base here because closeAvi always restored it before
+  // the previous file was renamed - a dashcam chain re-boosts within a tick or two
+  sensor_t* govSensor = esp_camera_sensor_get();
+  govBaseQ = (govSensor != NULL) ? govSensor->status.quality : 10;
+  sdGovBoost = govMaxBoost = govLowTicks = 0;
+  sdGovFrameKB = 0;
+  govLastVidSize = govLastFrameCnt = 0;
+  govWindowMs = millis();
   haveWav = false;
   highPoint = AVI_HEADER_LEN; // allot space for AVI header
   prepAviIndex();
@@ -915,6 +1003,13 @@ static void saveFrame(camera_fb_t* fb) {
 static bool closeAvi() {
   // closes the recorded file
   recordingCamMode(false); // unfreeze AWB, restore continuous AF
+  if (sdGovBoost) {
+    // hand the sensor back at the user's quality; the boost only ever lives inside a clip
+    sensor_t* govSensor = esp_camera_sensor_get();
+    if (govSensor != NULL) govSensor->set_quality(govSensor, govBaseQ);
+  }
+  sdGovBoost = 0;
+  sdGovFrameKB = 0;
   uint32_t vidDuration = millis() - startTime;
   uint32_t vidDurationSecs = lround(vidDuration / 1000.0);
   logLine();
@@ -983,6 +1078,7 @@ static bool closeAvi() {
         LOG_INF("Average frame storage time: %lu ms", wTimeTot / frameCnt);
       }
       LOG_INF("Average SD write speed: %lu kB/s", ((vidSize / wTimeTot) * 1000) / 1024);
+      if (govMaxBoost) LOG_INF("SD governor: max quality boost %u (quality %u of base %u)", govMaxBoost, govBaseQ + govMaxBoost, govBaseQ);
       LOG_INF("File open / completion times: %lu ms / %lu ms", oTime, cTime);
       LOG_INF("Busy: %lu%%", std::min(100 * (wTimeTot + fTimeTot + dTimeTot + oTime + cTime) / vidDuration, (uint32_t)100));
       checkMemory();
@@ -1362,6 +1458,7 @@ static boolean processFrame() {
     if (frameCnt < frameLimit) {
       dTimeTot += millis() - dTime;
       saveFrame(fb);
+      sdGovernor();
       // the index buffer is the real ceiling - below 4fps audio needs an entry per frame,
       // so it can fill before frameLimit. Closing here yields a valid file, where
       // overflowing it used to reboot the device in the middle of a recording
