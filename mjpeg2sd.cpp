@@ -1218,8 +1218,17 @@ bool recoverAvi() {
   dateFormat(partName, sizeof(partName), true);
   STORAGE.mkdir(partName);
   dateFormat(partName, sizeof(partName), false);
-  snprintf(recovered, FILE_NAME_LEN - 1, "%s_%s_%u_%lu_R.%s", partName,
-    frameData[recFS].frameSizeStr, recFPSv, (unsigned long)(vidDuration / 1000), AVI_EXT);
+  // Recovery runs seconds into boot, usually before NTP has synced, so on a board that
+  // power cycles repeatedly the timestamp is the same 1970 value every time and the names
+  // collide. A failed rename would leave AVITEMP in place for the next recording to
+  // overwrite - losing exactly the clip this function just rescued - so uniquify
+  for (int attempt = 0; attempt < 100; attempt++) {
+    if (attempt) snprintf(recovered, FILE_NAME_LEN - 1, "%s_%s_%u_%lu_R%d.%s", partName,
+      frameData[recFS].frameSizeStr, recFPSv, (unsigned long)(vidDuration / 1000), attempt, AVI_EXT);
+    else snprintf(recovered, FILE_NAME_LEN - 1, "%s_%s_%u_%lu_R.%s", partName,
+      frameData[recFS].frameSizeStr, recFPSv, (unsigned long)(vidDuration / 1000), AVI_EXT);
+    if (!STORAGE.exists(recovered)) break;
+  }
   if (STORAGE.rename(AVITEMP, recovered))
     LOG_ALT("Recovered interrupted recording: %s (%u frames, %lus, %s)", recovered, frames,
       (unsigned long)(vidDuration / 1000), fmtSize(pos));
