@@ -43,6 +43,16 @@ char startupFailure[SF_LEN] = {0};
 RTC_NOINIT_ATTR char messageLog[RAM_LOG_LEN];
 RTC_NOINIT_ATTR uint16_t mlogEnd;
 static RTC_NOINIT_ATTR char brownoutStatus;
+// Survives the reset so the next boot can say whether the graceful sag response actually
+// ran before the supply went. Without it, a hardware brownout reset and a Stage 1 landing
+// followed by a hardware reset are indistinguishable after the fact - which is exactly
+// the ambiguity that made the first battery run uninterpretable
+static RTC_NOINIT_ATTR uint32_t sagStage1Count;
+// RTC noinit memory holds whatever was there before, and only a power on cycle clears it,
+// so a newly added counter reads as garbage until then - it needs its own validity marker
+// rather than trusting the value. Same reason crashLoop carries MAGIC_NUM
+#define SAG_MAGIC 0x5A61C0DE
+static RTC_NOINIT_ATTR uint32_t sagMagic;
 static RTC_NOINIT_ATTR uint32_t crashLoop;
 static RTC_NOINIT_ATTR uint32_t backtrace[60]; // array of backtrace addresses 
 static RTC_NOINIT_ATTR size_t btLen; // number of backtrace entries
@@ -93,6 +103,23 @@ static void ramLogStore(const char* outBuf, size_t msgLen) {
     mlogEnd = 0;
   } else memcpy(messageLog + mlogEnd, outBuf, msgLen);
   mlogEnd += msgLen;
+}
+
+void markSagStage1() {
+  if (sagMagic != SAG_MAGIC) { // first use, or contents lost to a power off
+    sagMagic = SAG_MAGIC;
+    sagStage1Count = 0;
+  }
+  sagStage1Count++;
+}
+
+void logSyncSD() {
+  // Push the SD log to the card now, without flush_log()'s one second delay - meant for
+  // the moments where the next thing that happens may be the supply disappearing
+  if (log_remote_fp != NULL) {
+    fflush(log_remote_fp);
+    fsync(fileno(log_remote_fp));
+  }
 }
 
 void flush_log(bool andClose) {
@@ -164,8 +191,13 @@ static void logTask(void *pvParams) {
           if (log_remote_fp != NULL) {
             // output to SD if file opened
             fwrite(msg, sizeof(char), msgLen, log_remote_fp); // log.txt
-            // periodic sync to SD
-            if (counter_write++ % WRITE_CACHE_CYCLE == 0) fsync(fileno(log_remote_fp));
+            // Periodic sync to SD, but never for a warning or an error: those are the
+            // lines that explain a failure, and on a battery board the failure is a
+            // supply loss that discards everything not yet synced. The whole of a 85
+            // minute battery run was lost this way (28 Aug) - the SD log is only a black
+            // box if the interesting lines are on the card before the lights go out
+            if (counter_write++ % WRITE_CACHE_CYCLE == 0
+                || strstr(msg, "WARN") != NULL || strstr(msg, "ERR") != NULL) fsync(fileno(log_remote_fp));
           } 
         }
       }
@@ -266,7 +298,9 @@ static esp_reset_reason_t printResetReason() {
     case ESP_RST_POWERON: {
       LOG_INF("Power on reset");
       brownoutStatus = 0;
-      messageLog[0] = 0; 
+      sagMagic = 0; // RTC contents are undefined after a true power off
+      sagStage1Count = 0;
+      messageLog[0] = 0;
       break;
     }
     case ESP_RST_EXT: LOG_INF("Reset from external pin"); break;
@@ -279,6 +313,13 @@ static esp_reset_reason_t printResetReason() {
     case ESP_RST_BROWNOUT: LOG_INF("Software reset due to brownout"); break;
     case ESP_RST_SDIO: LOG_INF("Reset over SDIO"); break;
     default: LOG_WRN("Unhandled reset reason"); break;
+  }
+  // Logging is alive by now, unlike in logSetup(), so this is where the sag history is
+  // safe to report. Bounded because RTC memory is undefined after a true power off
+  if (bootReason == ESP_RST_BROWNOUT) {
+    if (sagMagic == SAG_MAGIC && sagStage1Count > 0)
+      LOG_ALT("Supply sag response had run %lu time(s) before this brownout - the clip was landed", sagStage1Count);
+    else LOG_WRN("Brownout with no sag response recorded - the rail fell faster than the warning level could catch");
   }
   showBacktrace();
   return bootReason;
@@ -361,8 +402,11 @@ uint8_t brownoutArmedLevel() {
 }
 
 bool hadBrownout() {
-  // a brownout on a previous boot, surviving in RTC memory across the dirty reboot
-  return brownoutStatus == 'B' || brownoutStatus == 'R';
+  // A brownout on the previous boot. The RTC flag only gets set when our ISR ran, which a
+  // hardware reset from the terminal stage skips, so the reset reason has to be consulted
+  // too or the recording holdoff never engages on a real supply failure
+  return brownoutStatus == 'B' || brownoutStatus == 'R'
+         || esp_reset_reason() == ESP_RST_BROWNOUT;
 }
 
 uint8_t brownoutProbeBand() {
@@ -453,7 +497,13 @@ void logSetup() {
   // function, and logging before that asserts in xQueueReceive on a NULL handle - an
   // unrecoverable boot loop, because the condition that reaches it survives in RTC memory.
   // printResetReason() already reports the brownout once logging is alive
-  bool supplyReboot = (brownoutStatus == 'B' || brownoutStatus == 'R');
+  // esp_reset_reason() is the authoritative signal and the RTC flag is not: the terminal
+  // stage arms the comparator with reset_enabled, so the HARDWARE resets and our ISR never
+  // runs to set brownoutStatus. Trusting the flag alone made every real brownout look like
+  // a software crash loop, which suppressed prepRecording() - a battery camera came back
+  // web-only and never recorded again (measured on the 28 Aug battery run, tasks 14 not 19)
+  bool supplyReboot = (brownoutStatus == 'B' || brownoutStatus == 'R'
+                       || esp_reset_reason() == ESP_RST_BROWNOUT);
   if (crashLoop == MAGIC_NUM && !supplyReboot) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Crash loop detected, check log");
   crashLoop = MAGIC_NUM;
   if (logHandle == NULL) {

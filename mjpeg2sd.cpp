@@ -1561,6 +1561,7 @@ static void sagShutdown() {
   // so the normal close path finalises the file immediately after this returns
   supplyParked = true;
   supplyParkedMs = millis();
+  markSagStage1(); // survives the reset, so the next boot can say this ran
   LOG_ALT("SUPPLY SAG at brownout level %u (trip %lu) - landing recording and parking",
     brownoutArmedLevel(), sagTripCount);
   doRecording = false; // block new recordings, including motion triggered ones
@@ -1574,7 +1575,9 @@ static void sagShutdown() {
   // and RF powered down is the right answer. WiFi stays up until then, deliberately: on
   // a battery board with no serial it is the only interface and the only OTA path
   armBrownout(7, true);
-  flush_log(false); // get this into the SD log while there is still a supply to do it
+  // Straight fsync, not flush_log(false): that sleeps a second, which is a poor thing to
+  // do in the capture task while the rail is on its way down
+  logSyncSD();
 }
 
 static void noFrameRescue() {
