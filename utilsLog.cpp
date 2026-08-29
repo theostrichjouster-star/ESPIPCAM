@@ -348,7 +348,18 @@ esp_sleep_wakeup_cause_t wakeupResetReason() {
 // SD card >=2.7V), which is why the WARNING stage sits there and the file is closed while
 // the card can still be written. Level 7 is far below the card's minimum and is only good
 // as the terminal backstop, which is what this used to be armed at permanently
-#define BROWNOUT_WARN_LVL 3 // ~2.98V - sag warning, still safe to write SD
+// The threshold has to clear the BATTERY's protection cutoff, not just the chip and card
+// minimums. The XIAO's regulator is an SGM6029 synchronous buck, not an LDO: below ~3.3V
+// in it goes to 100% duty cycle with the high-side switch held on ("even when the input
+// voltage falls below the output"), so the rail becomes a pass-through and tracks the cell
+// down, less only I x RDSON (185mOhm typ, ~30mV here). The converter itself runs to a
+// 1.76V UVLO, so it never gives up first. That means a level 3 trip at ~2.98V corresponds
+// to a cell at ~3.01V - right where a protected LiPo's disconnect fires, and in two
+// battery runs the protection won the race every time and no warning was ever produced
+// (28 Aug: "no sag response recorded", rail band 0 to the last poll before reset).
+// Level 2 trips while the cell is still ~3.16V, leaving real time to land the clip, and
+// survived the same zero-false-trip soak level 3 did (QSXGA q6, HD30 + streaming)
+#define BROWNOUT_WARN_LVL 2 // ~3.13V - above the pack's cutoff, well above SD's 2.7V min
 #define BROWNOUT_DET_LVL 7  // ~2.44V - terminal backstop, dirty reboot
 
 volatile bool supplySagging = false;   // set by the ISR, actioned in task context
