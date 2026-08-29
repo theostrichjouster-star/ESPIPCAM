@@ -192,6 +192,7 @@ uint8_t brownoutProbeBand();
 bool hadBrownout();
 void debugDirtyReboot(); // debug: no-cleanup reboot, emulates supply loss for recovery tests
 void markSagStage1(); // record that the graceful sag response ran, for the next boot to report
+void brownoutDump(); // read back the comparator's actual hardware config - read only, safe
 void logSyncSD(); // push the SD log to the card now, without flush_log()'s 1s delay
 extern volatile bool supplySagging;
 extern volatile uint32_t sagTripCount;

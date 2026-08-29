@@ -340,6 +340,9 @@ esp_sleep_wakeup_cause_t wakeupResetReason() {
 
 #include "soc/rtc_periph.h"
 #include "hal/brownout_hal.h"
+#include "soc/rtc_cntl_reg.h"
+#include "soc/regi2c_brownout.h"
+#include "esp_private/regi2c_ctrl.h"
 
 // The brownout comparator is the only supply sensor this board has - there is no battery
 // divider wired - so it is used as a staged sag detector rather than only as a killswitch.
@@ -423,6 +426,34 @@ void armBrownout(uint8_t level, bool terminal) {
 
 uint8_t brownoutArmedLevel() {
   return armedLevel;
+}
+
+void brownoutDump() {
+  // Read back what the comparator hardware actually holds. Everything reported up to now
+  // has been the value this code STORED, never a readback, so "armed at level 2" was an
+  // assumption carried through three battery runs. Read-only and safe - unlike arming a
+  // threshold at or above the rail to see whether it trips, which hangs the board.
+  // On the S3 the THRESHOLD is not in RTC_CNTL at all: it is an analog setting reached
+  // over the internal REGI2C bus (brownout_ll_set_threshold uses REGI2C_WRITE_MASK with
+  // I2C_BOD / I2C_BOD_THRESHOLD), which is why the RTC_CNTL_DBROWN_OUT_* symbols exist
+  // only on the original ESP32. Read it back the same way it is written
+  // Two different registers are involved and mixing them up produces a convincing lie:
+  // the enable/reset/power-down bits are in RTC_CNTL_BROWN_OUT_REG, but the INTERRUPT
+  // enable is bit 9 of RTC_CNTL_INT_ENA_REG (brownout_ll_intr_enable writes
+  // RTCCNTL.int_ena.rtc_brown_out). Reading that bit from the wrong register reports the
+  // interrupt as permanently disabled, which looks exactly like a root cause
+  uint32_t r = READ_PERI_REG(RTC_CNTL_BROWN_OUT_REG);
+  uint32_t ie = READ_PERI_REG(RTC_CNTL_INT_ENA_REG);
+  uint32_t thres = REGI2C_READ_MASK(I2C_BOD, I2C_BOD_THRESHOLD);
+  LOG_ALT("Brownout HW: threshold=%lu (code thinks %u), ena=%d rst_ena=%d close_flash=%d pd_rf=%d int_ena=%d, terminal=%d, bo 0x%08lX ie 0x%08lX",
+    thres, armedLevel,
+    (r & RTC_CNTL_BROWN_OUT_ENA) ? 1 : 0,
+    (r & RTC_CNTL_BROWN_OUT_RST_ENA) ? 1 : 0,
+    (r & RTC_CNTL_BROWN_OUT_CLOSE_FLASH_ENA) ? 1 : 0,
+    (r & RTC_CNTL_BROWN_OUT_PD_RF_ENA) ? 1 : 0,
+    (ie & RTC_CNTL_BROWN_OUT_INT_ENA) ? 1 : 0,
+    brownoutTerminal ? 1 : 0, r, ie);
+  logSyncSD();
 }
 
 bool hadBrownout() {

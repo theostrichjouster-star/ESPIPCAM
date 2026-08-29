@@ -180,8 +180,16 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     debugDirtyReboot();
   }
   // debug: arm the comparator at a given level for the false trip soak. Never terminal
-  // from here - a web request must not be able to arm the killswitch
-  else if (!strcmp(variable, "bodLevel")) armBrownout((uint8_t)intVal, false);
+  // from here - a web request must not be able to arm the killswitch.
+  // Level 1 (3.30V) is at the nominal rail, so arming it asserts a PERMANENT brownout:
+  // the sag response then escalates to the terminal config, whose flash power-down stops
+  // the chip executing entirely - a hard hang needing a physical power cycle, not a reset.
+  // Learned the hard way on 28 Aug. Use bodDump to inspect the hardware instead
+  else if (!strcmp(variable, "bodLevel")) {
+    if (intVal < 2 || intVal > 7) LOG_WRN("bodLevel %d refused - only 2-7 are safe to arm (1 is the nominal rail)", intVal);
+    else armBrownout((uint8_t)intVal, false);
+  }
+  else if (!strcmp(variable, "bodDump")) brownoutDump();
   else if (!strcmp(variable, "sdBusClk")) sdBusClk(value); // 0 reports, 2-16 sets the host divider (transient)
   // the persisted counterpart: the saved row reapplies the divider on every boot via the
   // config load, which runs after the SD is mounted. Default 4 = the stock 40MHz - safe for
