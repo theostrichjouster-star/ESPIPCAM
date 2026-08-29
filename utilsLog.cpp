@@ -343,11 +343,12 @@ esp_sleep_wakeup_cause_t wakeupResetReason() {
 
 // The brownout comparator is the only supply sensor this board has - there is no battery
 // divider wired - so it is used as a staged sag detector rather than only as a killswitch.
-// Measured S3 trip points: lvl 3 ~2.98V, 4 ~2.84V, 5 ~2.67V, 6 ~2.56V, 7 ~2.44V.
-// Level 3 is the last point where everything is still in spec (the S3 wants >=3.0V and the
-// SD card >=2.7V), which is why the WARNING stage sits there and the file is closed while
-// the card can still be written. Level 7 is far below the card's minimum and is only good
-// as the terminal backstop, which is what this used to be armed at permanently
+// S3 trip points from the IDF Kconfig: lvl 1 3.30V, 2 3.19V, 3 2.98V, 4 2.84V, 5 2.67V,
+// 6 2.56V, 7 2.44V.
+// Level 7 is far below the SD card's 2.7V minimum and is only good as the terminal
+// backstop, which is what this used to be armed at permanently - by the time it fires
+// there is no writing left to do. The warning stage needs the opposite end of the range;
+// which end exactly is the subject of the note below
 // The threshold has to clear the BATTERY's protection cutoff, not just the chip and card
 // minimums. The XIAO's regulator is an SGM6029 synchronous buck, not an LDO: below ~3.3V
 // in it goes to 100% duty cycle with the high-side switch held on ("even when the input
@@ -357,9 +358,21 @@ esp_sleep_wakeup_cause_t wakeupResetReason() {
 // to a cell at ~3.01V - right where a protected LiPo's disconnect fires, and in two
 // battery runs the protection won the race every time and no warning was ever produced
 // (28 Aug: "no sag response recorded", rail band 0 to the last poll before reset).
-// Level 2 trips while the cell is still ~3.16V, leaving real time to land the clip, and
-// survived the same zero-false-trip soak level 3 did (QSXGA q6, HD30 + streaming)
-#define BROWNOUT_WARN_LVL 2 // ~3.13V - above the pack's cutoff, well above SD's 2.7V min
+// Level 2 trips at 3.19V, so the cell is still ~3.22V when the sag response starts -
+// depleted but well above a protected pack's disconnect, and far above the SD card's 2.7V
+// floor. It survived the same zero-false-trip qualification level 3 did.
+// The camera supply says the same thing independently. The OV5640 runs from an SGM2036-2.8
+// LDO fed off this rail, and its dropout is 215mV typ / 280mV max at 300mA, so the 2.8V
+// analog rail leaves regulation once this rail reaches ~3.02-3.08V and then simply follows
+// it down (that part keeps running to a 1.6V input). Tripping at 2.98V would therefore
+// have landed the clip AFTER the sensor's analog supply had already sagged - the last
+// frames written would have been captured on a failing rail, with no way to tell from the
+// file. 3.19V lands it while the camera is still properly supplied
+// Level 1 (3.30V) is exactly the nominal rail and cannot be used at all; level 2 is the
+// only usable warning point on this board. Its margin is genuinely tight - 110mV nominal,
+// and only ~44mV against the buck's +-2% regulation worst case (3.234V) - so the soak is
+// what justifies it, not the arithmetic. Re-run that soak before trusting any change here
+#define BROWNOUT_WARN_LVL 2 // 3.19V - above the pack's cutoff, well above SD's 2.7V min
 #define BROWNOUT_DET_LVL 7  // ~2.44V - terminal backstop, dirty reboot
 
 volatile bool supplySagging = false;   // set by the ISR, actioned in task context
