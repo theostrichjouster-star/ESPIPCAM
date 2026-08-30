@@ -186,7 +186,13 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   // the chip executing entirely - a hard hang needing a physical power cycle, not a reset.
   // Learned the hard way on 28 Aug. Use bodDump to inspect the hardware instead
   else if (!strcmp(variable, "bodLevel")) {
-    if (intVal < 2 || intVal > 7) LOG_WRN("bodLevel %d refused - only 2-7 are safe to arm (1 is the nominal rail)", intVal);
+    // Never arm a threshold at or above the live rail. Crossing it does not deliver a
+    // usable interrupt - it wedges the chip outright, before any of this code runs, and
+    // only a physical power cycle recovers it. Proven twice on 28 Aug, the second time
+    // with the sag response in log-only mode, which rules out the escalation as the
+    // cause. Level 1 is 3.30V against a 3.3V rail, so it is permanently unsafe; use
+    // bodDump to inspect the comparator instead of provoking it
+    if (intVal < 2 || intVal > 7) LOG_WRN("bodLevel %d refused - only 2-7 may be armed (1 is the nominal rail and hangs the board)", intVal);
     else armBrownout((uint8_t)intVal, false);
   }
   else if (!strcmp(variable, "bodDump")) brownoutDump();

@@ -1570,11 +1570,15 @@ static void sagShutdown() {
   // nothing here re-enables it - recovery is a power cycle onto a charged pack
   sensor_t* s = esp_camera_sensor_get();
   if (s != NULL && s->set_reg != NULL) s->set_reg(s, 0x3008, 0xFF, 0x42); // standby
-  // Re-arm as the terminal killswitch. All SD writes have stopped by now, so the only
-  // thing left to protect against is the final collapse, where a dirty reboot with flash
-  // and RF powered down is the right answer. WiFi stays up until then, deliberately: on
-  // a battery board with no serial it is the only interface and the only OTA path
-  armBrownout(7, true);
+  // Deliberately NOT re-arming a terminal stage, though an earlier version did.
+  // The comparator readback (bodDump) showed both configurable reset paths already
+  // disabled - RST_ENA 0, ANA_RST_EN 0 - through all three battery runs, and the chip
+  // still reset with ESP_RST_BROWNOUT every time: the S3's own protection handles the
+  // final collapse whatever this detector is told to do. A terminal arm therefore buys
+  // no protection, while its flash power-down demonstrably stops the chip executing when
+  // a trip occurs (hung the board twice on 28 Aug, needing a physical power cycle) and
+  // its RF power-down would drop the only interface a battery board has. Leave the
+  // comparator exactly where it is and let the hardware do the last step.
   // Straight fsync, not flush_log(false): that sleeps a second, which is a poor thing to
   // do in the capture task while the rail is on its way down
   logSyncSD();
