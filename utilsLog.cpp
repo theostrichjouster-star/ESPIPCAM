@@ -419,11 +419,49 @@ IRAM_ATTR static void notifyBrownout(void *arg) {
   }
 }
 
+void disarmBrownout() {
+  // Quiesce the comparator entirely - no interrupt, no reset, no flash or RF power-down,
+  // not even enabled. Called at the top of doRestart(): the restart teardown (RF
+  // shutdown, cache and clock transitions) otherwise runs with flash_power_down latched
+  // on a live comparator, and a transient trip there powers flash down mid-execution -
+  // the chip stops dead, no watchdog, no USB, physical reset only. Reproduced on demand
+  // 31 Aug (harness cycle 2: silence straight after the closeAvi stats, esptool Write
+  // timeout); three field occurrences before that, all on doRestart teardowns. The next
+  // boot is NOT this function's concern: IDF's esp_brownout_init re-arms the comparator
+  // with its stock config early in every boot (the forensic dump in logSetup measures
+  // that, not reset survival), and initBrownout() then takes over
+  brownout_ll_intr_enable(false);
+  brownout_ll_intr_clear();
+  brownout_hal_config_t off = {
+    .threshold = armedLevel,
+    .enabled = false,
+    .reset_enabled = false,
+    .flash_power_down = false,
+    .rf_power_down = false,
+  };
+  brownout_hal_config(&off);
+  brownoutTerminal = false;
+}
+
 void armBrownout(uint8_t level, bool terminal) {
   // (re)arm the comparator at a given level. flash_power_down / rf_power_down MUST stay
   // false for a warning stage: they tell the hardware to drop flash and the radio on trip,
   // which would strand the code that is supposed to close the file (it executes from
-  // flash) and kill wifi, the only interface a battery powered board has
+  // flash) and kill wifi, the only interface a battery powered board has.
+  // Quiesce first: reconfiguring a LIVE comparator with action bits latched is the
+  // lockup window this file's forensic trace was built to catch - disable it, let the
+  // analog side settle, then configure and enable with the final bits in one step
+  brownout_ll_intr_enable(false);
+  brownout_ll_intr_clear();
+  brownout_hal_config_t off = {
+    .threshold = level,
+    .enabled = false,
+    .reset_enabled = false,
+    .flash_power_down = false,
+    .rf_power_down = false,
+  };
+  brownout_hal_config(&off);
+  delayMicroseconds(200); // same settle idiom as brownoutProbeBand()
   brownoutTerminal = terminal;
   armedLevel = level;
   brownout_hal_config_t cfg = {
@@ -433,13 +471,22 @@ void armBrownout(uint8_t level, bool terminal) {
     .flash_power_down = terminal,
     .rf_power_down = terminal,
   };
+  // Forensic trace: hal_config enables the comparator with the action bits latched while
+  // the threshold (an analog REGI2C setting) is still settling - the suspected lockup
+  // window. Only ever prints at boot and on a manual bodLevel change: brownoutProbeBand
+  // refuses to run once the terminal stage is armed, so there is no periodic spam
+  printf("armBrownout: level %u terminal %d, hal_config...\n", level, terminal ? 1 : 0);
+  fflush(stdout); delay(10);
   brownout_hal_config(&cfg);
-  brownout_ll_intr_clear();
+  delayMicroseconds(200); // let the comparator settle on the new config
+  printf("armBrownout: hal_config done\n"); fflush(stdout);
+  brownout_ll_intr_clear(); // discard any glitch raised by the reconfiguration itself
   if (!isrRegistered) {
     rtc_isr_register(notifyBrownout, NULL, RTC_CNTL_BROWN_OUT_INT_ENA_M, RTC_INTR_FLAG_IRAM);
     isrRegistered = true;
   }
   brownout_ll_intr_enable(true);
+  printf("armBrownout: armed\n"); fflush(stdout);
 }
 
 uint8_t brownoutArmedLevel() {
@@ -595,7 +642,26 @@ void logSetup() {
     Serial.begin(115200);
     Serial.setDebugOutput(DBG_ON);
     printf("\n\n");
-    if (DEBUG_MEM) printf("init > Free: heap %lu\n", ESP.getFreeHeap()); 
+    if (DEBUG_MEM) printf("init > Free: heap %lu\n", ESP.getFreeHeap());
+    // Lockup forensics: dump the comparator state the app starts with, before
+    // initBrownout() rearms it. This is IDF's esp_brownout_init config (re-applied
+    // early in every boot), not reset survival - measured 31 Aug: identical
+    // 0x4BFFC020 on hard and soft boots. Kept because a deviation here on a future
+    // wedge would be the first clue. Raw printf + fflush + a beat of delay,
+    // deliberately not the log system: these lines must reach the host even if the
+    // chip dies inside the arm a few lines later
+    uint32_t bodInherit = READ_PERI_REG(RTC_CNTL_BROWN_OUT_REG);
+    uint32_t bodIntInherit = READ_PERI_REG(RTC_CNTL_INT_ENA_REG);
+    uint32_t bodThresInherit = REGI2C_READ_MASK(I2C_BOD, I2C_BOD_THRESHOLD);
+    printf("BOD inherited: bo 0x%08lX ie 0x%08lX thres %lu (ena=%d rst=%d close_flash=%d pd_rf=%d int=%d)\n",
+      bodInherit, bodIntInherit, bodThresInherit,
+      (bodInherit & RTC_CNTL_BROWN_OUT_ENA) ? 1 : 0,
+      (bodInherit & RTC_CNTL_BROWN_OUT_RST_ENA) ? 1 : 0,
+      (bodInherit & RTC_CNTL_BROWN_OUT_CLOSE_FLASH_ENA) ? 1 : 0,
+      (bodInherit & RTC_CNTL_BROWN_OUT_PD_RF_ENA) ? 1 : 0,
+      (bodIntInherit & RTC_CNTL_BROWN_OUT_INT_ENA) ? 1 : 0);
+    fflush(stdout);
+    delay(20); // let the USB host drain the line while the chip is provably alive
     (DBG_ON) ? esp_log_level_set("*", DBG_LVL) : esp_log_level_set("*", ESP_LOG_NONE); // suppress esp log messages
     esp_log_set_vprintf(vprintfRedirect); // redirect esp_log output to app log
 
@@ -629,7 +695,14 @@ void logSetup() {
       LOG_INF("Setup RAM based log, size %u, starting from %u", RAM_LOG_LEN, mlogEnd);
       if (!DBG_ON) esp_log_level_set("*", ESP_LOG_ERROR); // show ESP_LOG_ERROR messages during init
       wakeupResetReason();
+      // breadcrumbs bracketing the prime lockup suspect - if a wedge boot's capture ends
+      // between these two lines, armBrownout's own trace narrows it to the exact call
+      printf("initBrownout: entering\n"); fflush(stdout); delay(20);
       initBrownout();
+      printf("initBrownout: done, BOD now bo 0x%08lX ie 0x%08lX thres %lu\n",
+        READ_PERI_REG(RTC_CNTL_BROWN_OUT_REG), READ_PERI_REG(RTC_CNTL_INT_ENA_REG),
+        (uint32_t)REGI2C_READ_MASK(I2C_BOD, I2C_BOD_THRESHOLD));
+      fflush(stdout);
       boardInfo();
       debugMemory("logSetup");
     }

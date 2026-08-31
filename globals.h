@@ -187,6 +187,7 @@ void resetCrashLoop();
 // supply sag detection via the brownout comparator - the only rail sensor on a board
 // with no battery divider. See utilsLog.cpp for the level/voltage table
 void armBrownout(uint8_t level, bool terminal);
+void disarmBrownout(); // quiesce the comparator before a software restart - see doRestart()
 uint8_t brownoutArmedLevel();
 uint8_t brownoutProbeBand();
 bool hadBrownout();

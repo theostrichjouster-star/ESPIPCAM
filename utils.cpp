@@ -875,6 +875,13 @@ void debugMemory(const char* caller) {
 
 void doRestart(const char* restartStr) {
   LOG_ALT("Controlled restart: %s", restartStr);
+  // Quiesce the brownout comparator BEFORE any teardown. With flash_power_down latched,
+  // a transient trip during the shutdown's RF and clock transitions powers flash down
+  // mid-execution and the chip stops dead until someone presses reset - the reproduced
+  // lockup of 31 Aug died exactly here, between the closeAvi stats and the reset. The
+  // supply-sag path is unaffected: battMonitor and sagShutdown do not use the comparator,
+  // and the next boot re-arms it in initBrownout()
+  disarmBrownout();
 #ifdef ISCAM
   appShutdown();
 #endif
