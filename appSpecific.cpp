@@ -486,6 +486,11 @@ char* buildAppJsonString(bool filter) {
   // Supply telemetry. With no battery divider the comparator band is the only rail
   // reading there is, and on a battery run over wifi it is the only way to watch the
   // descent - so it goes in the status poll, not just the log. band 0 = healthy
+  // Advertise which optional modules are compiled OUT, so the web UI can hide their
+  // controls instead of offering sliders that fail with "required cpp file not included"
+  p += sprintf(p, "\"builtOut\":\"%s%s%s%s%s\",",
+    INCLUDE_FTP_HFS ? "" : "fs,", INCLUDE_SMTP ? "" : "smtp,", INCLUDE_TGRAM ? "" : "tgram,",
+    INCLUDE_MQTT ? "" : "mqtt,", INCLUDE_PERIPH ? "" : "periph,");
   p += sprintf(p, "\"battMv\":\"%u\",", battMv);
   p += sprintf(p, "\"sagBand\":\"%u\",", brownoutProbeBand());
   p += sprintf(p, "\"sagTrips\":\"%lu\",", sagTripCount);

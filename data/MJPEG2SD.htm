@@ -1347,7 +1347,7 @@
                     </select>
                   </div>
                   <br>
-                  <div class="subheader">FTP / HTTPS settings</div>
+                  <div class="subheader" id="ftp-subheader">FTP / HTTPS settings</div>
                   <div class="input-group" id="ftp-group">
                     <label for="fsServer">File Server</label>
                     <input id="fsServer" name="fsServer" maxlength=32 placeholder="File server name">
@@ -1376,7 +1376,7 @@
                     </div>&nbsp;HFS
                   </div>
                   <br>
-                  <div class="subheader">SMTP settings</div>
+                  <div class="subheader" id="smtp-subheader">SMTP settings</div>
                   <div class="input-group" id="smtp-group">
                     <label for="smtp_server">SMTP server</label>
                     <input id="smtp_server" name="smtp_server" maxlength=32 placeholder="smtp server name">
@@ -1393,7 +1393,7 @@
                     <label for="SMTP_Pass">SMTP password</label>
                     <input id="SMTP_Pass" name="SMTP_Pass" maxlength=32 placeholder="smtp password">
                   </div>
-                  <div class="input-group" id="ftp-group">
+                  <div class="input-group" id="smtp-group">
                     <label for="smtp_email">SMTP email</label>
                     <input id="smtp_email" name="smtp_email" maxlength=64 placeholder="smtp email to">
                   </div>
@@ -1677,6 +1677,22 @@
         playbackButton = $('#forcePlayback');
         sustainId = +appClock + Math.ceil(refreshInterval / 1000);
         fetchTimeZones();
+        hideBuiltOut();
+      }
+
+      async function hideBuiltOut() {
+        // Hide controls whose backing module is compiled out of this firmware build.
+        // The status JSON's builtOut key lists absent modules; offering a live slider
+        // for one of them just produces "required cpp file not included" on the device
+        try {
+          const s = await (await fetch('/status')).json();
+          const absent = (s.builtOut || '').split(',');
+          const hideIds = [];
+          if (absent.includes('fs')) hideIds.push('ftp-subheader', 'ftp-group', 'autoUpload-group', 'deleteAfter-group');
+          if (absent.includes('smtp')) hideIds.push('smtp-subheader', 'smtp-group');
+          hideIds.forEach(id => document.querySelectorAll('div[id="' + id + '"]')
+            .forEach(el => { el.style.display = 'none'; }));
+        } catch (e) {} // no builtOut info (older firmware, or setup mode) - show everything
       }
 
       async function processStatus(dest, key, value, fromUser = true) {
