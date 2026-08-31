@@ -362,9 +362,17 @@ static void sdGovernor() {
   } else govLowTicks = 0;
 }
 
+// true from AVITEMP open until closeAvi() has fully landed the file. OTAprereq() waits on
+// this rather than isCapturing, which processFrame clears at the decision point BEFORE the
+// close branch runs - waiting on isCapturing returns with the index write and rename still
+// to come, and the teardown then races the close (seen on the first OTA verification run:
+// the clip went through boot recovery instead of landing)
+static volatile bool aviBusy = false;
+
 static void openAvi() {
   // derive filename from date & time, store in date folder
   // time to open a new file on SD increases with the number of files already present
+  aviBusy = true;
   oTime = millis();
   dateFormat(partName, sizeof(partName), true);
   STORAGE.mkdir(partName); // make date folder if not present
@@ -1365,11 +1373,13 @@ static bool closeAvi() {
 #endif
     }
     if (!checkFreeStorage()) doRecording = forceRecord = false;
+    aviBusy = false;
     return true;
   } else {
     // nothing was captured, so there is no usable file to keep
     STORAGE.remove(AVITEMP);
     LOG_WRN("Discarded empty recording after %lu secs", vidDurationSecs);
+    aviBusy = false;
     return false;
   }
 }
@@ -1615,8 +1625,13 @@ static void sagShutdown() {
 // storage have been tried - which means an image that boots but cannot be reached is
 // declared healthy and there is no way back. On a headless board that is the difference
 // between a retry and a lost deployment.
-// Overriding the core's weak verifyRollbackLater() defers the decision to us instead
-bool verifyRollbackLater() {
+// Overriding the core's weak verifyRollbackLater() defers the decision to us instead.
+// extern "C" is load-bearing: the core defines the weak symbol in a .c file and declares
+// it in no header, so a plain C++ definition here mangles to a different symbol and the
+// core's default (return false, confirm immediately) silently wins - which is exactly
+// what happened on the first verification run: otaConfirm() found the image already
+// VALID and the whole ladder was dead code
+extern "C" bool verifyRollbackLater() {
   return true;
 }
 
@@ -2332,15 +2347,17 @@ void OTAprereq() {
   // doRestart()'s flush_log(), which is why an OTA could be accepted and then never
   // restart. Clearing forceRecord above only stops the NEXT recording, not one in flight,
   // so wait for the capture task to close the file from its own context - the only safe
-  // place to do it. Bounded: an orphaned AVITEMP is repaired at next boot by recoverAvi(),
-  // a wedged board is not
-  if (isCapturing) {
+  // place to do it. The wait is on aviBusy, not isCapturing: isCapturing clears at the
+  // decision point in processFrame while the flush, index write and rename are still to
+  // come. Bounded: an orphaned AVITEMP is repaired at next boot by recoverAvi(), a wedged
+  // board is not
+  if (isCapturing || aviBusy) {
     shutdownPending = true;
     doRecording = false;
     uint32_t waitStart = millis();
-    while (isCapturing && millis() - waitStart < 2000) delay(50);
-    if (isCapturing) LOG_WRN("Recording still open after 2s - proceeding, boot recovery will repair it");
-    else LOG_INF("Recording closed cleanly before OTA teardown");
+    while ((isCapturing || aviBusy) && millis() - waitStart < 5000) delay(50);
+    if (isCapturing || aviBusy) LOG_WRN("Recording still open after 5s - proceeding, boot recovery will repair it");
+    else LOG_INF("Recording landed cleanly before OTA teardown");
   }
   controlFrameTimer(false);
 #if INCLUDE_PERIPH
