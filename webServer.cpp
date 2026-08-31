@@ -281,6 +281,18 @@ static esp_err_t controlHandler(httpd_req_t *req) {
       snprintf(inFileName, IN_FILE_NAME_LEN - 1, "%s/%s", DATA_DIR, value);
     }
     else {
+      if (!strcmp(variable, "forceRecord")) {
+        // Name the requester. A phantom forced recording starts ~90s after every boot
+        // and again after each file-cap close, with every known browser closed - some
+        // client is asking for it, and this line prints which one
+        char peerIp[46] = "unknown";
+        int sockFd = httpd_req_to_sockfd(req);
+        struct sockaddr_in6 peerAddr;
+        socklen_t addrLen = sizeof(peerAddr);
+        if (sockFd >= 0 && getpeername(sockFd, (struct sockaddr*)&peerAddr, &addrLen) == 0)
+          inet_ntop(AF_INET6, &peerAddr.sin6_addr, peerIp, sizeof(peerIp));
+        LOG_ALT("forceRecord=%s requested by %s", value, peerIp);
+      }
       // if not handled by appSpecificWebHandler(), try updateStatus()
       if (appSpecificWebHandler(req, variable, value) == ESP_FAIL) updateStatus(variable, value);
     }
