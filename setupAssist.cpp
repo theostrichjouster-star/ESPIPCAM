@@ -75,19 +75,22 @@ const char* setupPage_html = R"~(
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>Application setup</title>
 <style>
-  body{background-color:#e0f7fa;font-family:Arial,sans-serif}
+  /* "Aperture" palette - matches the main web UI (MJPEG2SD.htm): cool charcoal base,
+     steel-blue buttons, light input fields. The dropdown stays light like the inputs,
+     which also keeps the black signal-strength icons visible */
+  body{background-color:#12161C;color:#E8ECEF;font-family:Helvetica,Arial,sans-serif}
   .dropdown{position:relative;display:inline-block;width:calc(100%)}
-  .dropdown-content{display:none;position:absolute;background-color:#fff;width:100%;box-shadow:0 8px 16px 0 rgba(0,0,0,0.2);z-index:1;overflow:hidden;white-space:nowrap}
-  .dropdown-content div,.dropdown-content button{color:black;padding:12px 16px;text-decoration:none;display:flex;justify-content:space-between;align-items:center;width:100%;border:0;background:0;cursor:pointer}
-  .dropdown-content div:hover,.dropdown-content button:hover{background-color:#f1f1f1}
+  .dropdown-content{display:none;position:absolute;background-color:#E8ECEF;width:100%;box-shadow:0 8px 16px 0 rgba(0,0,0,0.5);border:1px solid #333D47;z-index:1;overflow:hidden;white-space:nowrap}
+  .dropdown-content div,.dropdown-content button{color:#16233A;padding:12px 16px;text-decoration:none;display:flex;justify-content:space-between;align-items:center;width:100%;border:0;background:0;cursor:pointer}
+  .dropdown-content div:hover,.dropdown-content button:hover{background-color:#D8DDE2}
   .network-details{display:flex;align-items:center;gap:8px}
   .signal-icon{width:16px;height:16px;background-image:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAAAQCAMAAADeZIrLAAAAJFBMVEX///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADHJj5lAAAAC3RSTlMAIjN3iJmqu8zd7vF8pzcAAABsSURBVHja7Y1BCsAwCASNSVo3/v+/BUEiXnIoXkoX5jAQMxTHzK9cVSnvDxwD8bFx8PhZ9q8FmghXBhqA1faxk92PsxvRc2CCCFdhQCbRkLoAQ3q/wWUBqG35ZxtVzW4Ed6LngPyBU2CobdIDQ5oPWI5nCUwAAAAASUVORK5CYII=');background-size:96px 16px;position:absolute;right:16px}
   .wpa-text{position:absolute;right:64px;font-size:.3em}
   .encryption-icon{position:absolute;right:32px;font-size:1em}
-  .input{width:calc(100% - 32px);padding:12px 16px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;display:inline-block}
+  .input{width:calc(100% - 32px);padding:12px 16px;background-color:#E8ECEF;color:#16233A;border:1px solid #333D47;border-radius:4px;box-sizing:border-box;display:inline-block}
   .center-button{display:flex;justify-content:center}
-  .styled-button{background-color:#007bff;color:white;border:0;padding:10px 20px;text-align:center;text-decoration:none;display:inline-block;font-size:16px;margin:4px 2px;cursor:pointer;border-radius:4px}
-  .styled-button:hover{background-color:#0056b3}
+  .styled-button{background-color:#2E86A6;color:#F4F6F8;border:0;padding:10px 20px;text-align:center;text-decoration:none;display:inline-block;font-size:16px;margin:4px 2px;cursor:pointer;border-radius:4px}
+  .styled-button:hover{background-color:#34997A}
 </style>
 </head>
 <script>
@@ -138,7 +141,7 @@ function updateDropdown(){
   const scanButton=document.createElement('button');
   scanButton.id='scan-button';
   scanButton.textContent='Scan';
-  canButton.classList.add('center-button');
+  scanButton.classList.add('center-button'); // was 'canButton' - a ReferenceError that killed the dropdown's Scan button
   scanButton.onclick=fetchSSIDs;
   dropdownContent.appendChild(scanButton);
 }
@@ -219,10 +222,11 @@ const char* otaPage_html = R"~(
       html body {height: 100%;}
       body {
         font-family: Helvetica  !important;
-        background: #181818;
-        color: WhiteSmoke;
-        font-size: 1rem;; 
+        background: #12161C; /* Aperture palette, matching the main UI and setup page */
+        color: #E8ECEF;
+        font-size: 1rem;
       }
+      progress { accent-color: #3FB68A; }
     </style>
   </head>
   <body>
