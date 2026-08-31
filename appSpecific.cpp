@@ -492,6 +492,10 @@ char* buildAppJsonString(bool filter) {
     INCLUDE_FTP_HFS ? "" : "fs,", INCLUDE_SMTP ? "" : "smtp,", INCLUDE_TGRAM ? "" : "tgram,",
     INCLUDE_MQTT ? "" : "mqtt,", INCLUDE_PERIPH ? "" : "periph,");
   p += sprintf(p, "\"battMv\":\"%u\",", battMv);
+  // display-ready battery voltage for the web UI footer, following the atemp idiom of
+  // formatting on the firmware side; n/a until the battery monitor is enabled and reading
+  if (battUse && battMv > 0) p += sprintf(p, "\"battV\":\"%u.%02uV\",", battMv / 1000, (battMv % 1000) / 10);
+  else p += sprintf(p, "\"battV\":\"n/a\",");
   p += sprintf(p, "\"sagBand\":\"%u\",", brownoutProbeBand());
   p += sprintf(p, "\"sagTrips\":\"%lu\",", sagTripCount);
   p += sprintf(p, "\"sagParked\":\"%u\",", supplyParked ? 1 : 0);
