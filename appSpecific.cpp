@@ -173,6 +173,8 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "battPin")) battPin = intVal;
   else if (!strcmp(variable, "battScale")) battScale = intVal;
   else if (!strcmp(variable, "battWarnMv")) battWarnMv = intVal;
+  else if (!strcmp(variable, "idleFps")) idleFps = constrain(intVal, 0, 30);
+  else if (!strcmp(variable, "idleSecs")) idleSecs = max(1, intVal);
   else if (!strcmp(variable, "wifiSleep")) {
     wifiSleep = (bool)intVal;
     applyPowerConfig();
@@ -816,6 +818,8 @@ battUse~0~99~~Monitor battery voltage
 battPin~1~99~~Battery divider ADC pin
 battScale~2000~99~~Cell mV per 1000 tap mV
 battWarnMv~3400~99~~Land recording below this cell mV
+idleFps~0~99~~Idle sensor FPS when nothing needs frames (0 = off)
+idleSecs~10~99~~Seconds idle before sensor throttles
 wifiSleep~1~99~~Wifi modem sleep when idle
 cpuFreqMhz~240~99~~CPU MHz (80 160 240)
 wifiTxDbm~20~99~~Wifi transmit power dBm (2-20)

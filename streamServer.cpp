@@ -252,6 +252,13 @@ void startSustainTasks() {
   debugMemory("startSustainTasks");
 }
 
+bool streamsBusy() {
+  // any sustained client - browser stream, playback, download, NVR feeds - needs frames
+  // at the user's rate; the sensor idle throttle asks before slowing the sensor down
+  for (int i = 0; i < numStreams; i++) if (sustainReq[i].inUse) return true;
+  return false;
+}
+
 esp_err_t appSpecificSustainHandler(httpd_req_t* req) {
   // first check if authentication is required & passed
   esp_err_t res = ESP_FAIL;
@@ -331,5 +338,6 @@ esp_err_t appSpecificSustainHandler(httpd_req_t* req) {
 
 // dummies
 esp_err_t appSpecificSustainHandler(httpd_req_t* req) {return ESP_OK;}
+bool streamsBusy() {return false;}
 
 #endif

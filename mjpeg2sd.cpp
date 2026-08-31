@@ -456,10 +456,13 @@ static bool detectionActive() {
   return zoneDetectOK;
 }
 
+static bool idleRateActive = false; // idle throttle holds the sensor at idleFps - idleThrottle()
+
 static inline uint8_t desiredFPS(framesize_t forFS) {
   // the sensor always runs the capture size now, at whatever rate the user chose,
-  // which is what captureFPS preserves across playback and boot
-  return captureFPS;
+  // which is what captureFPS preserves across playback and boot - unless the idle
+  // throttle holds it down while nothing needs frames
+  return idleRateActive ? (uint8_t)idleFps : captureFPS;
 }
 
 // The lowest line length the sensor will honour. The driver programs HTS 2644 for XGA and HD
@@ -1702,6 +1705,53 @@ static void battMonitor() {
   supplySagging = true; // actioned by the sag handler in processFrame, same as a comparator trip
 }
 
+// Sensor idle throttle (Tier 2 power saving). Zone detection reads sensor registers at
+// most 5 times a second whatever the frame rate, so streaming 30fps around the clock
+// while idle buys nothing - and the sensor plus its DVP/PSRAM traffic is the dominant
+// idle load (bench: 360mA idle baseline with the radio already sleeping). Throttle the
+// sensor to idleFps after idleSecs of inactivity; restore the user's rate the moment
+// anything needs frames. The restore runs in the same processFrame pass that starts a
+// capture, before the file opens - the first frames arrive at the ramping rate and the
+// AVI header carries the measured fps, so clips stay valid
+int idleFps = 0;   // 0 = feature off (stock behaviour)
+int idleSecs = 10;
+
+static void idleSetRate(uint8_t fps, bool throttled) {
+  // The frame timer AND the sensor: setFPS() alone only changes how often frames are
+  // fetched, while the sensor keeps streaming at its tuned rate into the driver's DMA
+  // and burns the same power - measured, 360mA flat with the timer at 5fps. The sensor's
+  // fps-derived timing flows through desiredFPS(), so raise the flag first, then re-run
+  // applySensorTuning() (crop, HTS floor, tuned VTS/SCLK, AEC limits) to make it real
+  idleRateActive = throttled;
+  setFPS(fps);
+  sensor_t* s = esp_camera_sensor_get();
+  if (s != NULL) applySensorTuning(s, (framesize_t)fsizePtr);
+}
+
+static void idleThrottle() {
+  static uint32_t lastActiveMs = 0;
+  if (!idleFps) {
+    // feature off - if disabled mid-throttle, hand the sensor back
+    if (idleRateActive) idleSetRate(captureFPS, false);
+    return;
+  }
+  bool wantFull = isCapturing || forceRecord || doPlayback || doKeepFrame || streamsBusy();
+  uint32_t now = millis();
+  if (wantFull) lastActiveMs = now;
+  if (idleRateActive) {
+    if (wantFull) {
+      idleSetRate(captureFPS, false);
+      LOG_INF("Idle throttle released - sensor back at %ufps", captureFPS);
+    }
+  } else if (!wantFull && FPS == captureFPS && idleFps < captureFPS
+      && now - lastActiveMs > (uint32_t)idleSecs * 1000) {
+    // the FPS == captureFPS guard means we never take over a rate someone else set -
+    // playback owns FPS while it runs, and a mid-change state is left alone
+    idleSetRate(idleFps, true);
+    LOG_INF("Idle throttle - sensor at %ufps until something needs frames", idleFps);
+  }
+}
+
 static void supervisors() {
   // periodic housekeeping that must run in every state, so it lives in the capture task
   // rather than the governor tick (which only runs while recording)
@@ -1866,6 +1916,9 @@ static boolean processFrame() {
   }
   battMonitor(); // may set supplySagging, actioned immediately below
   supervisors();
+  // after the capture decision above, before the open branch below: a wake triggered by
+  // this pass's motion restores the user's rate before the file opens
+  idleThrottle();
   // Supply sag (Stage 1). Placed here deliberately: after prevCapture has been taken, so
   // the close path below finalises the open file properly - a sag must never leave the
   // orphan that boot recovery then has to repair - and before the start branch, so a
@@ -2340,6 +2393,10 @@ void OTAprereq() {
   // watchdog first: this deliberately stops the frame timer and the ping task, so every enrolled
   // task stops petting and the panic would otherwise fire in the middle of an update
   stopWatchDog();
+  // full-attention radio for the transfer: modem sleep makes a 12s upload take minutes
+  // and invites the stall watchdog (seen on the bench, 31 Aug). The post-OTA reboot
+  // restores the configured sleep setting
+  WiFi.setSleep(false);
   doPlayback = forceRecord = false;
   // Land any open recording BEFORE endTasks() deletes the capture task. That task writes
   // to SD synchronously in saveFrame(), and vTaskDelete() on a task inside a FATFS write

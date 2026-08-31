@@ -317,6 +317,10 @@ extern bool supplyParked; // supply sagged: recordings blocked, sensor shed, awa
 // still holds 3V3 regulated. Named batt* not volt* so nothing collides with the
 // peripherals.cpp voltage code if INCLUDE_PERIPH is ever enabled on this board
 extern int battUse;
+// sensor idle throttle (Tier 2 power saving) - see idleThrottle() in mjpeg2sd.cpp
+extern int idleFps;   // sensor fps while nothing needs frames, 0 = feature off
+extern int idleSecs;  // seconds of no activity before throttling
+bool streamsBusy();   // any sustained client needing frames - streamServer.cpp
 extern int battPin;
 extern int battScale;
 extern int battWarnMv;
