@@ -130,7 +130,10 @@ static void onNetEvent(arduino_event_id_t event, arduino_event_info_t info) {
       }
       break;
     }
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP: LOG_INF("Wifi Station IP, use '%s://%s' to connect", useHttps ? "https" : "http", formatIPstr()); break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      LOG_INF("Wifi Station IP, use '%s://%s' to connect", useHttps ? "https" : "http", formatIPstr());
+      applyPowerConfig(); // radio power settings are per-association, re-assert them
+      break;
     case ARDUINO_EVENT_WIFI_STA_LOST_IP: LOG_INF("Wifi Station lost IP"); break;
     case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED: break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED: LOG_INF("WiFi Station connection to %s, using hostname: %s", ST_SSID, hostName); break;
@@ -283,6 +286,40 @@ static IPAddress netGatewayIP() { return WiFi.STA.gatewayIP(); }
 String netMacAddress() { return WiFi.STA.macAddress(); }
 int netRSSI() { return WiFi.STA.RSSI(); }
 bool netIsConnected() { return WiFi.STA.status() == WL_CONNECTED; }
+
+// Tier 1 power controls, as config switches so the bench can A/B them against an inline
+// current meter. Defaults are stock behaviour: full CPU clock, arduino's default modem
+// sleep, maximum transmit power - flipping nothing changes nothing
+bool wifiSleep = true;      // wifi modem sleep between DTIM beacons while idle
+uint8_t cpuFreqMhz = 240;   // 80 / 160 / 240
+uint8_t wifiTxDbm = 20;     // 2..20 dBm, mapped to the nearest wifi_power_t step below
+
+static wifi_power_t txDbmToEnum(uint8_t dbm) {
+  // nearest supported step at or below the requested dBm
+  if (dbm >= 20) return WIFI_POWER_19_5dBm;
+  if (dbm >= 17) return WIFI_POWER_17dBm;
+  if (dbm >= 15) return WIFI_POWER_15dBm;
+  if (dbm >= 13) return WIFI_POWER_13dBm;
+  if (dbm >= 11) return WIFI_POWER_11dBm;
+  if (dbm >= 8) return WIFI_POWER_8_5dBm;
+  if (dbm >= 7) return WIFI_POWER_7dBm;
+  if (dbm >= 5) return WIFI_POWER_5dBm;
+  return WIFI_POWER_2dBm;
+}
+
+void applyPowerConfig() {
+  // Called on config load, on a live change, and after every association: the radio
+  // settings live in the wifi driver and do not survive its restarts, so asserting them
+  // only once at boot silently loses them on the first reconnect
+  if (getCpuFrequencyMhz() != cpuFreqMhz) {
+    setCpuFrequencyMhz(cpuFreqMhz);
+    LOG_INF("CPU frequency now %uMHz", (uint8_t)getCpuFrequencyMhz());
+  }
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    WiFi.setSleep(wifiSleep);
+    WiFi.setTxPower(txDbmToEnum(wifiTxDbm));
+  }
+}
 
 const char* formatIPstr(bool getAP) {
   static char localIP[16] = "";

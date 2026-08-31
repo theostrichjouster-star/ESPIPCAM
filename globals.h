@@ -188,6 +188,11 @@ void resetCrashLoop();
 // with no battery divider. See utilsLog.cpp for the level/voltage table
 void armBrownout(uint8_t level, bool terminal);
 void disarmBrownout(); // quiesce the comparator before a software restart - see doRestart()
+// Tier 1 power controls - config switches with stock-behaviour defaults, see utils.cpp
+extern bool wifiSleep;
+extern uint8_t cpuFreqMhz;
+extern uint8_t wifiTxDbm;
+void applyPowerConfig();
 uint8_t brownoutArmedLevel();
 uint8_t brownoutProbeBand();
 bool hadBrownout();

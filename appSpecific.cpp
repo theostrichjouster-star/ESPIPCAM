@@ -173,6 +173,20 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "battPin")) battPin = intVal;
   else if (!strcmp(variable, "battScale")) battScale = intVal;
   else if (!strcmp(variable, "battWarnMv")) battWarnMv = intVal;
+  else if (!strcmp(variable, "wifiSleep")) {
+    wifiSleep = (bool)intVal;
+    applyPowerConfig();
+  }
+  else if (!strcmp(variable, "cpuFreqMhz")) {
+    if (intVal == 80 || intVal == 160 || intVal == 240) {
+      cpuFreqMhz = (uint8_t)intVal;
+      applyPowerConfig();
+    } else LOG_WRN("cpuFreqMhz must be 80, 160 or 240, ignoring %d", intVal);
+  }
+  else if (!strcmp(variable, "wifiTxDbm")) {
+    wifiTxDbm = (uint8_t)constrain(intVal, 2, 20);
+    applyPowerConfig();
+  }
   // debug: dirty reboot with no cleanup - the same esp_restart_noos() the terminal
   // brownout stage uses. Leaves whatever the filesystem had actually flushed, which is
   // how a recording looks after a power cut, so boot recovery can be tested repeatably
@@ -496,6 +510,11 @@ char* buildAppJsonString(bool filter) {
   // formatting on the firmware side; n/a until the battery monitor is enabled and reading
   if (battUse && battMv > 0) p += sprintf(p, "\"battV\":\"%u.%02uV\",", battMv / 1000, (battMv % 1000) / 10);
   else p += sprintf(p, "\"battV\":\"n/a\",");
+  // power-control ACTUALS, read back from the hardware/driver rather than echoing the
+  // config - the bench A/B trusts these, not what we asked for
+  p += sprintf(p, "\"cpuFreqNow\":\"%u\",", (uint8_t)getCpuFrequencyMhz());
+  p += sprintf(p, "\"wifiSleepNow\":\"%d\",", WiFi.getSleep() ? 1 : 0);
+  p += sprintf(p, "\"txPwrNow\":\"%d.%d\",", WiFi.getTxPower() / 4, (WiFi.getTxPower() % 4) * 25 / 10);
   p += sprintf(p, "\"sagBand\":\"%u\",", brownoutProbeBand());
   p += sprintf(p, "\"sagTrips\":\"%lu\",", sagTripCount);
   p += sprintf(p, "\"sagParked\":\"%u\",", supplyParked ? 1 : 0);
@@ -797,6 +816,9 @@ battUse~0~99~~Monitor battery voltage
 battPin~1~99~~Battery divider ADC pin
 battScale~2000~99~~Cell mV per 1000 tap mV
 battWarnMv~3400~99~~Land recording below this cell mV
+wifiSleep~1~99~~Wifi modem sleep when idle
+cpuFreqMhz~240~99~~CPU MHz (80 160 240)
+wifiTxDbm~20~99~~Wifi transmit power dBm (2-20)
 xclkMhz~20~98~~na
 ae_level~-2~98~~na
 aec~1~98~~na
