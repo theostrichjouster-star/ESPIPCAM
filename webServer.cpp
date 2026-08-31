@@ -706,18 +706,18 @@ bool startWebServer() {
   httpd_uri_t checkUri = {.uri = "/sustain", .method = HTTP_HEAD, .handler = appSpecificSustainHandler, .user_ctx = NULL};
 
   if (res == ESP_OK) {
-    httpd_register_uri_handler(httpServer, &indexUri);
-    httpd_register_uri_handler(httpServer, &webUri);
-    httpd_register_uri_handler(httpServer, &controlUri);
-    httpd_register_uri_handler(httpServer, &updateUri);
-    httpd_register_uri_handler(httpServer, &statusUri);
-    httpd_register_uri_handler(httpServer, &uploadUri);
-    httpd_register_uri_handler(httpServer, &sseUri);
-    httpd_register_uri_handler(httpServer, &wifiUri);
-    httpd_register_uri_handler(httpServer, &wsUri);
-    httpd_register_uri_handler(httpServer, &sustainUri);
-    httpd_register_uri_handler(httpServer, &checkUri);
-    httpd_register_err_handler(httpServer, HTTPD_404_NOT_FOUND, customOrNotFoundHandler);
+    // Registration returns were silently discarded, which turned a missing route into an
+    // unexplainable mystery: on 30 Aug the root page 404'd for an entire boot while every
+    // other route worked, and nothing recorded why. A failed registration now names the
+    // route and the reason, so the log convicts the culprit immediately
+    const httpd_uri_t* uris[] = {&indexUri, &webUri, &controlUri, &updateUri, &statusUri,
+      &uploadUri, &sseUri, &wifiUri, &wsUri, &sustainUri, &checkUri};
+    for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
+      esp_err_t regRes = httpd_register_uri_handler(httpServer, uris[i]);
+      if (regRes != ESP_OK) LOG_WRN("Failed to register %s handler: %s", uris[i]->uri, espErrMsg(regRes));
+    }
+    esp_err_t errRes = httpd_register_err_handler(httpServer, HTTPD_404_NOT_FOUND, customOrNotFoundHandler);
+    if (errRes != ESP_OK) LOG_WRN("Failed to register 404 handler: %s", espErrMsg(errRes));
 
     LOG_INF("Starting web server on port: %u", useHttps ? HTTPS_PORT : HTTP_PORT);
     LOG_INF("Remote server certificates %s checked", useSecure ? "are" : "not");

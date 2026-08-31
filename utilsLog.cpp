@@ -116,7 +116,14 @@ void markSagStage1() {
 
 void logSyncSD() {
   // Push the SD log to the card now, without flush_log()'s one second delay - meant for
-  // the moments where the next thing that happens may be the supply disappearing
+  // the moments where the next thing that happens may be the supply disappearing.
+  // Drain the queue first: the caller's lines are normally still in logQueue waiting for
+  // logTask, and an fsync before they reach the file persists nothing - the 30 Aug
+  // battery run parked flawlessly but left no SUPPLY SAG line on the card because of
+  // exactly this. Bounded, so a wedged logTask cannot hold the sag response hostage
+  uint32_t syncStart = millis();
+  while (logQueue != NULL && uxQueueMessagesWaiting(logQueue) > 0 && millis() - syncStart < 250) delay(10);
+  delay(30); // the last message leaves the queue before it is written - let it land
   if (log_remote_fp != NULL) {
     fflush(log_remote_fp);
     fsync(fileno(log_remote_fp));
@@ -125,8 +132,10 @@ void logSyncSD() {
 
 void flush_log(bool andClose) {
   if (log_remote_fp != NULL) {
-    fsync(fileno(log_remote_fp));  
+    // fflush BEFORE fsync: fwrite buffers in stdio, and fsync only pushes what has
+    // already reached the fd - the old order synced everything except the newest lines
     fflush(log_remote_fp);
+    fsync(fileno(log_remote_fp));
     if (andClose) {
       LOG_INF("Closed SD file for logging");
       fclose(log_remote_fp);
@@ -198,7 +207,13 @@ static void logTask(void *pvParams) {
             // minute battery run was lost this way (28 Aug) - the SD log is only a black
             // box if the interesting lines are on the card before the lights go out
             if (counter_write++ % WRITE_CACHE_CYCLE == 0
-                || strstr(msg, "WARN") != NULL || strstr(msg, "ERR") != NULL) fsync(fileno(log_remote_fp));
+                || strstr(msg, "WARN") != NULL || strstr(msg, "ERR") != NULL) {
+              // fflush first or the fsync pushes everything EXCEPT this line - fwrite
+              // leaves it in the stdio buffer, which defeated the whole point of syncing
+              // on warnings (they persisted only when a later line happened to flush them)
+              fflush(log_remote_fp);
+              fsync(fileno(log_remote_fp));
+            }
           } 
         }
       }
