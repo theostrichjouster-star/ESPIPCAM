@@ -313,6 +313,14 @@ extern uint8_t captureFPS; // user's chosen rate for the capture resolution
 extern uint8_t fsizePtr; // index to frameData[] for record
 extern bool isCapturing;
 extern bool supplyParked; // supply sagged: recordings blocked, sensor shed, awaiting power
+// battery monitor - a divider on the BATTERY side, which sees the decline while the buck
+// still holds 3V3 regulated. Named batt* not volt* so nothing collides with the
+// peripherals.cpp voltage code if INCLUDE_PERIPH is ever enabled on this board
+extern int battUse;
+extern int battPin;
+extern int battScale;
+extern int battWarnMv;
+extern uint16_t battMv;
 extern uint8_t sdGovBoost; // SD governor's active quality boost steps, 0 outside recordings
 extern uint16_t sdGovFrameKB; // last-second average frame KB while recording, else 0
 extern uint8_t lightLevel;  

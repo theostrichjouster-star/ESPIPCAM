@@ -54,6 +54,10 @@ void setup() {
 #endif
     checkMemory();
   }
+  // Reaching the end of setup() is the honest definition of "did not crash on startup".
+  // resetCrashLoop() previously depended on the ping success callback, so a board with
+  // unreliable wifi never cleared the flag and every later reset looked like a crash loop
+  resetCrashLoop();
 }
 
 void loop() {

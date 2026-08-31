@@ -135,6 +135,28 @@ static uint16_t rescueClipCnt = 0; // rescues during the open recording, for clo
 // is at end of life, and resuming 5MP capture into it is how cards get corrupted
 bool supplyParked = false;
 static uint32_t supplyParkedMs = 0;
+
+// Battery monitor. The rail-side brownout comparator cannot trigger the landing on this
+// board - the SGM6029 buck holds 3V3 regulated until the cell reaches ~3.3V and then
+// passes through, so the rail says nothing useful until the collapse is already
+// microseconds away (three battery runs, all reporting "no sag response recorded").
+// A divider on the BATTERY side sees the decline while the rail is still perfectly
+// regulated, which turns microseconds of warning into minutes. Hardware: 100k/100k from
+// BAT+ to GND with 100nF at the tap, into an ADC1 pin (ADC2 is unreadable while wifi is up)
+int battUse = 0;        // config: off by default - see the floor check in battMonitor()
+int battPin = 1;        // config: D0 / GPIO1, ADC1 channel 0
+int battScale = 2000;   // config: cell mV per 1000 ADC mV, ie 2000 = a 2:1 divider
+int battWarnMv = 3400;  // config: land the clip at this cell voltage
+uint16_t battMv = 0;    // last reading, 0 = not monitoring (reported in status)
+// A cell below this cannot be running the board, so such a reading means the divider is
+// absent, unwired or on the wrong pin - a floating ADC input reads anything, including
+// near zero, and acting on that would park a perfectly healthy camera
+#define BATT_FLOOR_MV 2500
+#define BATT_CONFIRM 3 // consecutive sub-threshold samples before landing
+static uint8_t battLowCount = 0;
+static uint32_t battPollMs = 0;
+static bool battAdcReady = false;
+static bool battFloorWarned = false;
 // a controlled restart during a recording must not orphan the file - set by appShutdown()
 // and actioned by processFrame from the capture task's own context
 static volatile bool shutdownPending = false;
@@ -1584,6 +1606,98 @@ static void sagShutdown() {
   logSyncSD();
 }
 
+#include "esp_ota_ops.h"
+
+// Rollback verification. CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is set, so a freshly
+// flashed image boots as ESP_OTA_IMG_PENDING_VERIFY and must be confirmed with
+// esp_ota_mark_app_valid_cancel_rollback() or the next reboot reverts to the previous
+// image. The Arduino core confirms it inside initArduino() - before wifi, camera or
+// storage have been tried - which means an image that boots but cannot be reached is
+// declared healthy and there is no way back. On a headless board that is the difference
+// between a retry and a lost deployment.
+// Overriding the core's weak verifyRollbackLater() defers the decision to us instead
+bool verifyRollbackLater() {
+  return true;
+}
+
+static void otaConfirm() {
+  // Confirm only once the app has actually proven itself. The uptime fallback is what
+  // keeps this safe: any image that simply stays up gets confirmed, so a bug here cannot
+  // put us in a rollback loop that eats every new build
+  static bool settled = false;
+  if (settled) return;
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (running == NULL || esp_ota_get_state_partition(running, &state) != ESP_OK) {
+    settled = true;
+    return;
+  }
+  if (state != ESP_OTA_IMG_PENDING_VERIFY) {
+    settled = true; // already valid, or not an OTA slot - nothing to do
+    return;
+  }
+  bool camOk = esp_camera_sensor_get() != NULL;
+  bool storageOk = (STORAGE.totalBytes() > 0); // mounted; not "an SD card is present"
+  bool reachable = (WiFi.STA.status() == WL_CONNECTED) || (millis() > 5 * 60 * 1000);
+  if (!camOk || !storageOk || !reachable) return;
+  if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK)
+    LOG_ALT("OTA image confirmed valid (camera, storage, %s) - rollback cancelled",
+      WiFi.STA.status() == WL_CONNECTED ? "wifi" : "uptime");
+  else LOG_WRN("Failed to mark OTA image valid - it will roll back on the next reboot");
+  settled = true;
+}
+
+static void battMonitor() {
+  // 1Hz from processFrame, so it runs whether or not a recording is open - unlike the
+  // governor tick, which only runs while recording
+  if (!battUse || battPin < 1 || supplyParked) return;
+  uint32_t now = millis();
+  if (now - battPollMs < 1000) return;
+  battPollMs = now;
+  if (!battAdcReady) {
+    // setupADC() sets attenuation and resolution, and is otherwise only called from
+    // peripherals.cpp - which is compiled out on this board, so without this the ADC sits
+    // at core defaults and every reading scaled against MAX_ADC is silently wrong
+    setupADC();
+    battAdcReady = true;
+  }
+  // smoothAnalog averages ADC_SAMPLES reads; scale to the tap voltage, then through the
+  // divider ratio to the cell
+  uint32_t tapMv = ((uint32_t)smoothAnalog(battPin) * 3300) / MAX_ADC;
+  battMv = (uint16_t)((tapMv * battScale) / 1000);
+  if (battMv < BATT_FLOOR_MV) {
+    // no plausible cell here - almost certainly no divider fitted, or the wrong pin
+    if (!battFloorWarned) {
+      battFloorWarned = true;
+      LOG_WRN("Battery monitor reads %umV on pin %d, below the %dmV floor - no divider fitted? Not acting on it",
+        battMv, battPin, BATT_FLOOR_MV);
+    }
+    battLowCount = 0;
+    return;
+  }
+  battFloorWarned = false;
+  if (battMv > battWarnMv) {
+    battLowCount = 0;
+    return;
+  }
+  // the cell sags under camera load bursts, so one dip must not park the device
+  if (++battLowCount < BATT_CONFIRM) return;
+  LOG_ALT("Battery at %umV, below the %dmV warning level on %d consecutive samples",
+    battMv, battWarnMv, BATT_CONFIRM);
+  supplySagging = true; // actioned by the sag handler in processFrame, same as a comparator trip
+}
+
+static void supervisors() {
+  // periodic housekeeping that must run in every state, so it lives in the capture task
+  // rather than the governor tick (which only runs while recording)
+  static uint32_t lastMs = 0;
+  uint32_t now = millis();
+  if (now - lastMs < 10000) return;
+  lastMs = now;
+  otaConfirm();
+  wifiSupervise();
+}
+
 static void noFrameRescue() {
   uint32_t now = millis();
   if (supplyParked) return; // parked: no frames expected, nothing to rescue
@@ -1735,6 +1849,8 @@ static boolean processFrame() {
       frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
     isCapturing = forceRecord = motionTriggered = false;
   }
+  battMonitor(); // may set supplySagging, actioned immediately below
+  supervisors();
   // Supply sag (Stage 1). Placed here deliberately: after prevCapture has been taken, so
   // the close path below finalises the open file properly - a sag must never leave the
   // orphan that boot recovery then has to repair - and before the start branch, so a
@@ -2210,6 +2326,22 @@ void OTAprereq() {
   // task stops petting and the panic would otherwise fire in the middle of an update
   stopWatchDog();
   doPlayback = forceRecord = false;
+  // Land any open recording BEFORE endTasks() deletes the capture task. That task writes
+  // to SD synchronously in saveFrame(), and vTaskDelete() on a task inside a FATFS write
+  // orphans the volume mutex - every later storage call then blocks for ever, including
+  // doRestart()'s flush_log(), which is why an OTA could be accepted and then never
+  // restart. Clearing forceRecord above only stops the NEXT recording, not one in flight,
+  // so wait for the capture task to close the file from its own context - the only safe
+  // place to do it. Bounded: an orphaned AVITEMP is repaired at next boot by recoverAvi(),
+  // a wedged board is not
+  if (isCapturing) {
+    shutdownPending = true;
+    doRecording = false;
+    uint32_t waitStart = millis();
+    while (isCapturing && millis() - waitStart < 2000) delay(50);
+    if (isCapturing) LOG_WRN("Recording still open after 2s - proceeding, boot recovery will repair it");
+    else LOG_INF("Recording closed cleanly before OTA teardown");
+  }
   controlFrameTimer(false);
 #if INCLUDE_PERIPH
   setStickTimer(false);

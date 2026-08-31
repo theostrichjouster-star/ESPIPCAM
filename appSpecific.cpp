@@ -169,6 +169,10 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   // debug: exercise the supply sag path without a failing supply. Sets the same flag the
   // brownout ISR sets, so the whole Stage 1 sequence runs for real - close, park, re-arm
   else if (!strcmp(variable, "sagTest")) supplySagging = (bool)intVal;
+  else if (!strcmp(variable, "battUse")) battUse = intVal;
+  else if (!strcmp(variable, "battPin")) battPin = intVal;
+  else if (!strcmp(variable, "battScale")) battScale = intVal;
+  else if (!strcmp(variable, "battWarnMv")) battWarnMv = intVal;
   // debug: dirty reboot with no cleanup - the same esp_restart_noos() the terminal
   // brownout stage uses. Leaves whatever the filesystem had actually flushed, which is
   // how a recording looks after a power cut, so boot recovery can be tested repeatably
@@ -482,6 +486,7 @@ char* buildAppJsonString(bool filter) {
   // Supply telemetry. With no battery divider the comparator band is the only rail
   // reading there is, and on a battery run over wifi it is the only way to watch the
   // descent - so it goes in the status poll, not just the log. band 0 = healthy
+  p += sprintf(p, "\"battMv\":\"%u\",", battMv);
   p += sprintf(p, "\"sagBand\":\"%u\",", brownoutProbeBand());
   p += sprintf(p, "\"sagTrips\":\"%lu\",", sagTripCount);
   p += sprintf(p, "\"sagParked\":\"%u\",", supplyParked ? 1 : 0);
@@ -779,6 +784,10 @@ useFtps~~99~~na
 extIP~~99~~na
 restart~~99~~na
 sdLog~0~99~~na
+battUse~0~99~~Monitor battery voltage
+battPin~1~99~~Battery divider ADC pin
+battScale~2000~99~~Cell mV per 1000 tap mV
+battWarnMv~3400~99~~Land recording below this cell mV
 xclkMhz~20~98~~na
 ae_level~-2~98~~na
 aec~1~98~~na

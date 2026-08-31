@@ -188,9 +188,18 @@ static void setWifiSTA() {
 static bool startWifi(bool firstcall = true) {
   // start wifi station (and wifi AP if allowed or station not defined)
   if (firstcall) {
-    WiFi.mode(WIFI_AP_STA);
+    // Dual mode only when the AP is actually wanted. In AP_STA the softAP is forced onto
+    // the station's channel, so every roam between same-SSID APs on different channels
+    // makes the radio switch and drops the link - this network has two, on channels 6 and
+    // 11. With a station configured and the AP not allowed, stay in pure STA
+    WiFi.mode((strlen(ST_SSID) && !allowAP) ? WIFI_STA : WIFI_AP_STA);
     WiFi.persistent(false); // prevent the flash storage WiFi credentials
-    WiFi.STA.setAutoReconnect(false); // Set whether module will attempt to reconnect to an access point in case it is disconnected
+    // Auto reconnect ON. It used to be off, which left the ping task's timeout callback as
+    // the only thing that ever retried - and startPing() returns early when there is no
+    // gateway, so a failed association at boot created no ping session, nothing retried,
+    // and wifi stayed dead until a power cycle while the chip ran perfectly. That was the
+    // recurring "board alive on USB, unreachable over wifi" failure
+    WiFi.STA.setAutoReconnect(true);
     WiFi.AP.clear();
     WiFi.AP.end(); // kill rogue AP on startup
     WiFi.STA.setHostname(hostName);
@@ -220,6 +229,40 @@ static bool startWifi(bool firstcall = true) {
   setupMdnsHost();
   if (pingHandle == NULL) startPing();
   return wlStat == WL_CONNECTED ? true : false;
+}
+
+void wifiSupervise() {
+  // The retry path that does not depend on a ping session existing. Called rate-limited
+  // from the capture task, which runs in every state, so a station that never associated
+  // at boot still gets retried - previously nothing did, and the board stayed unreachable
+  // until someone power cycled it
+  if (!strlen(ST_SSID)) return; // AP-only setup, nothing to supervise
+  static uint32_t downSince = 0;
+  static uint32_t lastRetry = 0;
+  uint32_t now = millis();
+  if (WiFi.STA.status() == WL_CONNECTED) {
+    downSince = 0;
+    // a late association leaves the ping session unopened, because startPing() defers
+    // when there is no gateway yet - bring it up now that there is one
+    if (pingHandle == NULL) startPing();
+    return;
+  }
+  if (!downSince) downSince = now;
+  // give the SDK's own auto-reconnect a chance before forcing a full restart
+  if (now - downSince < 60000 || now - lastRetry < 60000) return;
+  lastRetry = now;
+  // Drop the rescue AP first when it is not wanted. A running softAP holds the radio on
+  // its own channel, so the station cannot associate to a router on a different one - the
+  // rescue path then blocks the recovery it exists to provide, which is how the board ends
+  // up serving 192.168.4.1 for ever while the LAN sits there at -33dBm
+  if (!allowAP && APstarted) {
+    LOG_WRN("Stopping rescue AP so the station can associate");
+    WiFi.AP.end();
+    delay(100);
+    WiFi.mode(WIFI_STA);
+  }
+  LOG_WRN("Wifi down for %lus - restarting station", (now - downSince) / 1000);
+  startWifi(false);
 }
 
 bool startNetwork(bool firstcall) {

@@ -54,6 +54,7 @@ static RTC_NOINIT_ATTR uint32_t sagStage1Count;
 #define SAG_MAGIC 0x5A61C0DE
 static RTC_NOINIT_ATTR uint32_t sagMagic;
 static RTC_NOINIT_ATTR uint32_t crashLoop;
+static bool crashLoopSuspected = false; // this boot only; reported once logging is up
 static RTC_NOINIT_ATTR uint32_t backtrace[60]; // array of backtrace addresses 
 static RTC_NOINIT_ATTR size_t btLen; // number of backtrace entries
 static RTC_NOINIT_ATTR char btReason[64]; // reason for panic
@@ -321,6 +322,8 @@ static esp_reset_reason_t printResetReason() {
       LOG_ALT("Supply sag response had run %lu time(s) before this brownout - the clip was landed", sagStage1Count);
     else LOG_WRN("Brownout with no sag response recorded - the rail fell faster than the warning level could catch");
   }
+  if (crashLoopSuspected) LOG_WRN("Previous boot ended without a controlled restart%s - check the log",
+    (bootReason == ESP_RST_BROWNOUT) ? " (brownout)" : "");
   showBacktrace();
   return bootReason;
 }
@@ -520,7 +523,13 @@ static void initBrownout(void) {
     LOG_WRN("Brownout occurred due to inadequate power supply");
     brownoutStatus = 'R';
   } else brownoutStatus = 0;
-  armBrownout(BROWNOUT_WARN_LVL, false);
+  // Back to the IDF default: level 7 with hardware reset. Arming the warning level was
+  // pointless and actively harmful here - the rail carries no usable warning (the buck
+  // holds it regulated until the cell is at the edge), and a trip wedges the chip rather
+  // than delivering an interrupt, which on a field device means it stops until someone
+  // power cycles it. A clean hardware reset at 2.44V is what boot recovery is built for.
+  // The warning now comes from battMonitor(), which watches the battery instead
+  armBrownout(BROWNOUT_DET_LVL, true);
 }
 
 static void boardInfo() {
@@ -557,9 +566,14 @@ void logSetup() {
   // runs to set brownoutStatus. Trusting the flag alone made every real brownout look like
   // a software crash loop, which suppressed prepRecording() - a battery camera came back
   // web-only and never recorded again (measured on the 28 Aug battery run, tasks 14 not 19)
-  bool supplyReboot = (brownoutStatus == 'B' || brownoutStatus == 'R'
-                       || esp_reset_reason() == ESP_RST_BROWNOUT);
-  if (crashLoop == MAGIC_NUM && !supplyReboot) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Crash loop detected, check log");
+  // A suspected crash loop is INFORMATION, not a startup failure. Setting startupFailure
+  // here made startWebServer() return false, which made setup() skip prepRecording()
+  // entirely - 15 tasks instead of 19, no capture task, no recording at all. And crashLoop
+  // is set on every boot while resetCrashLoop() only runs on a controlled restart or from
+  // the ping success callback, so on a board whose wifi is unreliable it never gets
+  // cleared: one uncontrolled reset (button, power cut, brownout) then silently disabled
+  // recording for every boot thereafter. Record it and report it once logging is alive
+  crashLoopSuspected = (crashLoop == MAGIC_NUM);
   crashLoop = MAGIC_NUM;
   if (logHandle == NULL) {
     set_arduino_panic_handler(appPanicHandler, NULL);

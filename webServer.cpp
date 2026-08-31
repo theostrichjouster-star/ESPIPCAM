@@ -404,7 +404,16 @@ esp_err_t uploadHandler(httpd_req_t *req) {
     // a spiffs binary must have 'spiffs' in the filename
     int cmd = (strstr(inFileName, "spiffs") != NULL) ? U_SPIFFS : U_FLASH;
     if (cmd == U_SPIFFS) STORAGE.end(); // close relevant file system
-    if (Update.begin(UPDATE_SIZE_UNKNOWN, cmd)) {
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, cmd)) {
+      // report and return rather than rebooting - restarting achieves nothing here and
+      // discards the reason the update could not start
+      LOG_WRN("OTA could not start: %s", Update.errorString());
+      httpd_resp_set_status(req, "500 OTA could not start");
+      httpd_resp_sendstr(req, NULL);
+      return ESP_FAIL;
+    }
+    Update.onProgress(progress); // once, not per chunk
+    {
       // The timeout arm below must be bounded. A half open socket - sender vanished mid
       // transfer, no RST ever delivered - makes httpd_req_recv() return TIMEOUT indefinitely,
       // and an unbounded retry held the only httpd worker in this loop with the tasks and
@@ -427,11 +436,16 @@ esp_err_t uploadHandler(httpd_req_t *req) {
           }
         }
         lastData = millis();
-        Update.write((uint8_t*)jsonBuff, (size_t)bytesRead);
-        Update.onProgress(progress);
+        // a short write means the flash write failed - carrying on would just build a
+        // corrupt image and report success from the byte count
+        if (Update.write((uint8_t*)jsonBuff, (size_t)bytesRead) != (size_t)bytesRead) {
+          LOG_WRN("OTA flash write failed: %s", Update.errorString());
+          break;
+        }
         fileSize -= bytesRead;
       } while (bytesRead > 0);
       if (!fileSize) Update.end(true); // true to set the size to the current progress
+      else Update.abort(); // release the handle rather than leaving it mid-update
     }
     // an aborted transfer leaves bytes outstanding without any Update error, so success is
     // completion, not merely the absence of a write failure. The restart runs either way -

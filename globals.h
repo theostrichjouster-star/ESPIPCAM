@@ -213,6 +213,7 @@ float smoothSensor(float latestVal, float smoothedVal, float alpha);
 bool startStorage();
 bool startWebServer();
 void stopPing();
+void wifiSupervise(); // retry a station that never associated - see the note in utils.cpp
 void syncToBrowser(uint32_t browserUTC);
 char* toCase(char *s, bool toLower = true);
 char* trim(char* str);
