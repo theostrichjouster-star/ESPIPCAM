@@ -135,20 +135,61 @@ window and does nothing for outbound streaming.
 
 ## Candidate future changes
 
-None of these are measured. Each needs its own one-variable experiment.
+Espressif publishes an "iperf rank" configuration for maximum throughput:
+<https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/wifi-driver/wifi-performance-and-power-save.html>
 
-- `CONFIG_LWIP_TCP_WND_DEFAULT` with `CONFIG_LWIP_TCP_RECVMBOX_SIZE` (>= 32,
-  must be raised together): speeds **inbound** transfers, i.e. the OTA POST.
-- `CONFIG_LWIP_WND_SCALE`: the only way past 65535 in either direction. Only
-  worth it if the radio ceiling rises above what a 64 KB window sustains.
-- `CONFIG_ESP_WIFI_IRAM_OPT` / `RX_IRAM_OPT` / `CONFIG_LWIP_IRAM_OPTIMIZATION`:
-  cost 20-30 KB of internal RAM against a 32 KB warning threshold, and only pay
-  off at packet rates this board has not reached.
-- `CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM` (8) and `TX_BA_WIN` (6): the next
-  suspects if the ~1.15 MB/s ceiling proves not to be ambient interference.
-- Camera options are reachable too, but treat any `CONFIG_CAMERA_*` or
-  `CONFIG_SCCB_*` change as invalidating the measured baselines in
-  BOARD_TESTING.md until re-verified.
+Our core against it, checked 1 Sep 2026. **We have done only the TCP half.**
+
+| Setting | Espressif iperf | Ours |
+|---|---|---|
+| `CONFIG_LWIP_TCP_SND_BUF_DEFAULT` | 65 KB | 65535 (done) |
+| `CONFIG_ESP_WIFI_TX_BUFFER_TYPE` | dynamic | 0 (static) |
+| `CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` | 64 | n/a - static, 8 |
+| `CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM` | 16 | 8 |
+| `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM` | 64 | 32 |
+| `CONFIG_ESP_WIFI_RX_BA_WIN` | 32 | 16 |
+| `CONFIG_LWIP_TCP_WND_DEFAULT` | 65 KB | 5760 |
+| `CONFIG_ESP_WIFI_IRAM_OPT` | on (+15 KB IRAM) | off |
+| `CONFIG_ESP_WIFI_RX_IRAM_OPT` | on (+16 KB IRAM) | off |
+| `CONFIG_LWIP_IRAM_OPTIMIZATION` | on (+13 KB IRAM) | off |
+
+Ranked, each needing its own one-variable experiment:
+
+1. **TX buffers - the top candidate.** Espressif states the pairing rule
+   explicitly: `LWIP_TCP_SND_BUF_DEFAULT` "should be configured to the value of
+   `WIFI_DYNAMIC_TX_BUFFER_NUM` (KB)". We raised the TCP send buffer to 64 KB but
+   left the driver on STATIC TX buffers with 8 of them - roughly 13 KB of
+   driver-side buffering behind a 64 KB window. **This may well be the real
+   ~1.15 MB/s ceiling that BOARD_TESTING.md section 23 attributes to ambient RF**:
+   a fixed driver buffer pool produces the identical signature (same ceiling at
+   both 45952 and 65535), so the existing evidence does not distinguish them.
+   Set `TX_BUFFER_TYPE` dynamic + `DYNAMIC_TX_BUFFER_NUM=64` and re-measure; the
+   ceiling either moves (buffers) or does not (RF). Watch memory: 64 dynamic
+   buffers is ~100 KB, though `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y` lets them
+   prefer PSRAM.
+2. **RX buffers** (16 / 64, `RX_BA_WIN` 32): inbound path, so it helps OTA upload
+   speed and link stability rather than streaming out.
+3. **`CONFIG_LWIP_TCP_WND_DEFAULT`** 5760 -> 65535, paired with
+   `CONFIG_LWIP_TCP_RECVMBOX_SIZE` >= 32 (must be raised together). Inbound only:
+   measure against OTA `.bin` upload time, not fps.
+4. **IRAM optimizations**, 44 KB of internal RAM in total. Measure last, and watch
+   `int_min` in `/status` against the 32 KB warning threshold.
+5. `CONFIG_LWIP_WND_SCALE`: the only way past 65535 in either direction. Only
+   worth it if the ceiling ever rises above what a 64 KB window sustains.
+
+For scale: Espressif's iperf rank reaches ~74 Mbit/s TCP TX on a bare board. We
+measure ~9 Mbit/s while also running a camera, JPEG encode and SD writes - so the
+gap is not all recoverable, but it is large enough to be worth chasing.
+
+Power save: the guide notes modem sleep delays RX by up to the DTIM interval and
+recommends `WIFI_PS_NONE` for maximum throughput. We keep modem sleep ON anyway -
+it costs 70 mA to disable (see the power ledger) and was measured to make no
+difference to throughput DURING an active stream on a healthy link, because the
+radio does not sleep while data is flowing. It only inflates idle RTT.
+
+Camera options are reachable too, but treat any `CONFIG_CAMERA_*` or
+`CONFIG_SCCB_*` change as invalidating the measured baselines in
+BOARD_TESTING.md until re-verified.
 
 ## Maintenance
 
