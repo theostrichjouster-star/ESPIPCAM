@@ -153,7 +153,39 @@ Our core against it, checked 1 Sep 2026. **We have done only the TCP half.**
 | `CONFIG_ESP_WIFI_RX_IRAM_OPT` | on (+16 KB IRAM) | off |
 | `CONFIG_LWIP_IRAM_OPTIMIZATION` | on (+13 KB IRAM) | off |
 
-Ranked, each needing its own one-variable experiment:
+### MEASURED 1 Sep evening - the buffer changes did NOT help
+
+Items 1-3 below were built and tested on COM4 (COM3 silenced). Result: **no
+improvement, and the top hypothesis is refuted.**
+
+- **Dynamic TX buffers are IMPOSSIBLE on this board.** IDF Kconfig:
+  `config ESP_WIFI_DYNAMIC_TX_BUFFER ... depends on !SPIRAM_USE_MALLOC`, and the
+  camera requires PSRAM malloc. The help text says outright "If PSRAM is enabled,
+  Static should be selected to guarantee enough WiFi TX buffers". **Espressif's
+  iperf rank assumes a board without PSRAM, so it does not apply to us.**
+- Raising STATIC TX buffers instead (8 -> 32) did nothing: marginal transport rate
+  went 1.55 -> 1.41 MB/s, i.e. no gain and possibly a slight loss (frame size
+  drifted 58 -> 69KB between runs, so this is model-normalized).
+- RX 16/64 + `RX_BA_WIN` 32 + `TCP_WND` 65535 + `RECVMBOX` 32: inbound measured
+  68-112 KB/s against ~118 KB/s historically. Run-to-run variance exceeds any
+  effect. No clear gain.
+- Memory: internal `int_min` UNCHANGED at ~87K, but `psram_min` fell ~87KB - so
+  with `SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y` the extra buffers land in PSRAM, where
+  they contend with camera frame buffers. That is a plausible mechanism for the
+  slight regression.
+
+**Conclusion: the ~1.3-1.5 MB/s ceiling is NOT driver buffering.** The earlier
+"radio ceiling" attribution in BOARD_TESTING section 23 is vindicated. The
+remaining lever is the RF environment (channel, placement, interference), not
+core config. Item 4 (IRAM) was NOT tested: those optimizations speed CPU-bound
+packet processing, and the skipped-frame counter shows the sender blocking on
+transport rather than CPU, so it is unlikely to help.
+
+The tree built for this test is `C:\esp32libs\lwipbufs`. It is retained for
+reference only - **the recommended core remains the plain 65535 one**, which has
+a proven 2x benefit and a clean soak behind it.
+
+Original ranking, kept for context:
 
 1. **TX buffers - the top candidate.** Espressif states the pairing rule
    explicitly: `LWIP_TCP_SND_BUF_DEFAULT` "should be configured to the value of
