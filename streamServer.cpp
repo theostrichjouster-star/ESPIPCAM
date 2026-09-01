@@ -20,6 +20,11 @@ static bool forcePlayback = false; // browser playback status
 bool streamVid = false;
 bool streamAud = false;
 static bool isStreaming[MAX_STREAMS] = {false};
+// Frames the capture task had ready but could not hand over because the previous one was
+// still being sent. This is the decisive instrument for "what limits the stream": a large
+// skip count means the sender is blocked in httpd_resp_send_chunk and the transport is the
+// ceiling; near zero means the camera is supplying no faster than we send
+uint32_t streamSkipped[MAX_STREAMS] = {0};
 size_t streamBufferSize[MAX_STREAMS] = {0};
 byte* streamBuffer[MAX_STREAMS] = {NULL}; // buffer for stream frame
 static char variable[FILE_NAME_LEN]; 
@@ -115,6 +120,7 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
   uint32_t mjpegLen = 0;
   isStreaming[taskNum] = true;
   streamBufferSize[taskNum] = 0;
+  streamSkipped[taskNum] = 0;
   if (!taskNum) motionJpegLen = 0;
   // TCP_NODELAY was tried here and MEASURED AS A LOSS - 177 -> 165 frames per 20s at
   // identical frame sizes, ~6% of goodput, repeatable across runs (COM4, 1 Sep). The
@@ -167,7 +173,9 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
   if (res == ESP_OK) httpd_resp_sendstr_chunk(req, NULL);
   uint32_t mjpegTime = millis() - startTime;
   float mjpegTimeF = float(mjpegTime) / 1000; // secs
-  LOG_INF("MJPEG: %lu frames, total %s in %0.1fs @ %0.1ffps", frameCnt, fmtSize(mjpegLen), mjpegTimeF, (float)(frameCnt) / mjpegTimeF);
+  // skipped is the diagnostic: high means transport-bound, near zero means camera-bound
+  LOG_INF("MJPEG: %lu frames, %lu skipped (sender busy), total %s in %0.1fs @ %0.1ffps",
+    frameCnt, streamSkipped[taskNum], fmtSize(mjpegLen), mjpegTimeF, (float)(frameCnt) / mjpegTimeF);
 }
 
 static void audioStream(httpd_req_t* req, uint8_t taskNum) {
@@ -216,6 +224,13 @@ bool sustainCancelled() {
 void stopSustainTask(int taskId) {
   isStreaming[taskId] = false;
   if (taskId == 0) cancelDownload = true; // only task 0 serves downloads
+}
+
+bool streamSlotActive(uint8_t taskNum) {
+  // lets the capture task attribute a skipped hand-over to a live viewer. Without this
+  // guard every frame would count as skipped whenever nobody is watching, because the
+  // stream buffer is filled once and then never drained
+  return taskNum < MAX_STREAMS ? isStreaming[taskNum] : false;
 }
 
 bool viewerActive() {
@@ -365,5 +380,7 @@ esp_err_t appSpecificSustainHandler(httpd_req_t* req) {
 esp_err_t appSpecificSustainHandler(httpd_req_t* req) {return ESP_OK;}
 bool streamsBusy() {return false;}
 bool sustainCancelled() {return false;}
+bool streamSlotActive(uint8_t taskNum) {return false;}
+uint32_t streamSkipped[MAX_STREAMS] = {0};
 
 #endif

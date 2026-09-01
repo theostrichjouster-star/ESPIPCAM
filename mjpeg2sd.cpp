@@ -1840,7 +1840,7 @@ static boolean processFrame() {
       memcpy(streamBuffer[i], fb->buf, fb->len);
       streamBufferSize[i] = fb->len;
       xSemaphoreGive(frameSemaphore[i]); // signal frame ready for stream
-    }
+    } else if (streamBuffer[i] != NULL && streamSlotActive(i)) streamSkipped[i]++;
   }
   if (doKeepFrame) {
     keepFrame(fb);

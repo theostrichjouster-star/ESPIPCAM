@@ -541,6 +541,24 @@ char* buildAppJsonString(bool filter) {
     p += sprintf(p, "\"total_bytes\":\"%s\",", fmtSize(STORAGE.totalBytes()));
   }
   p += sprintf(p, "\"free_psram\":\"%s\",", fmtSize(ESP.getFreePsram()));
+  // Memory by capability, not just the aggregate. lwip pbufs PREFER psram on this core
+  // (mem_clib_malloc is heap_caps_malloc_prefer with SPIRAM first), so a transport buffer
+  // change shows up in psram, while a fallback to internal shows up in the internal
+  // figures. The MINIMUM-ever values are the point: a burst that briefly squeezes memory
+  // is invisible to instantaneous polling, and the failure it causes (camera frame buffer
+  // allocation refused) only appears on the NEXT boot
+  p += sprintf(p, "\"int_free\":\"%u\",", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  p += sprintf(p, "\"int_block\":\"%u\",", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  p += sprintf(p, "\"int_min\":\"%u\",", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+  p += sprintf(p, "\"psram_min\":\"%u\",", heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+  // Transport ceiling of the core this image was BUILT against. Reads the macros, never
+  // redefines them - a sketch-side redefinition would not change the prebuilt liblwip.a
+  // and would only produce an ABI mismatch. Caveat: this proves the app's sdkconfig.h,
+  // not the library, so it is evidence about which SDK tree the build used
+  p += sprintf(p, "\"lwipSndBuf\":\"%d\",", CONFIG_LWIP_TCP_SND_BUF_DEFAULT);
+  p += sprintf(p, "\"lwipWnd\":\"%d\",", CONFIG_LWIP_TCP_WND_DEFAULT);
+  p += sprintf(p, "\"lwipMss\":\"%d\",", CONFIG_LWIP_TCP_MSS);
+  p += sprintf(p, "\"idfVer\":\"%s\",", esp_get_idf_version());
 #endif
 #if INCLUDE_FTP_HFS
   p += sprintf(p, "\"progressBar\":%d,", percentLoaded);
