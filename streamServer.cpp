@@ -13,7 +13,7 @@
 #define STREAM_CONTENT_TYPE "multipart/x-mixed-replace;boundary=" BOUNDARY_VAL
 #define JPEG_BOUNDARY "\r\n--" BOUNDARY_VAL "\r\n"
 #define JPEG_TYPE "Content-Type: image/jpeg\r\nContent-Length: %10u\r\n\r\n"
-#define HDR_BUF_LEN 64
+#define HDR_BUF_LEN 128 // must hold JPEG_BOUNDARY and JPEG_TYPE as one string
 #define END_WAIT 100
 
 static bool forcePlayback = false; // browser playback status
@@ -116,6 +116,13 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
   isStreaming[taskNum] = true;
   streamBufferSize[taskNum] = 0;
   if (!taskNum) motionJpegLen = 0;
+  // TCP_NODELAY was tried here and MEASURED AS A LOSS - 177 -> 165 frames per 20s at
+  // identical frame sizes, ~6% of goodput, repeatable across runs (COM4, 1 Sep). The
+  // theory was that Nagle stalls the small header chunk for an RTT; the reality is that
+  // httpd_resp_send_chunk issues several small writes per chunk (size line, body,
+  // trailing CRLF) and Nagle coalescing those is worth more than the stall costs.
+  // Leave Nagle enabled. The stream is window-limited (TCP_SND_BUF / RTT), and that
+  // ceiling is not reachable by socket options - see BOARD_TESTING.md
   // output header for streaming request
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
@@ -142,10 +149,9 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
       jpgBuf = streamBuffer[taskNum];
     }
     if (res == ESP_OK) {
-      // send next frame in stream
-      res = httpd_resp_sendstr_chunk(req, JPEG_BOUNDARY);  
-      snprintf(hdrBuf, HDR_BUF_LEN-1, JPEG_TYPE, jpgLen);
-      if (res == ESP_OK) res = httpd_resp_sendstr_chunk(req, hdrBuf);
+      // send next frame in stream, boundary and jpeg header as a single chunk
+      snprintf(hdrBuf, HDR_BUF_LEN-1, JPEG_BOUNDARY JPEG_TYPE, jpgLen);
+      res = httpd_resp_sendstr_chunk(req, hdrBuf);
       if (res == ESP_OK) res = httpd_resp_send_chunk(req, (const char*)jpgBuf, jpgLen);
       frameCnt++;
     }
@@ -192,8 +198,24 @@ static void audioStream(httpd_req_t* req, uint8_t taskNum) {
 #endif
 }
 
+// Downloads had no cancellation surface at all: showStream() polls isStreaming[] and
+// showPlayback() polls doPlayback, but fileHandler -> downloadFile -> sendChunks blocks
+// on SD reads and httpd sends until EOF or the peer disconnects. A stop request could
+// not reach it, so slot 0 stayed inUse through the OTA quiesce window and endTasks()
+// then vTaskDeleted the task inside FATFS or lwip - the exact wedge class OTAprereq
+// exists to prevent. sendChunks polls sustainCancelled() between chunks
+static volatile bool cancelDownload = false;
+
+bool sustainCancelled() {
+  // Task-scoped on purpose. sendChunks also serves ordinary page requests from the
+  // httpd worker (/web?, webdav), and those must never be aborted by a flag raised for
+  // the sustain task - only the download running on slot 0 is cancellable here
+  return cancelDownload && xTaskGetCurrentTaskHandle() == sustainHandle[0];
+}
+
 void stopSustainTask(int taskId) {
   isStreaming[taskId] = false;
+  if (taskId == 0) cancelDownload = true; // only task 0 serves downloads
 }
 
 bool viewerActive() {
@@ -318,7 +340,10 @@ esp_err_t appSpecificSustainHandler(httpd_req_t* req) {
             return res;
           }
           sustainReq[i].req = copy;
-          strncpy(sustainReq[i].activity, variable, sizeof(sustainReq[i].activity) - 1); 
+          strncpy(sustainReq[i].activity, variable, sizeof(sustainReq[i].activity) - 1);
+          // clear any cancel left over from stopping the previous slot 0 activity, or
+          // this new request would abort itself on its first chunk
+          if (i == 0) cancelDownload = false;
           // activate relevant task
           xTaskNotifyGive(sustainHandle[i]);
           return ESP_OK;
@@ -339,5 +364,6 @@ esp_err_t appSpecificSustainHandler(httpd_req_t* req) {
 // dummies
 esp_err_t appSpecificSustainHandler(httpd_req_t* req) {return ESP_OK;}
 bool streamsBusy() {return false;}
+bool sustainCancelled() {return false;}
 
 #endif

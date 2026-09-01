@@ -321,6 +321,7 @@ extern int battUse;
 extern int idleFps;   // sensor fps while nothing needs frames, 0 = feature off
 extern int idleSecs;  // seconds of no activity before throttling
 bool streamsBusy();   // any sustained client needing frames - streamServer.cpp
+bool sustainCancelled(); // the sustain download has been asked to stop - streamServer.cpp
 extern int battPin;
 extern int battScale;
 extern int battWarnMv;

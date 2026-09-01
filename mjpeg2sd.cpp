@@ -160,6 +160,7 @@ static bool battFloorWarned = false;
 // a controlled restart during a recording must not orphan the file - set by appShutdown()
 // and actioned by processFrame from the capture task's own context
 static volatile bool shutdownPending = false;
+static volatile bool capturePassBusy = false; // capture task is inside a processFrame burst
 // FatFS only persists the directory entry and FAT chain on sync, so an un-synced file can
 // read as empty however much data reached the card. Flushing bounds what an abrupt loss
 // costs to this interval. Not free, and not purely a win: every flush is another FAT
@@ -2006,6 +2007,9 @@ static void captureTask(void* parameter) {
   uint32_t ulNotifiedValue;
   while (true) {
     ulNotifiedValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // busy marker brackets the whole burst: OTAprereq() waits on it so vTaskDelete only
+    // ever lands here at the notify wait, where no SCCB, FATFS or frame buffer is held
+    capturePassBusy = true;
     // Enrol this task in the watchdog and pet it once per wake. Nothing watched it before, and
     // it is the task most able to block: saveFrame() writes to the card synchronously with no
     // timeout anywhere below it, and FATFS is reentrant so it holds the volume mutex while it
@@ -2019,6 +2023,7 @@ static void captureTask(void* parameter) {
     if (ulNotifiedValue > FB_CNT) ulNotifiedValue = FB_CNT; // prevent too big queue if FPS excessive
     // may be more than one isr outstanding if the task delayed by SD write or jpeg decode
     while (ulNotifiedValue-- > 0) processFrame();
+    capturePassBusy = false;
   }
   vTaskDelete(NULL);
 }
@@ -2398,6 +2403,13 @@ void OTAprereq() {
   // restores the configured sleep setting
   WiFi.setSleep(false);
   doPlayback = forceRecord = false;
+  // Close any active streams and let their tasks park at the notify wait before
+  // endTasks() deletes them - a sustain task killed mid httpd send dies holding
+  // httpd/lwip state, the same hazard class as the capture kill below
+  for (int i = 0; i < numStreams; i++) stopSustainTask(i);
+  uint32_t quiesceStart = millis();
+  while (streamsBusy() && millis() - quiesceStart < 2000) delay(50);
+  if (streamsBusy()) LOG_WRN("Stream still active after 2s - proceeding with OTA teardown");
   // Land any open recording BEFORE endTasks() deletes the capture task. That task writes
   // to SD synchronously in saveFrame(), and vTaskDelete() on a task inside a FATFS write
   // orphans the volume mutex - every later storage call then blocks for ever, including
@@ -2417,12 +2429,25 @@ void OTAprereq() {
     else LOG_INF("Recording landed cleanly before OTA teardown");
   }
   controlFrameTimer(false);
+  // The timer is stopped, but a capture pass may be in flight and one latched notify can
+  // still start another. vTaskDelete() lands wherever the task happens to be - mid SCCB
+  // transaction (motion check, settleSensor) or FATFS call - and the orphaned lock then
+  // blocks esp_camera_deinit() or doRestart() for ever: ping alive, HTTP dead, the
+  // guaranteed post-OTA restart never runs (wedged COM4 exactly this way, 31 Aug). Wait
+  // for the task to park at its notify wait, where it holds nothing, before killing it
+  delay(60); // a latched notify starts its burst within a tick of the timer stopping
+  uint32_t parkStart = millis();
+  while (capturePassBusy && millis() - parkStart < 3000) delay(20);
+  bool capParked = !capturePassBusy;
+  if (!capParked) LOG_WRN("Capture pass still running after 3s - proceeding, camera deinit skipped");
 #if INCLUDE_PERIPH
   setStickTimer(false);
 #endif
   stopPing();
   endTasks();
-  esp_camera_deinit();
+  // an unparked capture task may have died holding the SCCB lock - deinit would then
+  // deadlock on it, and the post-OTA reboot re-probes the sensor from scratch anyway
+  if (capParked) esp_camera_deinit();
   delay(100);
 }
 
