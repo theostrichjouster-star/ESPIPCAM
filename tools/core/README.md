@@ -261,6 +261,51 @@ it costs 70 mA to disable (see the power ledger) and was measured to make no
 difference to throughput DURING an active stream on a healthy link, because the
 radio does not sleep while data is flowing. It only inflates idle RTT.
 
+### PSRAM 120MHz - do NOT use on this board (assessed 1 Sep, not tested)
+
+Considered because tonight proved the wifi/lwip buffers must live in PSRAM, so a
+faster PSRAM clock looked like a way to attack the constraint rather than fight
+it. Rejected on the IDF Kconfig's own warning. Verbatim from
+`components/esp_psram/esp32s3/Kconfig.spiram` at our pinned IDF:
+
+    config SPIRAM_SPEED_120M
+        depends on SPIRAM_MODE_QUAD || IDF_EXPERIMENTAL_FEATURES
+        - Quad PSRAM 120 MHz is stable.
+        - Octal PSRAM 120 MHz is an experimental feature, it works when
+          the temperature is stable.
+            Risks:
+              If your chip powers on at a certain temperature, then after the
+              temperature increases or decreases by approximately 20 Celsius
+              degrees, the accesses to / from PSRAM will crash randomly.
+
+**Our boards are OCTAL** (`PSRAM=opi`), so 120MHz is the experimental path, not
+the stable one. A ~20C swing is entirely normal here: measured die temp is
+39-45C, the boards run on battery in varying ambient, and THERMAL_SOAK.md exists
+precisely because they heat under load. "Crashes randomly" for a device whose
+camera frame buffers live in PSRAM is not an acceptable trade.
+
+**The temperature-compensation mitigation does not exist in IDF 5.3.2.** There is
+no `TUNING_POINT_VIA_TEMPERATURE_SENSOR` or equivalent symbol anywhere in this
+IDF - that feature arrived in a later release. Using it would mean moving the
+whole core off the version our boards are validated against.
+
+There is also no good test platform: COM4 is the field board (risk not worth it)
+and COM3's radio cannot measure throughput anyway.
+
+**And the expected gain is doubtful on physics.** Octal PSRAM at 80MHz supplies
+tens of MB/s; the stream moves ~1.5 MB/s. PSRAM bandwidth is roughly an order of
+magnitude more than the workload needs, so a faster clock addresses a limit we
+have no evidence of hitting. Honest caveat: the `TRY_ALLOCATE=n` test, which
+removed PSRAM from the buffer path entirely and showed no gain, is *confounded*
+by the memory starvation it caused - so it is suggestive rather than conclusive.
+The bandwidth argument stands on its own though.
+
+`CONFIG_SPIRAM_ECC_ENABLE` is available (it needs `SPIRAM_MODE_OCT`, which we
+have) but costs 1/16 of PSRAM - 512KB of our 8MB, against ~2.1MB free - plus
+access overhead, to protect against bit errors we have never observed. Not
+justified on current evidence. It would become relevant only if 120MHz were
+adopted, which it should not be.
+
 Camera options are reachable too, but treat any `CONFIG_CAMERA_*` or
 `CONFIG_SCCB_*` change as invalidating the measured baselines in
 BOARD_TESTING.md until re-verified.
