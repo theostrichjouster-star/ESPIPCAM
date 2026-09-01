@@ -1,0 +1,47 @@
+# Custom core overlay - ESP32-CAM_MJPEG2SD (XIAO ESP32S3 Sense + OV5640)
+#
+# Raises the lwip TCP send buffer above the IDF default of 5760 bytes.
+#
+# Why: MJPEG streaming throughput is send_buffer / RTT. At 5760 bytes over a
+# 7ms link that is ~820 KB/s theoretical and ~600 KB/s measured, which caps the
+# stream at 8.4 fps with 69KB frames while the sensor is supplying 30. Measured
+# cost model (COM4, two frame sizes): time/frame = 17ms fixed + bytes / 720KB/s.
+# Confirmed by the streamSkipped counter: sent + skipped = 598 offered per 20s,
+# exactly the 30fps capture rate, with the sender dropping the difference.
+#
+# The value: 45952 = 32 x CONFIG_LWIP_TCP_MSS (1436). Holds 2.3 MB/s even at a
+# degraded 20ms RTT, and stays well under the 65535 hard cap that applies
+# because CONFIG_LWIP_WND_SCALE is off. lwip pbufs prefer PSRAM on this core
+# (mem_clib_malloc is heap_caps_malloc_prefer, SPIRAM first), so the memory cost
+# lands in PSRAM - where it competes with camera frame buffers - not internal heap.
+#
+# NOT changed here: CONFIG_LWIP_TCP_WND_DEFAULT is the RECEIVE window and does
+# nothing for outbound streaming. Raising it only speeds inbound transfers (the
+# OTA .bin POST) and would have to be paired with CONFIG_LWIP_TCP_RECVMBOX_SIZE
+# >= 32. Separate experiment, separate justification.
+#
+# How to apply: append to configs/defconfig.esp32s3 in esp32-arduino-lib-builder
+# at commit 2f061cb, built against esp-idf release/v5.3 @ cfea4f7c98 and
+# arduino-esp32 @ 9eb7dc6f. That is the exact combination recorded in
+# versions.txt of the stock esp32-arduino-libs for arduino-esp32 3.1.1, so a
+# build with only this line added should differ from stock in only this value.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=45952
+
+# ---------------------------------------------------------------------------
+# REPRODUCTION RECIPE (validated 1 Sep 2026, five failed attempts to get here)
+#
+# lib-builder pinned to 2f061cb, and these three MUST be pinned by hand because
+# lib-builder resolves them forward and they had drifted ~21 months:
+#   components/arduino               -> 9eb7dc6f   (git checkout)
+#   components/arduino_tinyusb/tinyusb -> 249556360 (git checkout)
+#   main/idf_component.yml esp_matter -> "==1.3.0"  (was "^1.3.0", caret resolves
+#                                        forward to a breaking API)
+#   main/idf_component.yml esp32-camera -> 4335c93e (was git "master"; forward
+#                                        drift silently switched the SCCB I2C
+#                                        driver and the camera task stack size)
+# Then: source esp-idf/export.sh && ./build.sh -s -t esp32s3
+# ESP-IDF is pinned by build.sh itself with -i cfea4f7c98 on the first run.
+#
+# Verify with check-sdkconfig-drift.sh before flashing anything. A correct build
+# differs from stock ONLY in CONFIG_LWIP_TCP_SND_BUF_DEFAULT plus build-metadata
+# strings (ARDUINO_IDF_BRANCH/COMMIT) and unrelated mdns/libsodium options.
