@@ -200,6 +200,22 @@ the failure the `int_min` instrumentation exists to catch, and it caught it -
 instantaneous polling would have shown a comfortable `int_free` of 123 KB and
 missed the squeeze entirely.
 
+**Retested with a SMALLER send buffer to see if pbuf demand was the cause - it is
+not.** `TRY_ALLOCATE=n` with `SND_BUF=45952` (down from 65535) gave
+`int_min` = **908 bytes**, if anything slightly worse. Dropping ~19 KB of
+worst-case pbuf demand changed nothing, which means the internal-RAM exhaustion
+is NOT driven by the TCP send buffer at all - it is the wifi driver and lwip core
+allocations themselves, which on this board simply have to live in PSRAM.
+Throughput was also no better (model-normalized 1.42 MB/s vs 1.55 baseline).
+
+**So `SPIRAM_TRY_ALLOCATE_WIFI_LWIP=n` is not viable here at ANY send buffer
+size.** Do not retry it by tuning other values downward.
+
+Also confirmed in the same build: `ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` is inert while
+`SPIRAM_USE_MALLOC=y`. Setting it produced `TX_BUFFER_TYPE=0` and
+`STATIC_TX_BUFFER_NUM=8` unchanged - the dependency is on `SPIRAM_USE_MALLOC`,
+which the camera requires, and is unaffected by the `TRY_ALLOCATE` setting.
+
 **Conclusion: the ~1.3-1.5 MB/s ceiling is NOT driver buffering.** The earlier
 "radio ceiling" attribution in BOARD_TESTING section 23 is vindicated. The
 remaining lever is the RF environment (channel, placement, interference), not
