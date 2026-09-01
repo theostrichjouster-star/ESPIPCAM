@@ -22,7 +22,17 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   running before blaming the transfer.
 - Serial fallback: manual boot mode (hold BOOT, tap RESET, release BOOT), then
   `arduino-cli upload -p <port> --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi" .`
-  App-only; preserves NVS (wifi creds, calibrations) and the SD card.
+  This is NOT app-only (an earlier version of this file said so and was wrong):
+  platform.txt writes bootloader@0x0, partitions@0x8000, boot_app0@0xe000 and
+  app@0x10000 together. It DOES preserve NVS at 0x9000 (wifi creds, battScale
+  calibration, the COM3 DVDD mod) and the SD card, which is the part that matters.
+  Because it rewrites the bootloader it also resets otadata - so it destroys the
+  known-good image in the other OTA slot. Prefer OTA when that revert path matters.
+- Custom core (raised lwip TCP send buffer - see tools/core/README.md): select the
+  tree per-invocation, never install it over the stock one:
+  `arduino-cli compile --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi" --build-property "tools.esp32-arduino-libs.path=C:\esp32libs\lwip65535" --build-property "runtime.tools.esp32-arduino-libs.path=C:\esp32libs\lwip65535" --build-path "$(pwd)/build-65535" .`
+  A plain compile silently produces a STOCK-core image; `lwipSndBuf` in /status is
+  the only thing that reveals which core a running board carries.
 - NEVER: `erase_flash`, formatSD, or anything that clears NVS. A corrupted SD FAT is
   repaired with `chkdsk /f` on a PC, never by formatting.
 
@@ -39,6 +49,20 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 ## Bench discipline
 
 - One variable at a time, with the prediction stated BEFORE the measurement.
+- **Silence the other board before any RF/throughput measurement.** The two boards
+  sit inches apart and desensitize each other - measured ~2x on throughput. Every
+  measurement taken before this was understood is depressed by an unknown amount.
+  `esptool --chip esp32s3 --port COMx --before default_reset --after no_reset
+  read_mac` parks a board in download mode with the radio fully off;
+  `--before no_reset --after hard_reset chip_id` brings it back.
+- Record link RTT alongside every throughput number. Throughput here is
+  window/RTT, so a radio drift masquerades perfectly as a config effect. RF also
+  varies hugely by time of day: 3-5ms RTT at 2am vs 150-250ms midday.
+- Discard the first ~2-4 minutes after any boot. Early runs are garbage (seen: 5,
+  10 and 123 frames where the settled figure was ~500) and one was nearly misread
+  as a catastrophic regression.
+- Windows `ping` counts "Destination host unreachable" replies FROM THE ROUTER as
+  received, so 0% loss can mean the host is entirely gone. Check `arp -a`.
 - Verification is measured, not structural: the user eyeballs stills/clips; power via
   inline USB meter (5V side, includes charge offset - deltas are the signal);
   voltages via multimeter. Structural checks alone pass on corrupt frames.
@@ -75,8 +99,27 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - BOARD_TESTING.md and the other local bench notes stay untracked; never commit
   them and never copy board addresses into tracked files.
 
+## Diagnosing the stream
+
+`/status` and the end-of-stream log line carry the instruments; use them before
+theorising. `streamSkipped` (logged as "N skipped (sender busy)") counts frames
+the capture task had ready but could not hand over because the previous one was
+still being sent. sent + skipped == frames the sensor offered, which equals the
+capture rate - that is the built-in calibration.
+
+- **skipped high** -> transport-bound (the sender is blocked in httpd send).
+- **skipped ~0** -> camera-bound; the transport is delivering everything offered.
+
+`/status` also carries `lwipSndBuf`/`lwipWnd`/`lwipMss`/`idfVer` (which core the
+image was built against) and `int_free`/`int_block`/`int_min`/`psram_min`. The
+MINIMUM-ever memory figures are the ones that matter: a burst that briefly
+squeezes memory is invisible to instantaneous polling, and the failure it causes
+shows up only on the NEXT boot as a refused camera frame buffer.
+
 ## Docs map
 
 - `BATTERY.md` - battery deployment guide (committed)
+- `tools/core/README.md` - custom arduino-esp32 core: why, how to build, the four
+  version pins, the sdkconfig gate, and candidate future config changes (committed)
 - `BOARD_TESTING.md` - local bench notebook: boards, calibrations, measured laws
 - `THERMAL_SOAK.md`, `FPS_RECAL.md` - local bench campaigns (untracked)
