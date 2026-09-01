@@ -174,6 +174,32 @@ improvement, and the top hypothesis is refuted.**
   they contend with camera frame buffers. That is a plausible mechanism for the
   slight regression.
 
+### DANGEROUS - do NOT set SPIRAM_TRY_ALLOCATE_WIFI_LWIP=n with a large send buffer
+
+Tested 1 Sep evening because the PSRAM-contention theory above predicted a win:
+put wifi/lwip buffers in fast internal RAM instead of PSRAM. **It nearly killed
+the board.**
+
+With `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=n` and `SND_BUF=65535` (buffer counts
+left at stock), internal free RAM under streaming load fell to
+**`int_min` = 1100 bytes** - against a 32 KB warning threshold - and the largest
+free block to 31 KB. Streaming went erratic: truncated connections (3.8s and
+14.8s instead of 20s), runs returning 0 frames, and throughput scattered between
+234 KB/s and 1.0 MB/s, all WORSE than leaving the buffers in PSRAM.
+
+The mechanism is simple in hindsight: a 64 KB TCP send buffer means up to 64 KB
+of pbufs, and with this setting off they must come from internal RAM, which this
+board does not have spare. **The two settings are coupled - a large send buffer
+REQUIRES PSRAM allocation on a board like this.** That is exactly why IDF
+defaults it to `y` when PSRAM is enabled, and why the stock core ships it that
+way.
+
+The board never actually failed an allocation, but at 1100 bytes free the next
+camera frame buffer or SD write could have. It was reverted immediately. This is
+the failure the `int_min` instrumentation exists to catch, and it caught it -
+instantaneous polling would have shown a comfortable `int_free` of 123 KB and
+missed the squeeze entirely.
+
 **Conclusion: the ~1.3-1.5 MB/s ceiling is NOT driver buffering.** The earlier
 "radio ceiling" attribution in BOARD_TESTING section 23 is vindicated. The
 remaining lever is the RF environment (channel, placement, interference), not
