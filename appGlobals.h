@@ -323,6 +323,8 @@ extern int idleSecs;  // seconds of no activity before throttling
 bool streamsBusy();   // any sustained client needing frames - streamServer.cpp
 bool sustainCancelled(); // the sustain download has been asked to stop - streamServer.cpp
 bool streamSlotActive(uint8_t taskNum); // a viewer is attached to this slot - streamServer.cpp
+// hand a captured frame to the stream ring; false means every slot is busy - streamServer.cpp
+bool streamOfferFrame(uint8_t taskNum, const uint8_t* data, size_t len);
 extern uint32_t streamSkipped[]; // frames the capture task could not hand to a busy sender
 extern uint64_t streamSendUs[];    // microseconds spent inside httpd send calls
 extern uint64_t streamSentBytes[]; // bytes handed to those send calls

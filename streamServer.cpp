@@ -33,6 +33,28 @@ uint32_t streamSkipped[MAX_STREAMS] = {0};
 // run can be sampled mid-flight instead of only at end-of-stream
 uint64_t streamSendUs[MAX_STREAMS] = {0};
 uint64_t streamSentBytes[MAX_STREAMS] = {0};
+// Frame handoff to the sender, two deep.
+//
+// It used to be one buffer: processFrame filled it, showStream sent it, and the size
+// stayed non-zero for the WHOLE duration of the send. Every frame the sensor produced
+// during those ~30ms was therefore discarded, and once the send finished the sender sat
+// idle waiting for the next sensor tick. Measured 2 Sep: 281 frames sent, 166 skipped,
+// sender busy only 56% of wall clock while the transport was managing 2.1 MB/s - enough
+// for 33fps at the frame sizes in use. The pipeline, not the link, was the limit.
+//
+// With two slots the producer fills one while the consumer drains the other, so the
+// sender never waits on the camera and frames are only skipped when BOTH slots are
+// genuinely busy - i.e. when the transport really is the bottleneck. That keeps
+// streamSkipped meaningful as the transport-bound indicator.
+//
+// Falls back to a single slot when PSRAM is short, which is exactly the old behaviour.
+#define STREAM_SLOTS 2
+static byte* strmBuf[MAX_STREAMS][STREAM_SLOTS] = {};
+static volatile size_t strmLen[MAX_STREAMS][STREAM_SLOTS] = {};
+static volatile uint8_t strmWr[MAX_STREAMS] = {0}; // producer slot
+static volatile uint8_t strmRd[MAX_STREAMS] = {0}; // consumer slot
+static uint8_t strmSlots[MAX_STREAMS] = {0};       // slots actually allocated, 1 or 2
+
 size_t streamBufferSize[MAX_STREAMS] = {0};
 byte* streamBuffer[MAX_STREAMS] = {NULL}; // buffer for stream frame
 static char variable[FILE_NAME_LEN]; 
@@ -130,6 +152,10 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
   streamBufferSize[taskNum] = 0;
   streamSkipped[taskNum] = 0;
   streamSendUs[taskNum] = streamSentBytes[taskNum] = 0;
+  // drain the ring so a frame left over from a previous session is not sent as the
+  // first frame of this one. Producer indexes are reset with it to keep them paired
+  for (uint8_t s = 0; s < STREAM_SLOTS; s++) strmLen[taskNum][s] = 0;
+  strmWr[taskNum] = strmRd[taskNum] = 0;
   if (!taskNum) motionJpegLen = 0;
   // TCP_NODELAY was tried here and MEASURED AS A LOSS - 177 -> 165 frames per 20s at
   // identical frame sizes, ~6% of goodput, repeatable across runs (COM4, 1 Sep). The
@@ -157,11 +183,10 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
       if (!jpgLen) continue;
       jpgBuf = motionJpeg;
     } else {
-      // live stream 
-      if (!streamBufferSize[taskNum]) continue;
-      jpgLen = streamBufferSize[taskNum];
-      // use frame stored by processFrame()
-      jpgBuf = streamBuffer[taskNum];
+      // live stream - take the oldest filled slot of the two-deep ring
+      if (!strmLen[taskNum][strmRd[taskNum]]) continue;
+      jpgLen = strmLen[taskNum][strmRd[taskNum]];
+      jpgBuf = strmBuf[taskNum][strmRd[taskNum]];
     }
     if (res == ESP_OK) {
       // send next frame in stream, boundary and jpeg header as a single chunk.
@@ -176,6 +201,12 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
       frameCnt++;
     }
     mjpegLen += jpgLen;
+    // release the slot only AFTER the send completes - the producer may then refill it
+    // while we move on to the other slot, which is the whole point of the second buffer
+    if (!(dbgMotion && !taskNum)) {
+      strmLen[taskNum][strmRd[taskNum]] = 0;
+      strmRd[taskNum] = (strmRd[taskNum] + 1) % strmSlots[taskNum];
+    }
     jpgLen = streamBufferSize[taskNum] = 0;
     if (dbgMotion && !taskNum) motionJpegLen = 0;
     if (res != ESP_OK) {
@@ -250,6 +281,22 @@ void stopSustainTask(int taskId) {
   if (taskId == 0) cancelDownload = true; // only task 0 serves downloads
 }
 
+bool streamOfferFrame(uint8_t taskNum, const uint8_t* data, size_t len) {
+  // Called from the capture task with a frame in hand. Returns false if every slot is
+  // still busy, which is the caller's cue to count a skip. Single writer (capture task)
+  // and single reader (sustain task): the write index is only touched here, the read
+  // index only in showStream, and strmLen is the handoff flag - so no lock is needed
+  if (taskNum >= MAX_STREAMS || !strmSlots[taskNum]) return false;
+  uint8_t w = strmWr[taskNum];
+  if (strmLen[taskNum][w] != 0) return false; // producer slot still awaiting send
+  if (strmBuf[taskNum][w] == NULL || len > maxFrameBuffSize) return false;
+  memcpy(strmBuf[taskNum][w], data, len);
+  strmLen[taskNum][w] = len;
+  strmWr[taskNum] = (w + 1) % strmSlots[taskNum];
+  xSemaphoreGive(frameSemaphore[taskNum]); // signal frame ready for stream
+  return true;
+}
+
 bool streamSlotActive(uint8_t taskNum) {
   // lets the capture task attribute a skipped hand-over to a live viewer. Without this
   // guard every frame would count as skipped whenever nobody is watching, because the
@@ -301,8 +348,28 @@ void startSustainTasks() {
     vidStreams = 1;
     streamVid = streamAud = false;
   }
-  for (int i = 0; i < vidStreams; i++)
-    if (streamBuffer[i] == NULL) streamBuffer[i] = (byte*)ps_malloc(maxFrameBuffSize); 
+  // Two slots per video stream where PSRAM allows, so the capture task can fill one
+  // while the sender drains the other. The second slot is what stops the sender idling
+  // between frames - measured 44% of wall clock wasted with a single slot. Reserve a
+  // frame's worth of headroom so this never squeezes the camera's own allocations,
+  // and fall back to one slot (the old behaviour) rather than failing to stream
+  for (int i = 0; i < vidStreams; i++) {
+    if (strmSlots[i]) continue; // already allocated
+    for (uint8_t s = 0; s < STREAM_SLOTS; s++) {
+      if (s && ESP.getFreePsram() < maxFrameBuffSize * 2) break; // keep a frame spare
+      byte* b = (byte*)ps_malloc(maxFrameBuffSize);
+      if (b == NULL) break;
+      strmBuf[i][s] = b;
+      strmSlots[i] = s + 1;
+    }
+    strmWr[i] = strmRd[i] = 0;
+    // keep the legacy pointer valid for anything still reading it
+    streamBuffer[i] = strmBuf[i][0];
+    if (strmSlots[i] < STREAM_SLOTS)
+      LOG_WRN("Stream %d single-buffered (PSRAM %s) - sender will idle between frames",
+        i, fmtSize(ESP.getFreePsram()));
+    else LOG_INF("Stream %d double-buffered", i);
+  }
 
   for (int i = 0; i < numStreams; i++) {
     sustainReq[i].taskNum = i; // so task knows its number
@@ -405,6 +472,7 @@ esp_err_t appSpecificSustainHandler(httpd_req_t* req) {return ESP_OK;}
 bool streamsBusy() {return false;}
 bool sustainCancelled() {return false;}
 bool streamSlotActive(uint8_t taskNum) {return false;}
+bool streamOfferFrame(uint8_t taskNum, const uint8_t* data, size_t len) {return false;}
 uint32_t streamSkipped[MAX_STREAMS] = {0};
 uint64_t streamSendUs[MAX_STREAMS] = {0};
 uint64_t streamSentBytes[MAX_STREAMS] = {0};

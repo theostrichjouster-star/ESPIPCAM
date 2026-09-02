@@ -1836,11 +1836,9 @@ static boolean processFrame() {
   }
 
   for (int i = 0; i < vidStreams; i++) {
-    if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
-      memcpy(streamBuffer[i], fb->buf, fb->len);
-      streamBufferSize[i] = fb->len;
-      xSemaphoreGive(frameSemaphore[i]); // signal frame ready for stream
-    } else if (streamBuffer[i] != NULL && streamSlotActive(i)) streamSkipped[i]++;
+    // hand off to the two-deep ring; a refusal means every slot is still awaiting
+    // send, which is the transport genuinely falling behind rather than a handshake gap
+    if (!streamOfferFrame(i, fb->buf, fb->len) && streamSlotActive(i)) streamSkipped[i]++;
   }
   if (doKeepFrame) {
     keepFrame(fb);
