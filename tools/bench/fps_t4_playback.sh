@@ -42,19 +42,25 @@ EOF
   P=$(printf '%s\n' "$L" | python "$HERE/parse_play.py")
   pf=$(kv "$P" playFps); fr=$(kv "$P" frames); rk=$(kv "$P" readKBs); uc=$(kv "$P" usPerCluster); rm=$(kv "$P" readMs)
   wm=$(kv "$P" waitMs); dm=$(kv "$P" delayMs); hm=$(kv "$P" httpMs); bu=$(kv "$P" busy); pfile=$(kv "$P" file)
-  verdict=$(python - "$uc" "$wm" "$pfile" "$file" <<'EOF'
-import sys; uc, wm, pfile, file = sys.argv[1:5]
+  verdict=$(python - "$uc" "$wm" "$pfile" "$file" "$f" <<'EOF'
+import sys; uc, wm, pfile, file, f = sys.argv[1:6]
 why = []
 if pfile != file: why.append("stale")
 try:
-    if not (5500 <= int(uc) <= 7500): why.append(f"cluster {uc}us")
+    # one 32 KB read per second at 1-2 fps pays the card's idle-state wake latency on every
+    # command (measured 7.5 ms at VGA 1 fps against 6.2-7.3 back to back), so the bound is
+    # wider there
+    hi = 8500 if int(f) <= 2 else 7500
+    if not (5500 <= int(uc) <= hi): why.append(f"cluster {uc}us")
     if int(wm) > 2: why.append(f"wait {wm}ms")
 except ValueError: why.append("parse")
 print("PASS" if not why else "FAIL(" + ";".join(why) + ")")
 EOF
 )
-  # derive the transport figure from the first transport-bound clip (http send dominates)
-  if [ -z "$T" ] && [ -n "$pf" ] && [ -n "$hm" ] && [ "${hm:-0}" -ge 20 ]; then T=$(python -c "print(int(float('$pf')*float('$avg')))"); log "  transport T derived: $T B/s"; fi
+  # derive the transport figure from the first TRANSPORT-bound clip: http send dominates AND
+  # the frame-timer wait is zero. A timer-bound low-fps clip also shows a long http send per
+  # frame (80 KB takes 20+ ms) but fps x bytes is then the timer, not the link
+  if [ -z "$T" ] && [ -n "$pf" ] && [ "${hm:-0}" -ge 20 ] && [ "${dm:-1}" -eq 0 ]; then T=$(python -c "print(int(float('$pf')*float('$avg')))"); log "  transport T derived: $T B/s"; fi
   echo "$idx,$name,$f,$file,$f,$avg,$rtt,$model,$pf,$fr,$rk,$uc,$rm,$wm,$dm,$hm,$bu,$im,$verdict" >> "$CSV"
   total=$((total + 1)); [ "$verdict" = "PASS" ] && good=$((good + 1))
   log "  played $pf fps ($fr fr): read ${rk}kB/s ${uc}us/cluster, read ${rm}ms wait ${wm}ms delay ${dm}ms http ${hm}ms busy $bu% -> $verdict"
