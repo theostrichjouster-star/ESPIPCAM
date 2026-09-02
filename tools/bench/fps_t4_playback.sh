@@ -19,7 +19,7 @@ core_ok() {  # the core subset: ceiling, cap-crossing, 5 and 1 fps per size
 }
 mapfile -t ROWS < <(tail -n +2 "$T3")   # not a pipe: abort must exit the script, not a subshell
 for row in "${ROWS[@]}"; do
-  IFS=, read -r idx name f q file du frames req act avg rest <<< "$row"
+  IFS=, read -r idx name f q file du frames act avg rest <<< "$row"
   [ "$q" = "10" ] || continue; [ "$file" = "NONE" ] && continue
   [ -z "$FULL" ] && ! core_ok "$idx" "$f" && continue
   assert_alive

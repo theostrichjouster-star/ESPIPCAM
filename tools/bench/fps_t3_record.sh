@@ -14,7 +14,7 @@ MATRIX=("QVGA:6:1,2,5,20,38,39:10:320x240" "VGA:10:1,2,5,20,38,39:10:640x480"
 
 preflight
 log "lighting check: llevel=$(status_field llevel) night=$(status_field night) atemp=$(status_field atemp)"
-[ -f "$CSV" ] || echo "idx,size,fps,q,file,duration,frames,reqFps,actFps,avgBytes,storageMs,sdKBs,boost,rescues,busy,motion0,motion1,probe1,probe2,still,verdict" > "$CSV"
+[ -f "$CSV" ] || echo "idx,size,fps,q,file,duration,frames,actFps,avgBytes,storageMs,sdKBs,boost,rescues,busy,motion0,motion1,probe1,probe2,still,verdict" > "$CSV"
 skipping=${FROM:+1}; total=0; good=0
 for entry in "${MATRIX[@]}"; do
   IFS=: read -r name idx list q dims <<< "$entry"
