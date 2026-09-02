@@ -1,0 +1,2 @@
+# bench scripts run under Git Bash and python: keep them LF regardless of core.autocrlf
+tools/bench/* text eol=lf
