@@ -181,10 +181,14 @@ static bool holdoffActive = false;
 static bool holdoffSavedRecording = false;
 
 // SD card storage
-// iSDbuffer is used by the playback path, which treats the upper half as a double
-// buffer, so it must stay at (RAMSIZE + CHUNK_HDR) * 2. The AVI capture path has its
-// own single buffer so the write block can be enlarged without paying twice for it.
-uint8_t iSDbuffer[(RAMSIZE + CHUNK_HDR) * 2];
+// Playback double buffer, split by memory type: sdReadBuf is the DMA landing zone for
+// File::read() and must be internal RAM (the sdmmc host bounces anything else through a
+// per-sector temp buffer); iSDbuffer is the consumer's copy - CHUNK_HDR bytes of overlap
+// then the cluster - and is only ever memcpy'd or handed to httpd, so it is allocated
+// from PSRAM at startup. Splitting them is what lets RAMSIZE be 32KB without spending
+// 64KB of internal RAM. The AVI capture path has its own write buffer.
+uint8_t* iSDbuffer = NULL;
+static uint8_t sdReadBuf[RAMSIZE] __attribute__((aligned(4)));
 static uint8_t sdWriteBuf[SD_WRITE_SIZE + CHUNK_HDR];
 static size_t highPoint;
 static File aviFile;
@@ -1245,8 +1249,8 @@ bool recoverAvi() {
   wf.seek(pos, SeekSet); // index goes immediately after the last valid chunk
   size_t readLen = 0;
   do {
-    readLen = writeAviIndex(iSDbuffer, RAMSIZE);
-    if (readLen) wf.write(iSDbuffer, readLen);
+    readLen = writeAviIndex(sdReadBuf, RAMSIZE); // idle DRAM buffer: playback and capture exclude each other
+    if (readLen) wf.write(sdReadBuf, readLen);
   } while (readLen > 0);
   buildAviHdr(recFPSv, recFS, frames, vidDuration);
   wf.seek(0, SeekSet);
@@ -1304,8 +1308,8 @@ static bool closeAvi() {
   // save avi index
   finalizeAviIndex(frameCnt);
   do {
-    readLen = writeAviIndex(iSDbuffer, RAMSIZE);
-    if (readLen) aviFile.write(iSDbuffer, readLen);
+    readLen = writeAviIndex(sdReadBuf, RAMSIZE); // idle DRAM buffer: playback and capture exclude each other
+    if (readLen) aviFile.write(sdReadBuf, readLen);
   } while (readLen > 0);
   // save avi header at start of file
   float actualFPS = (1000.0f * (float)frameCnt) / ((float)vidDuration);
@@ -2083,7 +2087,7 @@ static void readSD() {
     // File::read() returns (size_t)-1 on an invalid file, which would reach
     // memcpy() as a length of SIZE_MAX, so clamp it rather than trusting it
     uint32_t rTime = micros();
-    size_t bytesRead = playbackFile.read(iSDbuffer + RAMSIZE + CHUNK_HDR, RAMSIZE);
+    size_t bytesRead = playbackFile.read(sdReadBuf, RAMSIZE);
     uint32_t rUs = micros() - rTime;
     readLen = (bytesRead > RAMSIZE) ? 0 : bytesRead;
     // the device figure - deliberately not added to wTimeTot, see its declaration
@@ -2105,6 +2109,10 @@ void openSDfile(const char* streamFile) {
   if (stopPlayback) LOG_WRN("Playback refused - capture in progress");
   else {
     stopPlaying(); // in case already running
+    if (iSDbuffer == NULL) {
+      LOG_WRN("Playback refused - no PSRAM playback buffer");
+      return;
+    }
     strcpy(aviFileName, streamFile);
     LOG_INF("Playing %s", aviFileName);
     playbackFile = STORAGE.open(aviFileName, FILE_READ);
@@ -2161,7 +2169,7 @@ mjpegStruct getNextFrame(bool firstCall) {
       wTimeTot += millis() - mTime;
       mTime = millis();
       // overlap buffer by CHUNK_HDR to prevent jpeg marker being split between buffers
-      memcpy(iSDbuffer + CHUNK_HDR, iSDbuffer + RAMSIZE + CHUNK_HDR, buffLen); // load new cluster from double buffer
+      memcpy(iSDbuffer + CHUNK_HDR, sdReadBuf, buffLen); // load new cluster from the DRAM landing buffer
       LOG_VRB("memcpy took %lu ms for %u bytes", millis() - mTime, buffLen);
       fTimeTot += millis() - mTime;
       remainingBuff = true;
@@ -2318,6 +2326,10 @@ bool prepRecording() {
   aviMutex = xSemaphoreCreateMutex();
   motionSemaphore = xSemaphoreCreateBinary();
   for (int i = 0; i < vidStreams; i++) frameSemaphore[i] = xSemaphoreCreateBinary();
+  // consumer side of the playback double buffer - PSRAM, see the declaration. Playback
+  // is refused if this fails; recording does not depend on it
+  if (iSDbuffer == NULL) iSDbuffer = (uint8_t*)ps_malloc(RAMSIZE + CHUNK_HDR);
+  if (iSDbuffer == NULL) LOG_ERR("Failed to allocate %u byte playback buffer from PSRAM", RAMSIZE + CHUNK_HDR);
   reloadConfigs(); // apply camera config
   if (!startSDtasks()) return false;
   if (hadBrownout()) {

@@ -114,9 +114,14 @@
 // smallest plausible firmware image - guards against a garbage or truncated
 // image being handed to Update.begin(), which would brick the running partition
 #define MIN_OTA_IMAGE_SIZE (64 * 1024)
-#define RAMSIZE (1024 * 8) // set this to multiple of SD card sector size (512 or 1024 bytes)
-// SD write block for the AVI capture path only, kept separate from RAMSIZE because
-// iSDbuffer is double sized for the playback path - see sdWriteBuf in mjpeg2sd.cpp.
+// playback read cluster. Must be a multiple of the SD card sector size (512 or 1024 bytes).
+// Each cluster costs one SDMMC command round trip on top of the transfer, and at 8KB that
+// overhead was most of the read: measured 7.7ms per 8KB cluster (~1.0MB/s) against
+// 4.4MB/s on the 32KB write path. The DRAM landing buffer (sdReadBuf) is this size; the
+// consumer's copy (iSDbuffer) lives in PSRAM so the cluster can grow without paying for
+// it twice in internal RAM
+#define RAMSIZE (1024 * 32)
+// SD write block for the AVI capture path only - see sdWriteBuf in mjpeg2sd.cpp.
 // Must be a multiple of the SD card sector size (512 or 1024 bytes)
 #define SD_WRITE_SIZE (1024 * 32)
 #define CHUNKSIZE (1024 * 4)
@@ -372,7 +377,7 @@ extern framesize_t sensorFS;
 #endif
 
 // buffers
-extern uint8_t iSDbuffer[];
+extern uint8_t* iSDbuffer;
 extern uint8_t aviHeader[];
 extern const uint8_t dcBuf[]; // 00dc
 extern const uint8_t wbBuf[]; // 01wb
