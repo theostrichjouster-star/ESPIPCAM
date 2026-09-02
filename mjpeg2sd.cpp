@@ -10,6 +10,8 @@
 #if INCLUDE_AF
 #if __has_include("../libraries/OV5640_Auto_Focus_for_ESP32_Camera/src/ESP32_OV5640_AF.h") 
 #include <ESP32_OV5640_AF.h>
+#include <fcntl.h>  // playback reads the AVI through a POSIX fd, see readSD()
+#include <unistd.h>
 OV5640 ov5640AF = OV5640();
 #else
 #error "Need to install OV5640_Auto_Focus_for_ESP32_Camera library"
@@ -195,7 +197,7 @@ static File aviFile;
 static char aviFileName[FILE_NAME_LEN];
 
 // SD playback
-static File playbackFile;
+static int playbackFd = -1; // POSIX fd on the AVI being played, see readSD()
 static char partName[FILE_NAME_LEN];
 static size_t readLen;
 static uint8_t recFPS;
@@ -2081,15 +2083,19 @@ static void playbackFPS(const char* fname) {
 
 static void readSD() {
   // read next cluster from SD for playback
-  // read to interim dram before copying to psram
+  // One POSIX read() per cluster, straight into the DRAM landing buffer. NOT File::read():
+  // that is stdio fread() on a FILE* with a 4KB setvbuf buffer (vfs_api.cpp), so however
+  // large the request FATFS only ever saw 4KB refills - about three SDMMC commands each
+  // once misaligned by the AVI header - and reads ran at 1.0MB/s at both 8KB and 32KB
+  // clusters while 32KB fwrite blocks reach 4.4MB/s on the same card (fwrite bypasses the
+  // buffer for large writes). A single VFS read hands FATFS the whole cluster as one
+  // multi-sector transfer
   readLen = 0;
-  if (!stopPlayback && playbackFile) {
-    // File::read() returns (size_t)-1 on an invalid file, which would reach
-    // memcpy() as a length of SIZE_MAX, so clamp it rather than trusting it
+  if (!stopPlayback && playbackFd >= 0) {
     uint32_t rTime = micros();
-    size_t bytesRead = playbackFile.read(sdReadBuf, RAMSIZE);
+    ssize_t bytesRead = read(playbackFd, sdReadBuf, RAMSIZE);
     uint32_t rUs = micros() - rTime;
-    readLen = (bytesRead > RAMSIZE) ? 0 : bytesRead;
+    readLen = (bytesRead < 0 || bytesRead > (ssize_t)RAMSIZE) ? 0 : bytesRead; // never hand memcpy an error
     // the device figure - deliberately not added to wTimeTot, see its declaration
     sdReadUs += rUs;
     sdReadCnt++;
@@ -2115,15 +2121,17 @@ void openSDfile(const char* streamFile) {
     }
     strcpy(aviFileName, streamFile);
     LOG_INF("Playing %s", aviFileName);
-    playbackFile = STORAGE.open(aviFileName, FILE_READ);
-    if (!playbackFile) {
-      // eg a folder shortcut or deleted file was selected. Must bail out here -
-      // File::read() on an invalid file returns (size_t)-1, which readSD() would
-      // hand to memcpy() as a length
-      LOG_WRN("Playback refused - cannot open %s", aviFileName);
+    if (playbackFd >= 0) close(playbackFd); // a force-closed playback can leave one open
+    char vfsPath[FILE_NAME_LEN + 8];
+    snprintf(vfsPath, sizeof(vfsPath), "/sdcard%s", aviFileName); // SD_MMC mount point, as utilsLog.cpp
+    playbackFd = open(vfsPath, O_RDONLY);
+    if (playbackFd < 0) {
+      // eg a folder shortcut or deleted file was selected. Must bail out here, or
+      // readSD() reports a cluster it never read
+      LOG_WRN("Playback refused - cannot open %s", vfsPath);
       return;
     }
-    playbackFile.seek(AVI_HEADER_LEN, SeekSet); // skip over header
+    lseek(playbackFd, AVI_HEADER_LEN, SEEK_SET); // skip over header
     playbackFPS(aviFileName);
     isPlaying = true; //playback status
     doPlayback = true; // control playback
@@ -2229,7 +2237,8 @@ mjpegStruct getNextFrame(bool firstCall) {
     if (buffOffset >= buffLen) remainingBuff = false;
   } else {
     // finished, close SD file used for streaming
-    playbackFile.close();
+    if (playbackFd >= 0) close(playbackFd);
+    playbackFd = -1;
     logLine();
     if (!completedPlayback) LOG_INF("Force close playback");
     uint32_t playDuration = (millis() - sTime) / 1000;
@@ -2332,6 +2341,12 @@ bool prepRecording() {
   if (iSDbuffer == NULL) LOG_ERR("Failed to allocate %u byte playback buffer from PSRAM", RAMSIZE + CHUNK_HDR);
   reloadConfigs(); // apply camera config
   if (!startSDtasks()) return false;
+  // printResetReason() runs before the SD log opens, and the RTC ring that holds its output
+  // is overwritten by boot chatter within a minute or two - a lockup found hours later by
+  // the reset button would lose its breadcrumb. Say it again here, where the SD log is open
+  uint8_t prevStage = previousRestartStage();
+  if (prevStage == RESTART_IN_ESP_RESTART) LOG_INF("Previous controlled restart completed every stage");
+  else if (prevStage) LOG_WRN("Previous controlled restart HUNG after stage %u (%s) - see doRestart()", prevStage, restartStageName(prevStage));
   if (hadBrownout()) {
     // The supply failed on the previous boot. Recording straight back into a sagging
     // battery is how a boot-record-brownout loop grinds the SD card, so hold off briefly
