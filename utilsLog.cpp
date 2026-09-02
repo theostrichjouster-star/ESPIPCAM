@@ -62,13 +62,18 @@ static RTC_NOINIT_ATTR uint32_t sagMagic;
 #define RESTART_MAGIC 0x5E57A6E5
 static RTC_NOINIT_ATTR uint32_t restartMagic;
 static RTC_NOINIT_ATTR uint8_t restartStage;
+static uint8_t restartReport = 0; // this boot only: what printResetReason found, for prepRecording to re-log
 
 void markRestartStage(restartStage_t stage) {
   restartStage = stage;
   restartMagic = RESTART_MAGIC;
 }
 
-static const char* restartStageName(uint8_t stage) {
+uint8_t previousRestartStage() {
+  return restartReport;
+}
+
+const char* restartStageName(uint8_t stage) {
   static const char* names[] = {"none", "entered", "brownout disarmed", "appShutdown done",
     "mqtt stopped", "crash loop reset", "log flushed and closed", "2s delay done",
     "calling esp_restart", "inside esp_restart"};
@@ -363,8 +368,11 @@ static esp_reset_reason_t printResetReason() {
     (bootReason == ESP_RST_BROWNOUT) ? " (brownout)" : "");
   if (restartMagic == RESTART_MAGIC) {
     // a controlled restart began on the previous boot - did it get all the way through?
+    // This runs before the SD log opens, so it reaches only the RTC ring and serial;
+    // prepRecording() logs it again once the SD log is up (previousRestartStage)
     if (restartStage == RESTART_IN_ESP_RESTART) LOG_INF("Previous controlled restart completed every stage");
     else LOG_WRN("Previous controlled restart HUNG after stage %u (%s) - see doRestart()", restartStage, restartStageName(restartStage));
+    restartReport = restartStage;
     restartMagic = 0; // consumed
   }
   showBacktrace();

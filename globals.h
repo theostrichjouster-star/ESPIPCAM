@@ -215,6 +215,8 @@ enum restartStage_t : uint8_t {
   RESTART_IN_ESP_RESTART       // our shutdown handler ran inside esp_restart()
 };
 void markRestartStage(restartStage_t stage);
+uint8_t previousRestartStage(); // what the previous boot's doRestart reached, 0 if it did not run one
+const char* restartStageName(uint8_t stage);
 extern volatile bool supplySagging;
 extern volatile uint32_t sagTripCount;
 void reset_log();
