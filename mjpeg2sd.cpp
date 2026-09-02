@@ -91,7 +91,13 @@ static uint32_t mTimeTot;  // time actually spent in motion checks, in microseco
 static uint32_t mCheckCnt; // number of motion checks performed
 static uint32_t badFrameCnt; // frames rejected as zero length or oversized
 static uint32_t fTimeTot; // total frame buffering time
-static uint32_t wTimeTot; // total SD write time
+static uint32_t wTimeTot; // recording: total SD write time. Playback: consumer wait on the reader task
+// playback device figures, kept apart from wTimeTot: the reader task's time inside File::read()
+// overlaps the consumer's wait for that same read in wall-clock time, and summing the two into
+// wTimeTot once reported 154ms of "SD read" per frame inside a 133ms frame period
+static uint64_t sdReadUs; // reader task time inside File::read(), us
+static uint32_t sdReadCnt; // clusters read
+static uint32_t sdReadBytes; // bytes actually read, last cluster is partial
 static uint32_t oTime; // file opening time
 static uint32_t cTime; // file closing time
 static uint32_t sTime; // file streaming time
@@ -2071,17 +2077,21 @@ static void playbackFPS(const char* fname) {
 
 static void readSD() {
   // read next cluster from SD for playback
-  uint32_t rTime = millis();
   // read to interim dram before copying to psram
   readLen = 0;
   if (!stopPlayback && playbackFile) {
     // File::read() returns (size_t)-1 on an invalid file, which would reach
     // memcpy() as a length of SIZE_MAX, so clamp it rather than trusting it
+    uint32_t rTime = micros();
     size_t bytesRead = playbackFile.read(iSDbuffer + RAMSIZE + CHUNK_HDR, RAMSIZE);
+    uint32_t rUs = micros() - rTime;
     readLen = (bytesRead > RAMSIZE) ? 0 : bytesRead;
-    LOG_VRB("SD read time %lu ms", millis() - rTime);
+    // the device figure - deliberately not added to wTimeTot, see its declaration
+    sdReadUs += rUs;
+    sdReadCnt++;
+    sdReadBytes += readLen;
+    LOG_VRB("SD read time %lu us", rUs);
   }
-  wTimeTot += millis() - rTime;
   xSemaphoreGive(readSemaphore); // signal that ready
   delay(10);
 }
@@ -2106,6 +2116,7 @@ void openSDfile(const char* streamFile) {
     playbackFPS(aviFileName);
     isPlaying = true; //playback status
     doPlayback = true; // control playback
+    sdReadUs = sdReadCnt = sdReadBytes = 0; // before the prime read, which getNextFrame(true) would miss
     readSD(); // prime playback task
   }
 }
@@ -2218,8 +2229,15 @@ mjpegStruct getNextFrame(bool firstCall) {
     LOG_INF("Playback FPS %0.1f, duration %lu secs", (float)frameCnt / playDuration, playDuration);
     LOG_INF("Number of frames: %u", frameCnt);
     if (frameCnt) {
-      LOG_INF("Average SD read speed: %lu kB/s", ((vidSize / wTimeTot) * 1000) / 1024);
-      LOG_INF("Average frame SD read time: %lu ms", wTimeTot / frameCnt);
+      // read speed / read time are the reader task inside File::read() - what the card does.
+      // wait time is how long the consumer sat on readSemaphore - what the pipeline does
+      uint64_t readUs = sdReadUs ? sdReadUs : 1;
+      uint32_t readCnt = sdReadCnt ? sdReadCnt : 1;
+      LOG_INF("Average SD read speed: %lu kB/s (%lu clusters of %u bytes, %lu us each)",
+        (uint32_t)((uint64_t)sdReadBytes * 1000000ULL / 1024ULL / readUs), sdReadCnt, (unsigned)RAMSIZE,
+        (uint32_t)(readUs / readCnt));
+      LOG_INF("Average frame SD read time: %lu ms", (uint32_t)(readUs / 1000ULL / frameCnt));
+      LOG_INF("Average frame SD wait time: %lu ms", wTimeTot / frameCnt);
       LOG_INF("Average frame processing time: %lu ms", fTimeTot / frameCnt);
       LOG_INF("Average frame delay time: %lu ms", tTimeTot / frameCnt);
       LOG_INF("Average http send time: %lu ms", hTimeTot / frameCnt);
