@@ -53,6 +53,27 @@ static RTC_NOINIT_ATTR uint32_t sagStage1Count;
 // rather than trusting the value. Same reason crashLoop carries MAGIC_NUM
 #define SAG_MAGIC 0x5A61C0DE
 static RTC_NOINIT_ATTR uint32_t sagMagic;
+// Restart-stage breadcrumb. doRestart() has hung twice in ~12 OTA restarts after writing its
+// first log line, and never on the 100-cycle web-reset harness, and the SD log cannot say
+// where: nothing is ever written between that line and the next boot, even on success.
+// Each step stamps its number here and the next boot reports the last one reached. A clean
+// restart reports RESTART_IN_ESP_RESTART, which is also the proof the instrument works.
+// Own magic, for the same reason as sagMagic
+#define RESTART_MAGIC 0x5E57A6E5
+static RTC_NOINIT_ATTR uint32_t restartMagic;
+static RTC_NOINIT_ATTR uint8_t restartStage;
+
+void markRestartStage(restartStage_t stage) {
+  restartStage = stage;
+  restartMagic = RESTART_MAGIC;
+}
+
+static const char* restartStageName(uint8_t stage) {
+  static const char* names[] = {"none", "entered", "brownout disarmed", "appShutdown done",
+    "mqtt stopped", "crash loop reset", "log flushed and closed", "2s delay done",
+    "calling esp_restart", "inside esp_restart"};
+  return stage < sizeof(names) / sizeof(names[0]) ? names[stage] : "?";
+}
 static RTC_NOINIT_ATTR uint32_t crashLoop;
 static bool crashLoopSuspected = false; // this boot only; reported once logging is up
 static RTC_NOINIT_ATTR uint32_t backtrace[60]; // array of backtrace addresses 
@@ -316,6 +337,7 @@ static esp_reset_reason_t printResetReason() {
       brownoutStatus = 0;
       sagMagic = 0; // RTC contents are undefined after a true power off
       sagStage1Count = 0;
+      restartMagic = 0;
       messageLog[0] = 0;
       break;
     }
@@ -339,6 +361,12 @@ static esp_reset_reason_t printResetReason() {
   }
   if (crashLoopSuspected) LOG_WRN("Previous boot ended without a controlled restart%s - check the log",
     (bootReason == ESP_RST_BROWNOUT) ? " (brownout)" : "");
+  if (restartMagic == RESTART_MAGIC) {
+    // a controlled restart began on the previous boot - did it get all the way through?
+    if (restartStage == RESTART_IN_ESP_RESTART) LOG_INF("Previous controlled restart completed every stage");
+    else LOG_WRN("Previous controlled restart HUNG after stage %u (%s) - see doRestart()", restartStage, restartStageName(restartStage));
+    restartMagic = 0; // consumed
+  }
   showBacktrace();
   return bootReason;
 }

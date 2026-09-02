@@ -200,6 +200,21 @@ void debugDirtyReboot(); // debug: no-cleanup reboot, emulates supply loss for r
 void markSagStage1(); // record that the graceful sag response ran, for the next boot to report
 void brownoutDump(); // read back the comparator's actual hardware config - read only, safe
 void logSyncSD(); // push the SD log to the card now, without flush_log()'s 1s delay
+// Restart-stage breadcrumb: doRestart() stamps each step into RTC memory and the next boot
+// reports the last one reached - see markRestartStage() in utilsLog.cpp
+enum restartStage_t : uint8_t {
+  RESTART_NONE = 0,
+  RESTART_ENTERED,             // first log line written
+  RESTART_BROWNOUT_DISARMED,
+  RESTART_APP_SHUTDOWN,        // appShutdown() returned
+  RESTART_MQTT_STOPPED,
+  RESTART_CRASHLOOP_RESET,
+  RESTART_LOG_FLUSHED,         // flush_log(true) returned
+  RESTART_DELAY_DONE,
+  RESTART_CALLING_ESP_RESTART,
+  RESTART_IN_ESP_RESTART       // our shutdown handler ran inside esp_restart()
+};
+void markRestartStage(restartStage_t stage);
 extern volatile bool supplySagging;
 extern volatile uint32_t sagTripCount;
 void reset_log();

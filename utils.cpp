@@ -917,8 +917,18 @@ void debugMemory(const char* caller) {
 
 #include <esp_wifi.h>
 
+static void restartStageShutdownHandler() {
+  // runs inside esp_restart(), before its teardown - the last stamp a clean restart leaves
+  markRestartStage(RESTART_IN_ESP_RESTART);
+}
+
 void doRestart(const char* restartStr) {
   LOG_ALT("Controlled restart: %s", restartStr);
+  // Every step stamps a breadcrumb into RTC memory (markRestartStage) so that when this
+  // hangs - twice in ~12 OTA restarts so far, never on a plain web reset - the next boot
+  // can say which step never returned instead of leaving it to the log, which never
+  // records anything past the line above even when the restart succeeds
+  markRestartStage(RESTART_ENTERED);
   // Quiesce the brownout comparator BEFORE any teardown. With flash_power_down latched,
   // a transient trip during the shutdown's RF and clock transitions powers flash down
   // mid-execution and the chip stops dead until someone presses reset - the reproduced
@@ -926,15 +936,25 @@ void doRestart(const char* restartStr) {
   // supply-sag path is unaffected: battMonitor and sagShutdown do not use the comparator,
   // and the next boot re-arms it in initBrownout()
   disarmBrownout();
+  markRestartStage(RESTART_BROWNOUT_DISARMED);
 #ifdef ISCAM
   appShutdown();
 #endif
+  markRestartStage(RESTART_APP_SHUTDOWN);
 #if INCLUDE_MQTT
   if (mqtt_active) stopMqttClient();
-#endif  
+#endif
+  markRestartStage(RESTART_MQTT_STOPPED);
   resetCrashLoop();
+  markRestartStage(RESTART_CRASHLOOP_RESET);
   flush_log(true);
+  markRestartStage(RESTART_LOG_FLUSHED);
   delay(2000);
+  markRestartStage(RESTART_DELAY_DONE);
+  // esp_restart() runs shutdown handlers last-registered first, so registering here stamps
+  // entry into esp_restart() ahead of the wifi and other handlers
+  if (esp_register_shutdown_handler(restartStageShutdownHandler) != ESP_OK) LOG_WRN("No free shutdown handler slot for the restart breadcrumb");
+  markRestartStage(RESTART_CALLING_ESP_RESTART);
   ESP.restart();
 }
 
