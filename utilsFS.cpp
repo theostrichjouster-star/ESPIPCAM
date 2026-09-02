@@ -70,9 +70,13 @@ void sdBusClk(const char* val) {
   //
   // 40MHz is SD High Speed, the fastest in spec mode this host supports - there is no UHS on the
   // S3, so no SDR50/SDR104 and no DDR (that needs 1.8V signalling). Anything above div 4 is
-  // therefore out of spec for the CARD as well as untested for the board's routing, and is for
-  // measurement only. Deliberately not a config row: nothing persists it, so a power cycle always
-  // comes back at the driver's own 40MHz.
+  // therefore out of spec for the CARD as well as untested for the board's routing.
+  //
+  // It IS persisted: the sdBusDiv config row (appSpecific.cpp) stores the divider and re-applies
+  // it through here after every mount, so a board saved at 3 runs at 53.33MHz from boot even
+  // though prepSD_MMC() has already logged "using 1 bit mode @ 40MHz" - that line describes the
+  // mount, not the running clock. "sdBusDiv=0" logs the clock actually in force. Both bench
+  // boards are saved at 3 (BOARD_TESTING.md, SD bus clock section, integrity round-trips there)
   //
   // Range checked here rather than relying on the HAL_ASSERT inside sdmmc_ll_set_clock_div(),
   // which aborts rather than returns
