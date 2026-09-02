@@ -190,7 +190,18 @@ static bool holdoffSavedRecording = false;
 // from PSRAM at startup. Splitting them is what lets RAMSIZE be 32KB without spending
 // 64KB of internal RAM. The AVI capture path has its own write buffer.
 uint8_t* iSDbuffer = NULL;
-static uint8_t sdReadBuf[RAMSIZE] __attribute__((aligned(4)));
+// Every playback read starts at AVI_HEADER_LEN + k * RAMSIZE, part way through a sector.
+// FATFS copies the rest of that sector out of its window first, then DMA-reads the whole
+// sectors that follow straight into our buffer at that offset (SD_READ_LEAD). The sdmmc
+// driver only DMAs into a 4-byte aligned address; anything else it bounces through a temp
+// buffer ONE SECTOR AT A TIME - 64 single-block commands per 32KB cluster at ~0.5ms each,
+// the 1.0MB/s read rate that survived three other fixes while 32KB-aligned writes did
+// 4.4MB/s. Skewing the read start by SD_READ_SKEW bytes puts that body on an aligned
+// address, so it goes out as one multi-block command
+#define SD_SECTOR 512
+#define SD_READ_LEAD ((SD_SECTOR - AVI_HEADER_LEN % SD_SECTOR) % SD_SECTOR)
+#define SD_READ_SKEW ((4 - SD_READ_LEAD % 4) % 4)
+static uint8_t sdReadBuf[RAMSIZE + 4] __attribute__((aligned(4)));
 static uint8_t sdWriteBuf[SD_WRITE_SIZE + CHUNK_HDR];
 static size_t highPoint;
 static File aviFile;
@@ -2083,17 +2094,14 @@ static void playbackFPS(const char* fname) {
 
 static void readSD() {
   // read next cluster from SD for playback
-  // One POSIX read() per cluster, straight into the DRAM landing buffer. NOT File::read():
-  // that is stdio fread() on a FILE* with a 4KB setvbuf buffer (vfs_api.cpp), so however
-  // large the request FATFS only ever saw 4KB refills - about three SDMMC commands each
-  // once misaligned by the AVI header - and reads ran at 1.0MB/s at both 8KB and 32KB
-  // clusters while 32KB fwrite blocks reach 4.4MB/s on the same card (fwrite bypasses the
-  // buffer for large writes). A single VFS read hands FATFS the whole cluster as one
-  // multi-sector transfer
+  // One POSIX read() per cluster, straight into the DRAM landing buffer (File::read() is
+  // stdio fread() with a 4KB setvbuf buffer, so it reaches FATFS as 4KB refills - measured
+  // identical at 1.0MB/s, the limit was never stdio). The skew is what matters: see
+  // SD_READ_SKEW at the buffer's declaration
   readLen = 0;
   if (!stopPlayback && playbackFd >= 0) {
     uint32_t rTime = micros();
-    ssize_t bytesRead = read(playbackFd, sdReadBuf, RAMSIZE);
+    ssize_t bytesRead = read(playbackFd, sdReadBuf + SD_READ_SKEW, RAMSIZE);
     uint32_t rUs = micros() - rTime;
     readLen = (bytesRead < 0 || bytesRead > (ssize_t)RAMSIZE) ? 0 : bytesRead; // never hand memcpy an error
     // the device figure - deliberately not added to wTimeTot, see its declaration
@@ -2177,7 +2185,7 @@ mjpegStruct getNextFrame(bool firstCall) {
       wTimeTot += millis() - mTime;
       mTime = millis();
       // overlap buffer by CHUNK_HDR to prevent jpeg marker being split between buffers
-      memcpy(iSDbuffer + CHUNK_HDR, sdReadBuf, buffLen); // load new cluster from the DRAM landing buffer
+      memcpy(iSDbuffer + CHUNK_HDR, sdReadBuf + SD_READ_SKEW, buffLen); // load new cluster from the DRAM landing buffer
       LOG_VRB("memcpy took %lu ms for %u bytes", millis() - mTime, buffLen);
       fTimeTot += millis() - mTime;
       remainingBuff = true;
