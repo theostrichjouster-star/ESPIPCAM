@@ -12,6 +12,7 @@
 #include <ESP32_OV5640_AF.h>
 #include <fcntl.h>  // playback reads the AVI through a POSIX fd, see readSD()
 #include <unistd.h>
+#include <esp_task_wdt.h>  // deleteTask() unsubscribes a task before deleting it
 OV5640 ov5640AF = OV5640();
 #else
 #error "Need to install OV5640_Auto_Focus_for_ESP32_Camera library"
@@ -2375,15 +2376,15 @@ bool prepRecording() {
     useMotion = false;
     LOG_WRN("Recording disabled as no SD card");
   } else {
-    LOG_INF("To record new AVI, do one of:");
-    LOG_INF("- press Start Recording on web page");
+    LOG_DIA("To record new AVI, do one of:");
+    LOG_DIA("- press Start Recording on web page");
 #if INCLUDE_PERIPH
     if (pirUse) {
-      LOG_INF("- attach PIR to pin %u", pirPin);
-      LOG_INF("- raise pin %u to 3.3V", pirPin);
+      LOG_DIA("- attach PIR to pin %u", pirPin);
+      LOG_DIA("- raise pin %u to 3.3V", pirPin);
     }
 #endif
-    if (useMotion) LOG_INF("- move in front of camera");
+    if (useMotion) LOG_DIA("- move in front of camera");
   }
   logLine();
   debugMemory("prepRecording");
@@ -2420,7 +2421,16 @@ void appShutdown() {
 
 static void deleteTask(TaskHandle_t& thisTaskHandle) {
   // hangs if try deleting null thisTaskHandle
-  if (thisTaskHandle != NULL) vTaskDelete(thisTaskHandle);
+  if (thisTaskHandle != NULL) {
+    // Unsubscribe from the task watchdog first. vTaskDelete does not (the FreeRTOS
+    // pre-deletion hook is off in this core), so captureTask's entry outlived the task
+    // through every OTA and, never fed again, tripped the 60s watchdog on any transfer
+    // that outlasted it - the two slow-link OTAs of 2 Sep died ~60s after OTAprereq, task
+    // WDT with IDLE0 running. Fast transfers finished first and never saw it.
+    // ESP_ERR_NOT_FOUND for tasks that never enrolled is the normal case, ignore it
+    esp_task_wdt_delete(thisTaskHandle);
+    vTaskDelete(thisTaskHandle);
+  }
   thisTaskHandle = NULL;
 }
 
@@ -2861,15 +2871,15 @@ void dumpCamRegs() {
   int jpgMode = camReg(s, OV5640_JPG_MODE_SEL);
   int vfifo00 = camReg(s, OV5640_VFIFO_CTRL00);
 
-  LOG_INF("******** OV5640 clock tree ********");
-  LOG_INF("Frame size: %s, XCLK %uMHz (fixed)", frameData[sensorFS].frameSizeStr, xclkMhz);
-  LOG_INF("PLL regs: 0x3034=0x%02X 0x3035=0x%02X 0x3036=%d 0x3037=0x%02X 0x3039=0x%02X",
+  LOG_DIA("******** OV5640 clock tree ********");
+  LOG_DIA("Frame size: %s, XCLK %uMHz (fixed)", frameData[sensorFS].frameSizeStr, xclkMhz);
+  LOG_DIA("PLL regs: 0x3034=0x%02X 0x3035=0x%02X 0x3036=%d 0x3037=0x%02X 0x3039=0x%02X",
     r34, r35, mul, r37, r39);
-  LOG_INF("PCLK regs: 0x3108=0x%02X 0x3824=%d 0x460C=0x%02X 0x3103=0x%02X",
+  LOG_DIA("PCLK regs: 0x3108=0x%02X 0x3824=%d 0x460C=0x%02X 0x3103=0x%02X",
     r08, pclkDiv, pclkMan, camReg(s, OV5640_SYSREM_RESET));
-  LOG_INF("Decoded: mul=%d sys_div=%d pre_div=%d(/%.1f) root_2x=%d pclk_root=%d(/%d) pclk_manual=%d pclk_div=%d bypass=%d",
+  LOG_DIA("Decoded: mul=%d sys_div=%d pre_div=%d(/%.1f) root_2x=%d pclk_root=%d(/%d) pclk_manual=%d pclk_div=%d bypass=%d",
     mul, sysDiv, preDiv, preDivVal, root2x, pclkRoot, c.pclkRootDiv, pclkManual, pclkDiv, bypass);
-  LOG_INF("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, PIXCLK %.2fMHz (table 8-5: typ 48, max 96), driver PCLK %.2fMHz (4x low, do not use)",
+  LOG_DIA("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, PIXCLK %.2fMHz (table 8-5: typ 48, max 96), driver PCLK %.2fMHz (4x low, do not use)",
     refin / 1000000.0, vco / 1000000.0, pllClk / 1000000.0, pixClk / 1000000.0, pclkDriver / 1000000.0);
   // table 8-5 caps the parallel port pixel clock at 96MHz. The measured cliff on this part sits
   // between 88 and 92MHz on the pixClk basis, which is close enough to that limit to be the
@@ -2882,9 +2892,9 @@ void dumpCamRegs() {
     vco / 1000000.0);
   // section 6.6 specifies DVP sync widths in "PCLK unit", so HTS x VTS is a count of pixel
   // clocks and the frame period follows from the pixel clock, not from the ISP's SysClk
-  LOG_INF("Timing: HTS %d x%d clocks/line, VTS %d + %d AEC extra = %d effective, %.0f pixel clocks/frame",
+  LOG_DIA("Timing: HTS %d x%d clocks/line, VTS %d + %d AEC extra = %d effective, %.0f pixel clocks/frame",
     hts, lineFactor, vts, vtsExtra, vtsEff, frameClks);
-  LOG_INF("Ceiling: %.1f fps on PIXCLK basis, %.1f on the driver's PCLK figure (app FPS %u)",
+  LOG_DIA("Ceiling: %.1f fps on PIXCLK basis, %.1f on the driver's PCLK figure (app FPS %u)",
     fpsPix, fpsDriverPclk, FPS);
   // Exposure and gain belong next to the frame timing because they are the same trade: the
   // frame period is the hard ceiling on integration time, so pushing the rate up buys darkness
@@ -2896,7 +2906,7 @@ void dumpCamRegs() {
   int aec00 = camReg(s, OV5640_AEC_CTRL00);
   float expLines = (expRaw < 0) ? 0.0f : (float)(expRaw & 0xFFFFF) / 16.0f;
   float expMs = (pixClk > 0 && hts > 0) ? expLines * hts * lineFactor * 1000.0f / pixClk : 0.0f;
-  LOG_INF("Exposure: %.1f lines = %.2fms of the %.2fms frame, gain %.2fx (ceiling %.2fx), night mode %s",
+  LOG_DIA("Exposure: %.1f lines = %.2fms of the %.2fms frame, gain %.2fx (ceiling %.2fx), night mode %s",
     expLines, expMs, (fpsPix > 0) ? 1000.0f / fpsPix : 0.0f, gainRaw / 16.0f, gainCeil / 16.0f,
     (aec00 < 0) ? "?" : ((aec00 & 0x04) ? "ON - frame may extend" : "off"));
   // 0x4417[0] is the JPEG FIFO overflow flag, and it is here because it separates two
@@ -2923,7 +2933,7 @@ void dumpCamRegs() {
   // matched at both offsets, zero bad frames. It took a lit scene and a person looking at it
   int jpegCtrl = camReg(s, OV5640_JPEG_CTRL00);
   int jfifoOvf = camReg(s, OV5640_JFIFO_OVERFLOW);
-  LOG_INF("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d, input %s, JFIFO overflow %s",
+  LOG_DIA("JPEG: mode %d (0x4713=0x%02X), 0x4600=0x%02X fixed height %s, VFIFO output %dx%d, input %s, JFIFO overflow %s",
     jpgMode < 0 ? -1 : jpgMode & 0x07, jpgMode, vfifo00, (vfifo00 > 0 && (vfifo00 & 0x20)) ? "on" : "off",
     camReg16(s, OV5640_VFIFO_HSIZE), camReg16(s, OV5640_VFIFO_VSIZE),
     (jpegCtrl < 0) ? "?" : ((jpegCtrl & 0x80) ? "YUV422" : "YUV420"),
@@ -2932,7 +2942,7 @@ void dumpCamRegs() {
   int xEnd = camReg16(s, OV5640_X_ADDR_END), yEnd = camReg16(s, OV5640_X_ADDR_END + 2);
   int xOff = camReg16(s, OV5640_X_OFFSET), yOff = camReg16(s, OV5640_X_OFFSET + 2);
   int isp01 = camReg(s, OV5640_ISP_CONTROL01);
-  LOG_INF("Window: start %d,%d end %d,%d output %dx%d offset %d,%d",
+  LOG_DIA("Window: start %d,%d end %d,%d output %dx%d offset %d,%d",
     xSt, ySt, xEnd, yEnd,
     camReg16(s, OV5640_X_OUTPUT_SIZE), camReg16(s, OV5640_X_OUTPUT_SIZE + 2),
     xOff, yOff);
@@ -2943,19 +2953,19 @@ void dumpCamRegs() {
   // so at FHD these two lines disagree by 2624x1472 against 1920x1080. Pre-scaling size is the
   // input less twice the offset (datasheet figure 4-3); when it equals the output size the
   // scaler is doing nothing and 0x5001[5] should be clear
-  LOG_INF("ISP: input %dx%d, pre-scale %dx%d, scale %s (0x5001=0x%02X)",
+  LOG_DIA("ISP: input %dx%d, pre-scale %dx%d, scale %s (0x5001=0x%02X)",
     xEnd - xSt + 1, yEnd - ySt + 1, xEnd - xSt + 1 - 2 * xOff, yEnd - ySt + 1 - 2 * yOff,
     (isp01 < 0) ? "?" : ((isp01 & 0x20) ? "on" : "off"), isp01);
-  LOG_INF("Subsample: 0x3814=0x%02X 0x3815=0x%02X (%.1fx by %.1fx) 0x3820=0x%02X 0x3821=0x%02X",
+  LOG_DIA("Subsample: 0x3814=0x%02X 0x3815=0x%02X (%.1fx by %.1fx) 0x3820=0x%02X 0x3821=0x%02X",
     xInc, yInc, xBin, yBin, camReg(s, OV5640_TIMING_TC_R20), camReg(s, OV5640_TIMING_TC_R21));
   // This is the ESP32-S3's own on-die sensor (utils.cpp readInternalTemp, configured for a
   // 20-100C band), NOT the camera - it sits in this dump only because it is the one thermal
   // number we have. The OV5640 exposes no temperature register at all, and its datasheet
   // table 8-2 puts stable image quality at 0-50C junction against -30 to +70C for merely
   // functioning. So a hot S3 reading is a warning about a part we cannot actually measure
-  LOG_INF("ESP32-S3 die temp: %.1fC (not the camera - OV5640 has no sensor, stable to 50C), light %u%%, free heap %s, free PSRAM %s",
+  LOG_DIA("ESP32-S3 die temp: %.1fC (not the camera - OV5640 has no sensor, stable to 50C), light %u%%, free heap %s, free PSRAM %s",
     readInternalTemp(), lightLevel, fmtSize(ESP.getFreeHeap()), fmtSize(ESP.getFreePsram()));
-  LOG_INF("**********************************");
+  LOG_DIA("**********************************");
 }
 
 void setCamReg(const char* csv) {

@@ -194,11 +194,41 @@ void reset_log() {
   LOG_INF("Cleared %s log file", logType == 0 ? "RAM" : "SD"); 
 }
 
+static void saveCrashRamLog() {
+  // The previous boot ended without a controlled restart (crash, watchdog, brownout, a hang
+  // cleared by the reset button) or in a controlled restart that never completed. The RTC
+  // ring still holds the pre-crash tail at this point - printResetReason() has added the
+  // reason and any backtrace, and new boot lines overwrite the OLDEST bytes first, with only
+  // a few written so far - so copy it out to a file now. Left in the ring it is gone within
+  // the boot: one boot's chatter is ~6KB of a 7KB ring, and the reason for two of the 2 Sep
+  // reboots scrolled away exactly this way before anyone read it. Once per boot
+  static bool done = false;
+  if (done || esp_reset_reason() == ESP_RST_POWERON) return; // RTC contents undefined after power on
+  done = true;
+  uint8_t st = restartReport ? restartReport : (restartMagic == RESTART_MAGIC ? restartStage : 0);
+  bool hungRestart = st && st != RESTART_IN_ESP_RESTART;
+  // The reset reason is the signal, not crashLoopSuspected: that flag is cleared by the first
+  // successful ping, so a crash after a healthy boot looks controlled to it (the crashTest
+  // dirty reboot proved it). Anything but a software restart, a power on or a deep sleep
+  // wake means the previous boot did not end on its own terms - panic, any watchdog,
+  // brownout, or the reset button (USB/EXT) after a hang
+  esp_reset_reason_t why = esp_reset_reason();
+  bool controlled = (why == ESP_RST_SW || why == ESP_RST_POWERON || why == ESP_RST_DEEPSLEEP);
+  if (controlled && !hungRestart && !crashLoopSuspected) return;
+  char crashName[FILE_NAME_LEN];
+  time_t now = getEpoch();
+  strftime(crashName, sizeof(crashName), DATA_DIR "/crash_%Y%m%d_%H%M%S" TEXT_EXT, localtime(&now));
+  saveRamLog(crashName);
+  LOG_WRN("Previous boot ended %s (reset reason %d) - its RAM log is saved as %s",
+    hungRestart ? "in a restart that never completed" : "without a controlled restart", (int)why, crashName);
+}
+
 void remote_log_init() {
   // setup required log mode
   if (sdLog) {
     flush_log(false);
     remote_log_init_SD(); // store log on sd card
+    saveCrashRamLog();
   } else flush_log(true);
 }
 
@@ -212,6 +242,12 @@ static void logTask(void *pvParams) {
       msg[MAX_OUT - 1] = 0; // ensure always have ending newline
       // output message to various recipients
       size_t msgLen = strlen(msg);
+      // LOG_DIA marks a line as not for the RTC ring; strip the mark before anything sees it
+      bool noRam = msgLen > 1 && msg[msgLen - 2] == LOG_DIA_MARK;
+      if (noRam) {
+        msg[msgLen - 2] = '\n';
+        msg[--msgLen] = 0;
+      }
       if (msgLen > 1) {
         wsAsyncSendText(msg); // output to browser over web socket
         if (msg[msgLen - 2] == '~') msg[msgLen - 2] = ' '; // remove '~' if present
@@ -222,7 +258,7 @@ static void logTask(void *pvParams) {
         fflush(stdout);
       } else delay(10); // allow time for other tasks
       if (msgLen > 1) {
-        ramLogStore(msg, msgLen); // store in rtc ram 
+        if (!noRam) ramLogStore(msg, msgLen); // store in rtc ram 
         if (sdLog) {
           if (log_remote_fp != NULL) {
             // output to SD if file opened

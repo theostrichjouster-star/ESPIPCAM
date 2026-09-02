@@ -466,6 +466,14 @@ void logIncrementDropCount();
 #define LOG_INF(format, ...) \
   LOG_SEND("[%s %s] " format "\n", esp_log_system_timestamp(), __FUNCTION__, ##__VA_ARGS__)
 
+// Diagnostic: everything LOG_INF does except the RTC RAM ring. For boot-time dumps (the
+// OV5640 clock tree, the recording help text) that belong on serial and the SD log but
+// that overwrite the pre-crash tail the 7KB ring exists to keep - one boot's chatter is
+// ~6KB of it. logTask strips the mark before any output sees the line
+#define LOG_DIA_MARK '\x1f'
+#define LOG_DIA(format, ...) \
+  LOG_SEND("[%s %s] " format "\x1f\n", esp_log_system_timestamp(), __FUNCTION__, ##__VA_ARGS__)
+
 #define LOG_ALT(format, ...) \
   LOG_SEND("[%s %s] " format "~\n", esp_log_system_timestamp(), __FUNCTION__, ##__VA_ARGS__)
 
