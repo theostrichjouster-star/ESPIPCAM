@@ -31,13 +31,15 @@ for entry in "${MATRIX[@]}"; do
     st=$(kv "$rec" storageMs); sd=$(kv "$rec" sdKBs); bo=$(kv "$rec" boost); rs=$(kv "$rec" rescues); bu=$(kv "$rec" busy)
     du=$(kv "$rec" duration); m0=$(kv "$rec" motion0); m1=$(kv "$rec" motion1); p1=$(kv "$rec" probe1); p2=$(kv "$rec" probe2)
     still=$(kv "$rec" still); resc=$(kv "$rec" rescue)
-    verdict=$(python - "$act" "$f" "$frames" "$dur" "$m0" "$m1" "$rs" "$still" "$dims" "$file" <<'EOF'
+    verdict=$(python - "$act" "$f" "$frames" "${du:-$dur}" "$m0" "$m1" "$rs" "$still" "$dims" "$file" <<'EOF'
 import sys, re
 act, f, frames, dur, m0, m1, rs, still, dims, fn = sys.argv[1:11]
 why = []
 if fn == "NONE": why.append("noclip")
 try:
     if float(act) < 0.98 * float(f): why.append(f"rate {act}")
+    # against the clip's OWN duration (closeAvi "AVI duration"), not the nominal button
+    # time: a 20 s press closes at ~21 s, and at 20 fps that is 20 extra frames
     if abs(int(frames) - int(dur) * int(f)) > max(2, int(f)): why.append(f"frames {frames}")
 except ValueError: why.append("parse")
 b0 = re.search(r"bad=(\d+)", m0); b1 = re.search(r"bad=(\d+)", m1)
