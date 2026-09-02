@@ -324,6 +324,8 @@ bool streamsBusy();   // any sustained client needing frames - streamServer.cpp
 bool sustainCancelled(); // the sustain download has been asked to stop - streamServer.cpp
 bool streamSlotActive(uint8_t taskNum); // a viewer is attached to this slot - streamServer.cpp
 extern uint32_t streamSkipped[]; // frames the capture task could not hand to a busy sender
+extern uint64_t streamSendUs[];    // microseconds spent inside httpd send calls
+extern uint64_t streamSentBytes[]; // bytes handed to those send calls
 extern int battPin;
 extern int battScale;
 extern int battWarnMv;

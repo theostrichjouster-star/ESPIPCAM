@@ -25,6 +25,14 @@ static bool isStreaming[MAX_STREAMS] = {false};
 // skip count means the sender is blocked in httpd_resp_send_chunk and the transport is the
 // ceiling; near zero means the camera is supplying no faster than we send
 uint32_t streamSkipped[MAX_STREAMS] = {0};
+// Send-path instrumentation. streamSendUs accumulates the time actually spent inside
+// httpd_resp_send_chunk, so bytes/sendUs is the transport rate MEASURED DIRECTLY -
+// no model fitting, no scene-drift normalisation. The remainder of the wall clock is
+// time waiting for the camera. Together they say whether the stream is transport
+// bound or camera bound without needing an A/B at all. Exposed live in /status so a
+// run can be sampled mid-flight instead of only at end-of-stream
+uint64_t streamSendUs[MAX_STREAMS] = {0};
+uint64_t streamSentBytes[MAX_STREAMS] = {0};
 size_t streamBufferSize[MAX_STREAMS] = {0};
 byte* streamBuffer[MAX_STREAMS] = {NULL}; // buffer for stream frame
 static char variable[FILE_NAME_LEN]; 
@@ -121,6 +129,7 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
   isStreaming[taskNum] = true;
   streamBufferSize[taskNum] = 0;
   streamSkipped[taskNum] = 0;
+  streamSendUs[taskNum] = streamSentBytes[taskNum] = 0;
   if (!taskNum) motionJpegLen = 0;
   // TCP_NODELAY was tried here and MEASURED AS A LOSS - 177 -> 165 frames per 20s at
   // identical frame sizes, ~6% of goodput, repeatable across runs (COM4, 1 Sep). The
@@ -155,10 +164,15 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
       jpgBuf = streamBuffer[taskNum];
     }
     if (res == ESP_OK) {
-      // send next frame in stream, boundary and jpeg header as a single chunk
+      // send next frame in stream, boundary and jpeg header as a single chunk.
+      // Bracketed with micros() to measure the transport directly - keep everything
+      // except the send calls out of the bracket, and never log inside it
       snprintf(hdrBuf, HDR_BUF_LEN-1, JPEG_BOUNDARY JPEG_TYPE, jpgLen);
+      uint32_t sendStart = micros();
       res = httpd_resp_sendstr_chunk(req, hdrBuf);
       if (res == ESP_OK) res = httpd_resp_send_chunk(req, (const char*)jpgBuf, jpgLen);
+      streamSendUs[taskNum] += micros() - sendStart;
+      if (res == ESP_OK) streamSentBytes[taskNum] += jpgLen;
       frameCnt++;
     }
     mjpegLen += jpgLen;
@@ -176,6 +190,16 @@ static void showStream(httpd_req_t* req, uint8_t taskNum) {
   // skipped is the diagnostic: high means transport-bound, near zero means camera-bound
   LOG_INF("MJPEG: %lu frames, %lu skipped (sender busy), total %s in %0.1fs @ %0.1ffps",
     frameCnt, streamSkipped[taskNum], fmtSize(mjpegLen), mjpegTimeF, (float)(frameCnt) / mjpegTimeF);
+  // Transport rate measured directly, plus what share of the wall clock the sender
+  // actually spent sending. sendBusy near 100% means the transport is saturated and
+  // the ceiling is genuinely below us; well under 100% means we are waiting on
+  // something else and the "ceiling" is not the transport at all
+  if (streamSendUs[taskNum] > 0) {
+    float sendSecs = (float)streamSendUs[taskNum] / 1000000.0;
+    LOG_INF("MJPEG transport: %s sent in %0.2fs of send calls = %0.0f KB/s, sender busy %0.0f%% of wall clock",
+      fmtSize(streamSentBytes[taskNum]), sendSecs,
+      (float)streamSentBytes[taskNum] / sendSecs / 1024.0, 100.0 * sendSecs / mjpegTimeF);
+  }
 }
 
 static void audioStream(httpd_req_t* req, uint8_t taskNum) {
@@ -382,5 +406,7 @@ bool streamsBusy() {return false;}
 bool sustainCancelled() {return false;}
 bool streamSlotActive(uint8_t taskNum) {return false;}
 uint32_t streamSkipped[MAX_STREAMS] = {0};
+uint64_t streamSendUs[MAX_STREAMS] = {0};
+uint64_t streamSentBytes[MAX_STREAMS] = {0};
 
 #endif

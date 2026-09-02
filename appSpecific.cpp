@@ -8,6 +8,7 @@
 // s60sc 2022 - 2024
 
 #include "appGlobals.h"
+#include <esp_wifi.h> // negotiated PHY mode and AP info for the transport telemetry
 
 static char variable[FILE_NAME_LEN]; 
 static char value[FILE_NAME_LEN];
@@ -559,6 +560,34 @@ char* buildAppJsonString(bool filter) {
   p += sprintf(p, "\"lwipWnd\":\"%d\",", CONFIG_LWIP_TCP_WND_DEFAULT);
   p += sprintf(p, "\"lwipMss\":\"%d\",", CONFIG_LWIP_TCP_MSS);
   p += sprintf(p, "\"idfVer\":\"%s\",", esp_get_idf_version());
+  // Negotiated PHY, not the configured one. Without this we are blind to whether the
+  // link came up as 11b/11g/HT20/HT40 - and an 11g association would cap the PHY at
+  // 54Mbit/s and explain a low ceiling entirely. phyMode is what we actually got;
+  // apBw is what the AP advertises (1 = 20MHz, 2 = 40MHz), so the pair says whether
+  // a wider channel is even on offer before any effort is spent trying to use one
+  wifi_phy_mode_t phyMode;
+  if (esp_wifi_sta_get_negotiated_phymode(&phyMode) == ESP_OK) {
+    const char* phyStr = phyMode == WIFI_PHY_MODE_LR ? "LR" : phyMode == WIFI_PHY_MODE_11B ? "11B"
+      : phyMode == WIFI_PHY_MODE_11G ? "11G" : phyMode == WIFI_PHY_MODE_HT20 ? "HT20"
+      : phyMode == WIFI_PHY_MODE_HT40 ? "HT40" : "other";
+    p += sprintf(p, "\"phyMode\":\"%s\",", phyStr);
+  } else p += sprintf(p, "\"phyMode\":\"n/a\",");
+  wifi_ap_record_t apInfo;
+  if (esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK) {
+    p += sprintf(p, "\"apChan\":\"%u\",", apInfo.primary);
+    p += sprintf(p, "\"apBw\":\"%d\",", (int)apInfo.bandwidth);
+    p += sprintf(p, "\"ap11n\":\"%u\",", apInfo.phy_11n ? 1 : 0);
+    p += sprintf(p, "\"apAuth\":\"%d\",", (int)apInfo.authmode);
+    p += sprintf(p, "\"apBssid\":\"%02X%02X%02X%02X%02X%02X\",", apInfo.bssid[0],
+      apInfo.bssid[1], apInfo.bssid[2], apInfo.bssid[3], apInfo.bssid[4], apInfo.bssid[5]);
+  }
+  // Live transport rate for slot 0, pollable MID-stream rather than only at the end.
+  // sendBusy is the share of wall clock actually inside the send calls
+  if (streamSendUs[0] > 0) {
+    p += sprintf(p, "\"sendKBs\":\"%llu\",", streamSentBytes[0] * 1000000ULL / streamSendUs[0] / 1024ULL);
+    p += sprintf(p, "\"sendUs\":\"%llu\",", streamSendUs[0]);
+  }
+  p += sprintf(p, "\"streamSkipped\":\"%lu\",", streamSkipped[0]);
 #endif
 #if INCLUDE_FTP_HFS
   p += sprintf(p, "\"progressBar\":%d,", percentLoaded);

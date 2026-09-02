@@ -228,7 +228,14 @@ static bool startWifi(bool firstcall = true) {
   }
   if (wlStat != WL_CONNECTED) LOG_WRN("SSID %s not connected %s", ST_SSID, wifiStatusStr(wlStat));
 
-  if (wlStat == WL_NO_SSID_AVAIL || allowAP) setWifiAP(); // AP allowed if no Station SSID eg on first time use
+  // AP only when there is genuinely no station configured (first time use), or the user
+  // asked for it. This used to test wlStat == WL_NO_SSID_AVAIL, but that status is also
+  // returned when a CONFIGURED SSID merely was not found inside the 5s association
+  // window - so a slow association at boot left a rogue AP running for the whole session.
+  // Observed 2 Sep: AP started at 00:53:22.027, station associated at 00:53:22.958, one
+  // second too late. AP_STA then forces the softAP onto the station's channel and blocks
+  // modem sleep, which is exactly what allowAP=0 exists to avoid
+  if (!strlen(ST_SSID) || allowAP) setWifiAP();
   setupMdnsHost();
   if (pingHandle == NULL) startPing();
   return wlStat == WL_CONNECTED ? true : false;
