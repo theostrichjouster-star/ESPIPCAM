@@ -52,7 +52,14 @@ EOF
     echo "$idx,$name,$f,$q,$file,$du,$frames,$act,$avg,$st,$sd,$bo,$rs,$bu,\"$m0\",\"$m1\",$p1,$p2,$still,$verdict" >> "$CSV"
     total=$((total + 1))
     log "  $file: $frames fr, actual $act, avg ${avg}B, storage ${st}ms, SD ${sd}kB/s, boost $bo, busy $bu%, probes $p1 $p2, still $still -> $verdict"
-    if [ "$verdict" = "PASS" ]; then good=$((good + 1)); pass; else anomaly "$name $f q$q: $verdict"; fi
+    # a rate or frame-count miss at a ceiling point is the MEASUREMENT (the SD budget or the
+    # frame window binding, which is what the tier exists to find) - only structural
+    # failures count toward the two-anomaly abort
+    case "$verdict" in
+      PASS) good=$((good + 1)); pass ;;
+      *noclip*|*bad*|*rescues*|*parse*|*still*) anomaly "$name $f q$q: $verdict" ;;
+      *) log "  MISS (measured, not an anomaly): $name $f q$q $verdict"; pass ;;
+    esac
     [ "$resc" = "1" ] && { ctl "quality=$q" > /dev/null; log "quality re-asserted after a rescue"; }
     assert_alive
   done
