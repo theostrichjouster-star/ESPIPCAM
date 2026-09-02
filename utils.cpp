@@ -335,11 +335,14 @@ const char* formatIPstr(bool getAP) {
   return localIP;
 }
 
+// customised watchdogs for particular tasks: ping task (0) used as watchdog in case of esp
+// freeze, capture task (1). The enrolled handles are kept so that stopWatchDog() can
+// unsubscribe them - esp_task_wdt_deinit() refuses while any task is still subscribed
+static bool watchDogStarted[4] = {false, false, false, false};
+static TaskHandle_t watchDogTask[4] = {NULL, NULL, NULL, NULL};
+static bool twdtConfigured = false;
+
 void resetWatchDog(int wdIndex, uint32_t wdTimeout) {
-  // customised watchdogs for particular tasks
-  // ping task (0) used as watchdog in case of esp freeze
-  static bool watchDogStarted[4] = {false, false, false, false};
-  static bool twdtConfigured = false;
   if (watchDogStarted[wdIndex]) esp_task_wdt_reset();
   else {
     // Configure the timer once only, then just enrol each task. This used to reconfigure on the
@@ -359,6 +362,7 @@ void resetWatchDog(int wdIndex, uint32_t wdTimeout) {
     esp_task_wdt_add(NULL);
     if (esp_task_wdt_status(NULL) == ESP_OK) {
       watchDogStarted[wdIndex] = true;
+      watchDogTask[wdIndex] = xTaskGetCurrentTaskHandle();
       esp_task_wdt_reset();
       LOG_INF("WatchDog started for task: %s", pcTaskGetName(NULL));
     } else LOG_ERR("WatchDog failed to start for task: %s ", pcTaskGetName(NULL));
@@ -368,8 +372,21 @@ void resetWatchDog(int wdIndex, uint32_t wdTimeout) {
 void stopWatchDog() {
   // Disable the watchdog entirely, for teardown paths that deliberately stop the things it
   // watches. OTAprereq() halts the frame timer and the ping task, so every enrolled task stops
-  // petting - without this the panic would fire part way through an update
-  esp_task_wdt_deinit();
+  // petting - without this the panic would fire part way through an update.
+  // The deinit on its own never worked: esp_task_wdt_deinit() returns ESP_ERR_INVALID_STATE
+  // while any task is still subscribed, and both always were, so the watchdog stayed armed
+  // with two entries that were about to stop being fed. Any update that outlasted the 60s
+  // timeout then died in a task WDT panic - ~60s after OTAprereq, IDLE0 running, twice on
+  // 2 Sep on a slow link - while fast transfers finished first and never showed it.
+  // Unsubscribe first, then deinit, and say so if it still fails
+  for (int i = 0; i < 4; i++) {
+    if (watchDogStarted[i] && watchDogTask[i] != NULL) esp_task_wdt_delete(watchDogTask[i]);
+    watchDogStarted[i] = false;
+    watchDogTask[i] = NULL;
+  }
+  esp_err_t res = esp_task_wdt_deinit();
+  if (res == ESP_OK) twdtConfigured = false;
+  else LOG_WRN("Task watchdog still armed (%s) - an update longer than %us will reset the board", espErrMsg(res), wifiTimeoutSecs * 2);
 }
 
 static void statusCheck() {
