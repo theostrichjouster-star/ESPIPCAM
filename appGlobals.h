@@ -187,7 +187,13 @@
 #define AUDIO_PRI 5
 #define INTERCOM_PRI 5
 #define LOG_PRI 5
-#define PLAY_PRI 4
+// playback reader above every other app task: it is I/O bound (one cluster read per
+// notify, blocked on DMA for most of it) so it cannot starve anything, and its wake latency
+// after each DMA completion feeds straight into the playback frame rate. Measured 4 -> 7:
+// per-cluster read 8.3 -> 7.7ms, consumer wait 44 -> 29ms/frame. A modest gain - most of
+// the per-read overhead is below app priorities (sdmmc completion path vs wifi/lwip), so
+// cluster size, not priority, is the lever that matters
+#define PLAY_PRI 7
 #define TELEM_PRI 3
 #define TGRAM_PRI 1
 #define EMAIL_PRI 1
