@@ -2093,7 +2093,10 @@ static void readSD() {
     LOG_VRB("SD read time %lu us", rUs);
   }
   xSemaphoreGive(readSemaphore); // signal that ready
-  delay(10);
+  // No delay after the give. Upstream slept 10ms here, which serialised every 8KB cluster
+  // to 10ms + read time regardless of how fast the consumer drained it: measured as 101ms
+  // per frame of consumer wait against 55ms of actual reading, and 7.5fps playback of a
+  // 30fps clip. The task blocks on its notify straight after this, so nothing needs the yield
 }
 
 
