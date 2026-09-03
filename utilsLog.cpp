@@ -130,12 +130,21 @@ void reportRestartStage() {
   FILE* fp = fopen("/sdcard" RESTART_FILE_PATH, "r");
   if (fp == NULL) return; // no controlled restart was attempted, or no card
   char line[64];
-  unsigned long atMs = 0;
+  unsigned long firstMs = 0, atMs = 0;
   unsigned stage = 0;
+  bool haveFirst = false;
   while (fgets(line, sizeof(line), fp) != NULL) {
     unsigned long ms; unsigned st;
-    if (sscanf(line, "%lu %u", &ms, &st) == 2) { atMs = ms; stage = st; }
+    if (sscanf(line, "%lu %u", &ms, &st) != 2) continue;
+    if (!haveFirst) { firstMs = ms; haveFirst = true; }
+    atMs = ms;
+    stage = st;
   }
+  // Each line carries millis(), which is uptime, not elapsed teardown - reporting it raw
+  // read as though the restart had taken 160 seconds. The span from the first stage to the
+  // last is the number that means something: how long the teardown ran before it finished
+  // or stopped, which is also what separates a hung stage from a merely slow one
+  unsigned long tookMs = atMs - firstMs;
   fclose(fp);
   STORAGE.remove(RESTART_FILE_PATH);
   if (!stage) return;
@@ -147,9 +156,9 @@ void reportRestartStage() {
   // previousRestartStage() identical for prepRecording() and saveCrashRamLog()
   bool completed = stage >= RESTART_CALLING_ESP_RESTART && esp_reset_reason() == ESP_RST_SW;
   restartReport = completed ? RESTART_IN_ESP_RESTART : (uint8_t)stage; // SD overrides RTC
-  if (completed) LOG_INF("Previous controlled restart completed every stage (SD trace, %lums to esp_restart)", atMs);
-  else LOG_WRN("Previous controlled restart HUNG after stage %u (%s) at %lums - see doRestart()",
-    stage, restartStageName(stage), atMs);
+  if (completed) LOG_INF("Previous controlled restart completed every stage (SD trace, teardown took %lums)", tookMs);
+  else LOG_WRN("Previous controlled restart HUNG after stage %u (%s), %lums into the teardown - see doRestart()",
+    stage, restartStageName(stage), tookMs);
 }
 static RTC_NOINIT_ATTR uint32_t crashLoop;
 static bool crashLoopSuspected = false; // this boot only; reported once logging is up
