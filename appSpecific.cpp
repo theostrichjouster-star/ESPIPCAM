@@ -163,6 +163,12 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "dumpCam")) dumpCamRegs();
   else if (!strcmp(variable, "motionStats")) dumpMotionStats();
   else if (!strcmp(variable, "camPll")) setCamPll(value);
+  // debug: the readout-row probe - <yFactor>[,<vts>[,<xFactor>]]. QVGA, VGA and 1280X960
+  // share one 2624x1952 readout at VTS 984, which is why they share a 39.47 ceiling.
+  // Reading fewer rows does NOT lift it: measured 3 Sep, 4x vertical gained nothing at
+  // QVGA and stopped VGA producing frames at all. Kept as the record of that dead end -
+  // see setSubSample() in mjpeg2sd.cpp and BOARD_TESTING.md 31
+  else if (!strcmp(variable, "subSample")) setSubSample(value);
   else if (!strcmp(variable, "camReg")) setCamReg(value);
   else if (!strcmp(variable, "camRegRd")) getCamReg(value);
   // per-board provisioning, stored in NVS not the config file - see setExtDVDD()

@@ -261,6 +261,7 @@ bool recoverAvi(); // repair a recording interrupted by supply loss - call befor
 void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
 void dumpCamRegs();
+void setSubSample(const char* csv); // debug probe: subsample increments + VTS, see mjpeg2sd.cpp
 void setCamReg(const char* csv);
 void getCamReg(const char* addr);
 void setExtDVDD(int val); // per-board NVS key: OV5640 internal regulator bypass for external DVDD

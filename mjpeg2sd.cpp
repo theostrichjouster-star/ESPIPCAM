@@ -2992,6 +2992,64 @@ void dumpCamRegs() {
   LOG_DIA("**********************************");
 }
 
+void setSubSample(const char* csv) {
+  // Debug probe for the readout-row lever. QVGA, VGA and 1280X960 all read the SAME window -
+  // 2624x1952 subsampled 2x2 to 1312x976, VTS 984 - and only differ in what the ISP scaler
+  // does afterwards, which is why all three cap at 39.47fps. 1280X960 genuinely needs its 960
+  // rows, but QVGA and VGA are paying a full 1280x960 readout and then throwing pixels away,
+  // so reading fewer rows should raise their ceiling in proportion.
+  //
+  // csv is <yFactor>[,<vts>[,<xFactor>]]. Datasheet table 4-2: 0x3814 TIMING X INC and 0x3815
+  // TIMING Y INC, each [7:4] odd increment and [3:0] even increment, default 0x11. The factor
+  // is the mean of the two, and the driver's own tables use even=1, so 1x is 0x11 and the
+  // current 2x is 0x31, making 4x 0x71 by the same encoding.
+  //
+  // DEAD END - MEASURED 3 Sep 2026, KEPT SO NOBODY REPEATS IT. The idea was that reading
+  // fewer rows shortens the frame. On this part it does not, because the saving is paid
+  // straight back in binning time:
+  //   QVGA  4x, VTS 496: registers took (0x3815 reads back 0x71), predicted 78.3fps,
+  //                      VSYNC measured 39.1 against a 39.5 baseline - no gain at all.
+  //                      xclkStat back-solved the implied clock at 39.99MHz against 80.00
+  //                      computed, exactly half, which is the tell.
+  //   VGA   4x, VTS 496: sensor stopped producing frames entirely, still returned 0 bytes.
+  // The factor of two is datasheet section 3.2: "vertical binning will automatically turn on
+  // when in vertical-subsampled formats", and binning AVERAGES row pairs before the ADC
+  // rather than skipping them. So 4x halves the row count and doubles the per-row cost, and
+  // the two cancel exactly. VGA additionally does not fit: 1952 rows at 4x leaves 488 read,
+  // and its 480-row output does not survive the offsets on top of that.
+  // Both sizes recover fully on the next framesize change, which reloads the register block.
+  //
+  // So QVGA, VGA and 1280X960 all remain capped at 39.47fps, and the only lever left is the
+  // pixel clock, which helps 1280X960 alone (80 -> 85.33MHz is mul 128, but the measured
+  // image cliff is 88-92, so it is thin margin for ~2.6fps).
+  //
+  // VTS must come down with the rows or nothing changes anyway - the frame period is
+  // HTS x VTS whatever the readout does, so leaving VTS at 984 just adds blanking.
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL) return;
+  char buf[32];
+  strncpy(buf, csv, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = 0;
+  char* tok = strtok(buf, ",");
+  int yF = tok ? (int)strtol(tok, NULL, 0) : 0;
+  tok = strtok(NULL, ","); int vts = tok ? (int)strtol(tok, NULL, 0) : 0;
+  tok = strtok(NULL, ","); int xF = tok ? (int)strtol(tok, NULL, 0) : 0;
+  if (yF < 1 || yF > 8) { LOG_WRN("subSample: yFactor %d out of range 1-8", yF); return; }
+  int yInc = (((2 * yF - 1) & 0x0F) << 4) | 0x01;
+  s->set_reg(s, OV5640_Y_INCREMENT, 0xFF, yInc);
+  if (xF >= 1 && xF <= 8) s->set_reg(s, OV5640_X_INCREMENT, 0xFF, (((2 * xF - 1) & 0x0F) << 4) | 0x01);
+  if (vts >= 8 && !senWrite16(s, 0x380E, vts)) LOG_WRN("subSample: VTS %d did not read back", vts);
+  delay(50);
+  applyAecLimits(s); // banding steps and the exposure ceiling both follow VTS
+  int gotY = s->get_reg(s, OV5640_Y_INCREMENT, 0xFF), gotX = s->get_reg(s, OV5640_X_INCREMENT, 0xFF);
+  int hts = senReg16(s, 0x380C), gotVts = senReg16(s, 0x380E), lf = senLineFactor(s);
+  camClocks_t c = camClocks(s);
+  float fps = (c.valid && hts > 0 && gotVts > 0) ? (float)c.pixClk / ((float)hts * lf * gotVts) : 0;
+  LOG_ALT("subSample: 0x3814=0x%02X 0x3815=0x%02X (%.1fx by %.1fx), HTS %d x%d, VTS %d -> %.2ffps predicted",
+    gotX, gotY, (((gotX >> 4) & 0x0F) + (gotX & 0x0F)) / 2.0f, (((gotY >> 4) & 0x0F) + (gotY & 0x0F)) / 2.0f,
+    hts, lf, gotVts, fps);
+}
+
 void setCamReg(const char* csv) {
   // debug: write one sensor register, for timing experiments such as walking HTS down.
   // csv is addr,value - strtol base 0, so both accept 0x hex or plain decimal.
