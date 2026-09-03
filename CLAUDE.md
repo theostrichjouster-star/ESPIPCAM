@@ -70,8 +70,21 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - Board acts possessed? Check SD free space first (a full card wedges as a fake wifi
   failure), then audit the host PC for orphaned automation from earlier sessions.
   All host-side polling loops must be bounded.
-- Serial diagnostics: 115200 baud with DtrEnable/RtsEnable false (proven
-  non-resetting on these boards).
+- Serial diagnostics: 115200 baud. **Opening the port REBOOTS the board** - measured
+  3 Sep 2026, a .NET SerialPort open with DtrEnable/RtsEnable set false before Open()
+  still produced `rst:0x15 (USB_UART_CHIP_RESET)` on a healthy board. An earlier
+  version of this file called that combination proven non-resetting; it is not, and
+  every "board is dead, no serial output" call made by opening the port after the
+  fact was reading a board it may have just reset. To watch an event, open the port
+  FIRST, let the board boot, and keep it open - never attach mid-incident and never
+  attach to preserve a state you care about. That reset does preserve RTC memory
+  (reason 11, crash snapshot fires), unlike the RESET button, which reports POWERON
+  and wipes it - so it is the gentler recovery when it works at all. On a genuinely
+  wedged board it does not work: the USB peripheral is gone with the CPU, which is
+  what the pySerial write timeout means.
+- Panic output goes to the IDF console, which is UART0 (`CONFIG_ESP_CONSOLE_UART_DEFAULT`)
+  with USB Serial/JTAG only secondary. The ROM banner does reach USB, so USB is usable,
+  but do not assume a silent USB port means a silent chip.
 - Windows traps: use the Edit tool, never sed (CRLF corruption); no double quotes
   inside PowerShell here-string commit messages; `taskkill /F /PID <pid>`.
 
