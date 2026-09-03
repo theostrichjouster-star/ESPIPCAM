@@ -43,6 +43,14 @@ char startupFailure[SF_LEN] = {0};
 RTC_NOINIT_ATTR char messageLog[RAM_LOG_LEN];
 RTC_NOINIT_ATTR uint16_t mlogEnd;
 static RTC_NOINIT_ATTR char brownoutStatus;
+// Deliberately NOT in RTC memory: this is "the boot we are on right now began with a
+// brownout", which is a property of one boot and must not survive into the next. The RTC
+// flag alone could not express that - it goes to 'R' on the boot after the brownout and
+// stayed there until a power cycle, so hadBrownout() answered yes forever and every
+// subsequent boot served the 60s recording holdoff for a supply failure long past.
+// initBrownout() sets this once, from the RTC flag and the reset reason, and it clears
+// itself by being reinitialised on the next boot
+static bool brownoutThisBoot = false;
 // Survives the reset so the next boot can say whether the graceful sag response actually
 // ran before the supply went. Without it, a hardware brownout reset and a Stage 1 landing
 // followed by a hardware reset are indistinguishable after the fact - which is exactly
@@ -594,11 +602,12 @@ void brownoutDump() {
 }
 
 bool hadBrownout() {
-  // A brownout on the previous boot. The RTC flag only gets set when our ISR ran, which a
-  // hardware reset from the terminal stage skips, so the reset reason has to be consulted
-  // too or the recording holdoff never engages on a real supply failure
-  return brownoutStatus == 'B' || brownoutStatus == 'R'
-         || esp_reset_reason() == ESP_RST_BROWNOUT;
+  // A brownout on the boot immediately before this one, and only that one. Both sources -
+  // the RTC flag our ISR sets, and the reset reason a terminal hardware reset leaves
+  // instead (the ISR never runs in that case) - are read once in initBrownout(), which
+  // runs from logSetup() long before anything asks. Reading the RTC flag here instead was
+  // the bug: it is still 'R' on every later boot
+  return brownoutThisBoot;
 }
 
 uint8_t brownoutProbeBand() {
@@ -652,11 +661,20 @@ static void initBrownout(void) {
   // old code only configured it when brownoutStatus was clear, so after the first sag set
   // 'B' (then 'R') the custom detector was never re-armed again for the rest of the
   // discharge - it went missing exactly when a battery needs it most
-  if (brownoutStatus == 'R') LOG_WRN("Brownout warning previously notified");
-  else if (brownoutStatus == 'B') {
+  // This is also the single place the per-boot brownout answer is decided, because it runs
+  // from logSetup() before any caller. 'B' means the previous boot ended in a brownout our
+  // ISR saw; the reset reason covers the terminal hardware reset, where it did not. 'R'
+  // means the boot AFTER that one, which has already had its holdoff - report it once more
+  // for the record, then clear, so the flag cannot outlive the event that set it
+  if (brownoutStatus == 'R') {
+    LOG_WRN("Brownout warning previously notified - holdoff already served, clearing");
+    brownoutStatus = 0;
+  } else if (brownoutStatus == 'B') {
     LOG_WRN("Brownout occurred due to inadequate power supply");
     brownoutStatus = 'R';
+    brownoutThisBoot = true;
   } else brownoutStatus = 0;
+  if (esp_reset_reason() == ESP_RST_BROWNOUT) brownoutThisBoot = true;
   // Back to the IDF default: level 7 with hardware reset. Arming the warning level was
   // pointless and actively harmful here - the rail carries no usable warning (the buck
   // holds it regulated until the cell is at the edge), and a trip wedges the chip rather
