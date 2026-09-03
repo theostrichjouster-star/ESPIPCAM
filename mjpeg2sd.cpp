@@ -350,13 +350,17 @@ uint16_t frameWindowKB(int fs) {
       // 1280X960 survives 383KB on identical sensor timing), and these emit the same
       // 1920x1080 as FHDNARROW. Replace with a measured figure if either is ever swept
       if (fs == FS_FHDMID || fs == FS_FHDFULL) return 443;
-      // QHD deliberately stays 0. It was swept and recorded on 3 Sep 2026, but its cliff was
-      // NOT measured - that needs the random-pattern descend of BOARD_TESTING 20, not a rate
-      // sweep - and it cannot be inherited from anything: 2560x1440 sits between FHD's 443KB
-      // and QSXGA's 946KB with no basis for interpolating. Lit q10 frames measured 372KB at
-      // 9fps, and a dim scene roughly doubles frame size, so the headroom is genuinely unknown.
-      // 0 means "no prediction", which leaves noFrameRescue() as the guard rather than a guess
-      return 0;
+      // QHD: MEASURED 3 Sep 2026 by the random-pattern descend, twice, at 3fps and 2fps
+      // (tools/bench/frame_window_descend.sh). Unlike QSXGA this is a REAL cliff and not the
+      // maxFrameBuffSize gate - everything died well below that 960KB software limit.
+      //
+      // 800 is deliberately the conservative end of a TRANSITION, not a clean step. Frames of
+      // 808KB and 815KB were delivered with no rescue, but a 799KB frame triggered one, so
+      // delivery near the edge is intermittent rather than binary - the random pattern varies
+      // frame size a few percent run to run, and the cliff sits inside that spread. Understating
+      // is the safe direction here: the badge warns and the governor pre-arms at 80% of this,
+      // so a figure that is too HIGH arms too late. Fully dead by 2 quality steps further down
+      return 800;
   }
 }
 
