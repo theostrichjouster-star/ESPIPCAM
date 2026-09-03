@@ -216,6 +216,7 @@ enum restartStage_t : uint8_t {
 };
 void markRestartStage(restartStage_t stage);
 uint8_t previousRestartStage(); // what the previous boot's doRestart reached, 0 if it did not run one
+void reportRestartStage(); // read and consume the SD restart trace - the copy that survives a power cut
 const char* restartStageName(uint8_t stage);
 extern volatile bool supplySagging;
 extern volatile uint32_t sagTripCount;

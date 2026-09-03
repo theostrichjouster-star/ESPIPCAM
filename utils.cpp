@@ -955,10 +955,11 @@ static void restartStageShutdownHandler() {
 
 void doRestart(const char* restartStr) {
   LOG_ALT("Controlled restart: %s", restartStr);
-  // Every step stamps a breadcrumb into RTC memory (markRestartStage) so that when this
-  // hangs - twice in ~12 OTA restarts so far, never on a plain web reset - the next boot
-  // can say which step never returned instead of leaving it to the log, which never
-  // records anything past the line above even when the restart succeeds
+  // Every step stamps a breadcrumb (markRestartStage) so that when this hangs - three times
+  // in ~15 OTA restarts so far, never on a plain web reset - the next boot can say which
+  // step never returned instead of leaving it to the log, which never records anything past
+  // the line above even when the restart succeeds. The stamp is fsynced to SD as well as
+  // RTC, because recovering a wedged board clears RTC whichever way it is done
   markRestartStage(RESTART_ENTERED);
   // Quiesce the brownout comparator BEFORE any teardown. With flash_power_down latched,
   // a transient trip during the shutdown's RF and clock transitions powers flash down

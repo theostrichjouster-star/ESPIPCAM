@@ -71,31 +71,85 @@ static RTC_NOINIT_ATTR uint32_t sagStage1Count;
 // rather than trusting the value. Same reason crashLoop carries MAGIC_NUM
 #define SAG_MAGIC 0x5A61C0DE
 static RTC_NOINIT_ATTR uint32_t sagMagic;
-// Restart-stage breadcrumb. doRestart() has hung twice in ~12 OTA restarts after writing its
-// first log line, and never on the 100-cycle web-reset harness, and the SD log cannot say
-// where: nothing is ever written between that line and the next boot, even on success.
-// Each step stamps its number here and the next boot reports the last one reached. A clean
-// restart reports RESTART_IN_ESP_RESTART, which is also the proof the instrument works.
+// Restart-stage breadcrumb. doRestart() has hung three times in ~15 OTA restarts after
+// writing its first log line, and never on the 100-cycle web-reset harness, and the SD log
+// cannot say where: nothing is ever written between that line and the next boot, even on
+// success. Each step stamps its number and the next boot reports the last one reached.
+//
+// The stamp goes to SD as well as RTC memory, and SD is the authority. RTC alone was
+// useless for the failure this exists to catch: recovering a wedged board means either
+// pulling the power or pressing RESET, and on this board BOTH come back reporting
+// ESP_RST_POWERON with RTC no-init memory full of garbage - EN-low resets the RTC domain
+// too. Measured twice on 3 Sep 2026, once per recovery method, and both lockups were
+// therefore mute. RTC is kept because it is free and still works across a software reset,
+// and because the shutdown-handler stamp cannot touch SD (see below).
+//
+// Each stage is fsynced, so the record on the card is never behind the board's actual
+// progress. Honest caveat: the fsync is itself an SD operation inside the teardown, so a
+// trace ending at stage N means the hang was in stage N's work OR in the write that
+// recorded it - an orphaned FATFS lock would present the same way. The last stage that can
+// reach the card is RESTART_CALLING_ESP_RESTART; RESTART_IN_ESP_RESTART is stamped from a
+// shutdown handler running inside esp_restart(), where the scheduler is going away and
+// touching the filesystem would be reckless, so that one stays RTC-only.
 // Own magic, for the same reason as sagMagic
 #define RESTART_MAGIC 0x5E57A6E5
+#define RESTART_FILE_PATH DATA_DIR "/restart" TEXT_EXT
 static RTC_NOINIT_ATTR uint32_t restartMagic;
 static RTC_NOINIT_ATTR uint8_t restartStage;
-static uint8_t restartReport = 0; // this boot only: what printResetReason found, for prepRecording to re-log
-
-void markRestartStage(restartStage_t stage) {
-  restartStage = stage;
-  restartMagic = RESTART_MAGIC;
-}
-
-uint8_t previousRestartStage() {
-  return restartReport;
-}
+static uint8_t restartReport = 0; // this boot only: what the boot report found, for prepRecording to re-log
+static FILE* restartTrace = NULL;
 
 const char* restartStageName(uint8_t stage) {
   static const char* names[] = {"none", "entered", "brownout disarmed", "appShutdown done",
     "mqtt stopped", "crash loop reset", "log flushed and closed", "2s delay done",
     "calling esp_restart", "inside esp_restart"};
   return stage < sizeof(names) / sizeof(names[0]) ? names[stage] : "?";
+}
+
+void markRestartStage(restartStage_t stage) {
+  restartStage = stage;
+  restartMagic = RESTART_MAGIC;
+  // The first stage opens the trace, truncating any record the boot report already consumed
+  if (stage == RESTART_ENTERED) restartTrace = fopen("/sdcard" RESTART_FILE_PATH, "w");
+  // never from inside esp_restart() - the scheduler is on its way out
+  if (restartTrace == NULL || stage == RESTART_IN_ESP_RESTART) return;
+  fprintf(restartTrace, "%lu %u %s\n", (unsigned long)millis(), stage, restartStageName(stage));
+  // fflush first or the fsync pushes everything EXCEPT this line, which is the whole point
+  fflush(restartTrace);
+  fsync(fileno(restartTrace));
+}
+
+uint8_t previousRestartStage() {
+  return restartReport;
+}
+
+// Read on the next boot, once storage is up. The last line names the last stage reached, so
+// a trace that stops short of RESTART_CALLING_ESP_RESTART names the step that never
+// returned. Consumed on read so it cannot be reported twice
+void reportRestartStage() {
+  FILE* fp = fopen("/sdcard" RESTART_FILE_PATH, "r");
+  if (fp == NULL) return; // no controlled restart was attempted, or no card
+  char line[64];
+  unsigned long atMs = 0;
+  unsigned stage = 0;
+  while (fgets(line, sizeof(line), fp) != NULL) {
+    unsigned long ms; unsigned st;
+    if (sscanf(line, "%lu %u", &ms, &st) == 2) { atMs = ms; stage = st; }
+  }
+  fclose(fp);
+  STORAGE.remove(RESTART_FILE_PATH);
+  if (!stage) return;
+  // A trace can only ever reach RESTART_CALLING_ESP_RESTART, so that value alone cannot
+  // separate a restart that worked from one that hung inside esp_restart() and was then
+  // recovered by hand. The reset reason settles it: esp_restart() completing is what makes
+  // this boot ESP_RST_SW, and a board rescued from a wedge comes back on power instead.
+  // Promoting the success case to RESTART_IN_ESP_RESTART keeps the meaning of
+  // previousRestartStage() identical for prepRecording() and saveCrashRamLog()
+  bool completed = stage >= RESTART_CALLING_ESP_RESTART && esp_reset_reason() == ESP_RST_SW;
+  restartReport = completed ? RESTART_IN_ESP_RESTART : (uint8_t)stage; // SD overrides RTC
+  if (completed) LOG_INF("Previous controlled restart completed every stage (SD trace, %lums to esp_restart)", atMs);
+  else LOG_WRN("Previous controlled restart HUNG after stage %u (%s) at %lums - see doRestart()",
+    stage, restartStageName(stage), atMs);
 }
 static RTC_NOINIT_ATTR uint32_t crashLoop;
 static bool crashLoopSuspected = false; // this boot only; reported once logging is up
@@ -301,6 +355,11 @@ void remote_log_init() {
     remote_log_init_SD(); // store log on sd card
     saveCrashRamLog();
   } else flush_log(true);
+  // Outside the sdLog branch on purpose: the restart trace is a file on the card, not a
+  // log destination, and it is worth reading back even with SD logging turned off. Runs
+  // here because storage is mounted by now and the LOG_ macros are alive, neither of which
+  // is true where printResetReason() reports the RTC copy
+  reportRestartStage();
 }
 
 static void logTask(void *pvParams) {
