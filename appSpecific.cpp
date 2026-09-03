@@ -265,6 +265,11 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     }
   }
   else if (!strcmp(variable, "fps")) {
+    // An over-ceiling user request has already been clamped by updateStatus() in prefs.cpp,
+    // before this handler AND the generic config-vector store see it. Clamping here was
+    // tried first (2 Sep 2026): the store at the end of updateStatus() then overwrote the
+    // clamped value with the original request, so the sensor ran the ceiling while the UI
+    // and /status still said 99
     if (isCapturing && fromUser) {
       // mid-recording: defer, so the clip keeps the timing its AVI header promises
       pendingFPS = intVal;
@@ -368,8 +373,8 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     // fpsCeil: the top of the fps slider - the tuned ceiling, or the driver-clock default
     // when the size is untuned. aecMax: the manual exposure ceiling in lines, VTS-4 read
     // from the LIVE sensor so the slider tracks whatever timing is actually in force.
-    // budgetKBs: the measured storage ceiling for the bus clock currently set - 4420
-    // measured at 53.3MHz, 3550 at the stock 40
+    // budgetKBs: the measured storage ceiling for the bus clock currently set - 4458
+    // measured at 53.3MHz, 3643 at the stock 40 (sdBudgetKBs, 2 Sep 2026)
     int aecMax = 1200; // the historical slider cap, kept when the sensor cannot be read
     sensor_t* sen = esp_camera_sensor_get();
     if (sen != NULL && sen->get_reg != NULL) {

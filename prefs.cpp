@@ -245,7 +245,22 @@ void updateStatus(const char* variable, const char* _value, bool fromUser) {
   // or from loadConfig() to update app status from stored preferences
   bool res = true;
   char value[IN_FILE_NAME_LEN];
-  strncpy(value, _value, sizeof(value));  
+  strncpy(value, _value, sizeof(value));
+#ifdef ISCAM
+  // Clamp an over-ceiling fps request from the user HERE, so that the handler, the MQTT
+  // state publish and the config-vector store at the end of this function all see the same
+  // value. Clamping inside the fps handler was tried first (2 Sep 2026): the store below
+  // then overwrote its clamped value with the original request, so the sensor ran the
+  // ceiling while the UI and /status still said 99. Internal callers (config load) are
+  // left alone, as are requests within range
+  if (fromUser && !strcmp(variable, "fps")) {
+    int req = atoi(value), ceil = fpsCeiling((framesize_t)fsizePtr);
+    if (req > ceil) {
+      LOG_WRN("%dfps is above the %s ceiling %d - using the ceiling", req, frameData[fsizePtr].frameSizeStr, ceil);
+      snprintf(value, sizeof(value), "%d", ceil);
+    }
+  }
+#endif  
 #if INCLUDE_MQTT
   if (mqtt_active) {
     char buff[(IN_FILE_NAME_LEN * 2)];
