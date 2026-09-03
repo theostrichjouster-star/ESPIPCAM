@@ -346,6 +346,10 @@ uint16_t frameWindowKB(int fs) {
     case FRAMESIZE_QSXGA: return 946;
     default:
       if (fs == FS_1280X960) return 383;
+      // INHERITED, not measured: the cliff follows the OUTPUT size (HD dies at ~295KB where
+      // 1280X960 survives 383KB on identical sensor timing), and these emit the same
+      // 1920x1080 as FHDNARROW. Replace with a measured figure if either is ever swept
+      if (fs == FS_FHDMID || fs == FS_FHDFULL) return 443;
       return 0;
   }
 }
@@ -579,6 +583,21 @@ static bool senWrite16(sensor_t* s, int reg, int val) {
   return senReg16(s, reg) == val;
 }
 
+static int cropPreScaleW(framesize_t fs) {
+  // The ISP INPUT width applyCropWindow() should aim the readout at, or 0 for "the output
+  // width", which makes the scaler a no-op and the readout a straight 1:1 crop. Only the two
+  // wide 1080p variants want an input larger than their output; every other size keeps the
+  // original behaviour by returning 0 here.
+  //
+  // Both values are exact multiples of the 1920 output (1.2x and 1.333x) so the height derived
+  // from them lands on a whole number and the scaler ratio is IDENTICAL in both axes. An
+  // unequal ratio would come back as a subtly stretched image that every automated check
+  // passes - the same class of failure as the split-frame trap, and just as invisible
+  if (fs == FS_FHDMID) return 2304;   // -> 2304x1296 in, 1920x1080 out
+  if (fs == FS_FHDFULL) return 2560;  // -> the driver's own pre-scale, so nothing is written
+  return 0;
+}
+
 static void applyCropWindow(sensor_t* s, framesize_t forFS) {
   // The full resolution counterpart to applyHtsFloor(), and the answer to the FHD problem.
   //
@@ -610,13 +629,30 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
   if (xSt < 0 || ySt < 0 || xOff < 0 || yOff < 0 || xEnd <= xSt || yEnd <= ySt) return;
   int haveW = xEnd - xSt + 1, haveH = yEnd - ySt + 1;
   // datasheet figure 4-3: pre-scaling size is the input less twice the offset, so this is the
-  // input that makes the scaler a no-op and the output a straight crop
-  int needW = frameData[forFS].frameWidth + 2 * xOff;
-  int needH = frameData[forFS].frameHeight + 2 * yOff;
+  // input the crop has to leave behind. cropPreScaleW() picks it: the output size for the 1:1
+  // crop that makes the scaler a no-op, or a LARGER pre-scale for the wide 1080p variants,
+  // which keep the scaler and buy field of view with frame rate
+  int preW = cropPreScaleW(forFS), preH;
+  if (preW > 0) preH = preW * frameData[forFS].frameHeight / frameData[forFS].frameWidth;
+  else {
+    preW = frameData[forFS].frameWidth;
+    preH = frameData[forFS].frameHeight;
+  }
+  bool scalerNoOp = (preW == frameData[forFS].frameWidth && preH == frameData[forFS].frameHeight);
+  int needW = preW + 2 * xOff;
+  int needH = preH + 2 * yOff;
   // bigger than the window means there is nothing to crop, which is what leaves QSXGA, 5MP,
   // QHD and WQXGA alone - at those the output already is the whole array
   if (needW > haveW || needH > haveH) return;
-  if (needW == haveW && needH == haveH) return;
+  if (needW == haveW && needH == haveH) {
+    // Nothing to crop. For QSXGA and friends that is because the output already IS the whole
+    // array; for FHDFULL it is deliberate - it asks for the driver's own pre-scale, so the
+    // window, HTS, VTS and scaler enable are all left exactly as set_framesize() wrote them.
+    // Say so, because "the tuner wrote nothing" is otherwise indistinguishable from a bug
+    LOG_VRB("Crop %s: readout %dx%d already matches the wanted pre-scale - driver geometry kept",
+      frameData[forFS].frameSizeStr, haveW, haveH);
+    return;
+  }
   // keep the start even so the Bayer phase is unchanged, or the colours come out wrong
   int newXSt = (xSt + (haveW - needW) / 2) & ~1;
   int newYSt = (ySt + (haveH - needH) / 2) & ~1;
@@ -642,8 +678,15 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
   // aware. Cropping is the first thing that changes the pre-scale size - here from 2560x1440 to
   // 1920x1080 - so the correction grid lands at the wrong radial coordinates and the edges pick
   // up a colour and luminance error. Untested fix: scale each register by 2560/1920
-  int isp01 = s->get_reg(s, 0x5001, 0xFF);
-  if (isp01 >= 0 && (isp01 & 0x20)) s->set_reg(s, 0x5001, 0xFF, isp01 & ~0x20);
+  //
+  // Only the 1:1 crop turns the scaler off. The wide 1080p variants deliberately leave it
+  // enabled - a larger pre-scale downsized to 1920x1080 is the whole point of them - so their
+  // LENC grid is closer to correct than the 1:1 crop's, not further from it: FHDFULL keeps the
+  // driver's own pre-scale exactly, and FHDMID shifts it by 1.11x against FHDNARROW's 1.33x
+  if (scalerNoOp) {
+    int isp01 = s->get_reg(s, 0x5001, 0xFF);
+    if (isp01 >= 0 && (isp01 & 0x20)) s->set_reg(s, 0x5001, 0xFF, isp01 & ~0x20);
+  }
   // A narrower window needs fewer clocks per line, but full resolution has TWO floors and
   // the binding one is not the readout. HTS 2060 on a 1984 column crop reads out perfectly -
   // clean frames, exact rates - while the AEC goes blind: below ~2200 the sensor's Y-AVERAGE
@@ -655,13 +698,21 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
   // frame check passed throughout, only the exposure showed it. 2200 keeps ~5% margin above
   // the 2100 cliff edge. Binned sizes are untouched (their stats run fine at 2060 - HD
   // agreed zones==YAVG on the same scene)
+  //
+  // The OTHER floor is the readout itself, and needW + 76 is where it sits. That 76 is not a
+  // derivation, it is the measured full-width cliff read backwards: at a 2624 column readout
+  // HTS 2700 worked and 2650 produced no frames at all, and 2700 - 2624 is 76. It is applied
+  // at every width because it is the only number there is, but at any width OTHER than 2624 it
+  // is an extrapolation. FHDMID lands on 2444 that way. If a wide variant ever delivers no
+  // frames at all, raise HTS before suspecting anything else
   #define HTS_FLOOR_FULLRES 2200
   int htsFloor = needW + 76;
   if (htsFloor < HTS_FLOOR_FULLRES) htsFloor = HTS_FLOOR_FULLRES;
   int hts = senReg16(s, 0x380C);
   if (hts > htsFloor && !senWrite16(s, 0x380C, htsFloor)) LOG_WRN("Crop HTS %d did not take", htsFloor);
-  LOG_VRB("Cropped %s to %dx%d at %d,%d, VTS %d, HTS %d", frameData[forFS].frameSizeStr,
-    needW, needH, newXSt, newYSt, needH + 16, (hts > htsFloor) ? htsFloor : hts);
+  LOG_VRB("Cropped %s to %dx%d at %d,%d, VTS %d, HTS %d, scaler %s", frameData[forFS].frameSizeStr,
+    needW, needH, newXSt, newYSt, needH + 16, (hts > htsFloor) ? htsFloor : hts,
+    scalerNoOp ? "off (1:1)" : "on (downsizing)");
 }
 
 static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
@@ -837,8 +888,14 @@ static bool scalerClockSize(framesize_t fs) {
   // raising VTS on a real ISP-scaler size halves delivery (at any clock, threshold
   // state-dependent - measured 27/28 Aug, see BOARD_TESTING.md "Per-size clock assessment")
   // while fps-via-PLL at driver VTS ran exact at five rates over a 20-61 MHz sweep.
-  // Only the two measured members of the OV5640 UI set; other scaler sizes stay untuned
-  return fs == FRAMESIZE_VGA || fs == FRAMESIZE_QVGA;
+  //
+  // VGA and QVGA are the two measured members of the OV5640 UI set; the remaining stock scaler
+  // sizes stay untuned. FHDMID and FHDFULL join them because turning the scaler on is exactly
+  // what puts a size into this class - and the clock path costs them nothing, since
+  // applyTunedTiming clamps VTS upward only (same ceiling either way) while a slower clock
+  // lengthens every row, where VTS past 1968 buys no exposure at all. FHDNARROW stays on the
+  // VTS path: its scaler is off, so the halving rule never applied to it
+  return fs == FRAMESIZE_VGA || fs == FRAMESIZE_QVGA || fs == FS_FHDMID || fs == FS_FHDFULL;
 }
 
 static void applyScalerClock(sensor_t* s, framesize_t fs) {
@@ -934,7 +991,9 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
 static framesize_t hwFrameSize(framesize_t fs) {
   // custom sizes have no framesize_t of their own, so the driver is given the base size and
   // applySensorTuning() rewrites the registers that differ
-  return (fs == FS_1280X960) ? FS_1280X960_BASE : fs;
+  if (fs == FS_1280X960) return FS_1280X960_BASE;
+  if (fs == FS_FHDMID || fs == FS_FHDFULL) return FS_FHD_BASE;
+  return fs;
 }
 
 void setSensorSize(framesize_t newFS) {
@@ -1230,7 +1289,11 @@ bool recoverAvi() {
     memcpy(&h, hdr + 0x44, 2);
     memcpy(&dwScale, hdr + 0x80, 4);
     memcpy(&dwRate, hdr + 0x84, 4);
-    for (int i = 0; i <= FS_1280X960; i++) {
+    // every row, custom sizes included - this used to stop at FS_1280X960 on the assumption
+    // that it was the last one, which stopped being true when the FHD ladder was added.
+    // Three rows now share 1920x1080, so a recovered clip from any of them is named for the
+    // first. Only the name is ambiguous: the geometry it is being recovered for is identical
+    for (int i = 0; i < (int)(sizeof(frameData) / sizeof(frameData[0])); i++) {
       if (frameData[i].frameWidth == w && frameData[i].frameHeight == h) { recFS = i; haveHdr = true; break; }
     }
     if (dwScale && dwRate) {

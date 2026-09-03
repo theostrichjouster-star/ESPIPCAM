@@ -576,7 +576,7 @@ const frameStruct frameData[] = {
   {"HD", 1280, 720, 30, 3, 1, 52},    // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52.06 MEASURED 27 Aug, exact 12-52 | exposure-first sweep 28 Aug: 95ms @10fps, 399ms @1fps (PIXCLK walk, VTS held 1968 below 19fps) | re-swept 2 Sep 2026 lit q10: register tier identical; 52 delivers 51.4 at governor boost 2, 51 delivers 48.5 at boost 1 - storage time per 75 KB frame (17 of 19 ms), scene-dependent, not the sensor (BOARD_TESTING 26)
   {"SXGA", 1280, 1024, 11, 3, 1, 17}, // measured 11.3 cropped, 4.6 before it | tuned 17 predicted at the 2200 full-res HTS floor (AEC stats floor - see applyCropWindow)
   {"UXGA", 1600, 1200, 9, 3, 1, 14},  // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below | tuned 14 predicted at HTS 2200
-  {"FHD", 1920, 1080, 10, 3, 1, 16},  // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before | tuned: 15.0 verified at the 2200 floor, 16 ceiling (HTS 2200 x2 x VTS 1128 - 1112 is the cropped row count, the VTS floor adds 16) | swept 1-16 28 Aug incl 16.0 delivered; 191ms @5fps. 15-16fps delivery is frame-window-gated: dim/noisy q6 frames outgrow the JPEG window and vanish (see BOARD_TESTING 19) | re-swept 2 Sep 2026 lit q10: register tier identical, 16.0 exact at 232 KB frames, boost 1 (unlit the same point was SD-bound at 15.5, 252 KB, boost 4)
+  {"FHDNARROW", 1920, 1080, 10, 3, 1, 16},  // 3MP Sensors only // PY260 | was "FHD" until 3 Sep 2026, renamed when FHDMID and FHDFULL joined it - this is the 1:1 crop, the narrowest framing of the three (see the FHD ladder note below frameData) |  measured 10.7 cropped, 5.9 before | tuned: 15.0 verified at the 2200 floor, 16 ceiling (HTS 2200 x2 x VTS 1128 - 1112 is the cropped row count, the VTS floor adds 16) | swept 1-16 28 Aug incl 16.0 delivered; 191ms @5fps. 15-16fps delivery is frame-window-gated: dim/noisy q6 frames outgrow the JPEG window and vanish (see BOARD_TESTING 19) | re-swept 2 Sep 2026 lit q10: register tier identical, 16.0 exact at 232 KB frames, boost 1 (unlit the same point was SD-bound at 15.5, 252 KB, boost 4)
   {"P_HD", 720, 1280, 9, 3, 1, 13},   // measured 9.9 cropped, 5.0 before | tuned 13 predicted at HTS 2200
   {"P_3MP", 864, 1536, 4, 3, 1, 0},   // OV3660 only - not selectable on this sensor, set by analogy
   {"QXGA", 2048, 1536, 7, 4, 1, 11},  // was stills only - 7.2 predicted cropped at driver clock | tuned 11 predicted
@@ -589,7 +589,12 @@ const frameStruct frameData[] = {
   // esp32-camera library, so a size it lacks has to be carried here instead. Rows below this
   // point are never handed to the driver - setSensorSize() maps them onto a base size and
   // then overrides only the registers that differ
-  {"1280X960", 1280, 960, 24, 3, 1, 39} // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39.03 MEASURED 27 Aug, exact 12-39 (scaler pass is 1:1, exempt from the scaler halving) | exposure-first sweep 28 Aug: same timing as HD, 95ms @10fps | re-swept 2 Sep 2026 lit q10: register tier identical (39.47 counted); 39 delivers 37.7 and 38 delivers 37.5 - 98 KB frames cost 22 ms of storage in a 25.6 ms period while KB/s demand sits at 88%, under the governor's push line. Ceiling kept: the sensor is exact and the shortfall is scene-dependent storage time (BOARD_TESTING 26)
+  {"1280X960", 1280, 960, 24, 3, 1, 39}, // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39.03 MEASURED 27 Aug, exact 12-39 (scaler pass is 1:1, exempt from the scaler halving) | exposure-first sweep 28 Aug: same timing as HD, 95ms @10fps | re-swept 2 Sep 2026 lit q10: register tier identical (39.47 counted); 39 delivers 37.7 and 38 delivers 37.5 - 98 KB frames cost 22 ms of storage in a 25.6 ms period while KB/s demand sits at 88%, under the governor's push line. Ceiling kept: the sensor is exact and the shortfall is scene-dependent storage time (BOARD_TESTING 26)
+  // The two wider 1080p variants. Same 1920x1080 output as FHDNARROW, read off a LARGER slice
+  // of the array and downsized by the ISP scaler instead of cropped 1:1 - see the FHD ladder
+  // note below. Ceilings are PREDICTED here until the bench run replaces them
+  {"FHDMID", 1920, 1080, 10, 3, 1, 12},  // pre-scale 2304x1296 (scaler 1.2x), window 2368x1328, HTS 2444 x2, VTS 1344 | 90% of array width, 68% of its height | ceiling 12.18 predicted, max exposure 82ms
+  {"FHDFULL", 1920, 1080, 9, 3, 1, 9}    // pre-scale 2560x1440 (scaler 1.333x) - the DRIVER'S OWN window, so no window register is written at all | 100% of array width, 75% of its height | ceiling 9.45 predicted, max exposure 110ms
 };
 
 // 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
@@ -600,6 +605,29 @@ const frameStruct frameData[] = {
 // native binned mode. The driver has no enum entry for it, so it is configured as XGA, which
 // uses the same 2624x1952 binned window and the same HTS/VTS, with only the DVP output size
 // overridden. It therefore runs at XGA's exact frame rate while carrying 56% more pixels.
-#define NUM_CUSTOM_FS 1
+// The FHD ladder. All three emit 1920x1080 and differ only in how much of the array they read
+// to get there, which is the frame rate / field of view / light trade in its rawest form.
+// applyCropWindow() aims the readout at a target PRE-SCALE size (cropPreScaleW), and the
+// driver's 16:9 window is 2624x1472 at offsets 32/16, ie a pre-scale of exactly 2560x1440.
+//
+//   size       pre-scale   window     HTS   VTS   ceiling  maxExp  width  height  scaler
+//   FHDNARROW  1920x1080   1984x1112  2200  1128   16fps    62ms    76%    57%    off (1:1)
+//   FHDMID     2304x1296   2368x1328  2444  1344   12fps    82ms    90%    68%    1.2x
+//   FHDFULL    2560x1440   2624x1472  2844  1488    9fps   110ms   100%    75%    1.333x
+//
+// FHDFULL asks for the driver's own pre-scale, so applyCropWindow()'s "nothing to crop" early
+// return fires and not one window, HTS or VTS register is written - the safest form the change
+// could take. Full width at 80MHz is not new ground: QSXGA already runs HTS 2844 x2 at
+// 79.33MHz. The genuinely new operating point is the scaler actively DOWNSIZING at that clock.
+//
+// All three are clock-tuned (scalerClockSize), not VTS-tuned. Turning the scaler on puts a
+// size into the class that halves delivery when VTS rises above the driver's value at any
+// clock (27/28 Aug), and the safe side of that rule is a pinned VTS with fps on the PLL. It
+// costs nothing: applyTunedTiming clamps VTS upward only, so the ceiling is the same either
+// way, and a slower clock lengthens every row where VTS above 1968 buys no exposure at all.
+#define NUM_CUSTOM_FS 3
 #define FS_1280X960 (FRAMESIZE_INVALID + 0) // index 25, first row past the driver's enum
 #define FS_1280X960_BASE FRAMESIZE_XGA      // same binned window, same line timing
+#define FS_FHDMID (FRAMESIZE_INVALID + 1)   // index 26
+#define FS_FHDFULL (FRAMESIZE_INVALID + 2)  // index 27
+#define FS_FHD_BASE FRAMESIZE_FHD           // both wide variants ride the driver's FHD window

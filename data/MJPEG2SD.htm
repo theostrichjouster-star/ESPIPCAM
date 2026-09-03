@@ -975,7 +975,18 @@
                         <option class="OV3660 hidden" value="19">QXGA(2048x1536) - stills only</option>
                         <option class="OV3660 hidden" value="18">P_3MP(864x1536)</option>
                         <option class="OV3660 hidden" value="17">P_HD(720x1280)</option>
-                        <option class="OV3660 OV5640 PY260 hidden" value="16">FHD(1920x1080)</option>
+                        <option class="OV3660 OV5640 PY260 hidden" value="16">FHDNARROW(1920x1080)</option>
+                        <!-- the two wide 1080p variants, app-only sizes past the driver's
+                             framesize_t like 1280X960 above. Same output, progressively more
+                             of the sensor read to produce it, so progressively lower ceilings.
+                             Placed AFTER FHDNARROW deliberately. showView() prefix matches the
+                             filename's size token against option text and REASSIGNS the token
+                             to the whole option text on a match, so the first match effectively
+                             wins and a recording carrying the bare FHD token from before the
+                             rename lands on FHDNARROW. All three are 1920x1080, so even a
+                             mismatch yields the right dimensions - ordering just keeps it honest -->
+                        <option class="OV5640 hidden" value="26">FHDMID(1920x1080)</option>
+                        <option class="OV5640 hidden" value="27">FHDFULL(1920x1080)</option>
                         <option class="PY260 hidden" value="15">UXGA(1600x1200)</option>
                         <option class="hidden" value="14">SXGA(1280x1024)</option>
                         <!-- app-only size past the driver's framesize_t, see FS_1280X960.

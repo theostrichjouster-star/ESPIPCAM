@@ -7,7 +7,10 @@ source "$(dirname "$0")/bench_lib.sh"
 CSV="$OUT/t1_register.csv"
 FROM_IDX=""; FROM_FPS=""
 if [ "${1:-}" = "--from" ]; then FROM_IDX=${2%%:*}; FROM_FPS=${2##*:}; fi
-SIZES=("QVGA:6:39:scaler" "VGA:10:39:scaler" "HD:13:52:vts" "1280X960:25:39:vts" "FHD:16:16:vts" "QSXGA:23:7:vts")
+# FHD became FHDNARROW on 3 Sep 2026 when FHDMID and FHDFULL joined it - same size, same
+# timing, new name (sweep.csv was renamed to match). The two wide variants are scaler regime:
+# they keep the ISP scaler on, so their fps moves the PLL at a pinned VTS
+SIZES=("QVGA:6:39:scaler" "VGA:10:39:scaler" "HD:13:52:vts" "1280X960:25:39:vts" "FHDNARROW:16:16:vts" "FHDMID:26:12:scaler" "FHDFULL:27:9:scaler" "QSXGA:23:7:vts")
 
 preflight
 [ -f "$CSV" ] || echo "idx,size,fps,regime,pixclk,hts,lf,vts,sensorFps,maxExpMs,gateRate,gate33,gate100,match28,flag" > "$CSV"
