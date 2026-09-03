@@ -1,4 +1,9 @@
 build/
+# Per-core build trees: the custom-core compile takes an explicit --build-path so each
+# sdkconfig variant keeps its own tree (build-65535 is the lwip send-buffer one, the rest
+# are retired A/B trees). Arduino copies the whole sketch into each, so without this every
+# source file shows up five times over in git status.
+build-*/
 # Local bench notes. Carries the boards' efuse MACs and LAN addresses, so it is
 # deliberately kept out of this public repo rather than merely untracked - being
 # untracked from some commit onwards would still leave it readable in history.
