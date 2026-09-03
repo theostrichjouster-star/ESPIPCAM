@@ -300,10 +300,12 @@ static void recordingCamMode(bool starting) {
 /**************** capture AVI  ************************/
 
 uint16_t sdBudgetKBs() {
-  // measured sustained SD write ceiling for the bus clock in force: 4420 KB/s at 53.3MHz
-  // (sdBusDiv 3), 3550 at the stock 40MHz. Single source for the UI badge (updateFPS)
-  // and the governor, so the two can never disagree
-  return (sdBusKHz() > 50000) ? 4420 : 3550;
+  // measured sustained SD write ceiling for the bus clock in force: 4458 KB/s at 53.3MHz
+  // (sdBusDiv 3) and 3643 at the stock 40MHz, both from 20 s HD30 forced recordings on
+  // 2 Sep 2026 with 32KB-boundary-aligned blocks (BOARD_TESTING 24); the 28 Aug figures
+  // were 4420 / 3550. Single source for the UI badge (updateFPS) and the governor, so the
+  // two can never disagree
+  return (sdBusKHz() > 50000) ? 4458 : 3643;
 }
 
 uint16_t frameWindowKB(int fs) {
@@ -741,7 +743,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // hardware: after 10fps at FHD set VTS 1941, a 15fps request was wrongly refused). The
   // floor is derived from the window registers instead, which the tuning never touches:
   // rows read + 16 blanking lines at full resolution, rows/2 + 8 binned - matching every
-  // measured driver value (744 HD, 984 VGA/XGA, 1112 cropped FHD, 1968 QSXGA)
+  // measured driver value (744 HD, 984 VGA/XGA, 1128 cropped FHD = 1112 rows + 16, 1968 QSXGA)
   int ySt = senReg16(s, 0x3802), yEnd = senReg16(s, 0x3806);
   int vtsFloor = vtsNow; // fallback: never lower what is there if the window is unreadable
   if (ySt >= 0 && yEnd > ySt) {

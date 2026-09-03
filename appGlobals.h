@@ -565,30 +565,30 @@ const frameStruct frameData[] = {
   {"QCIF", 176, 144, 18, 1, 1, 0},
   {"HQVGA", 240, 176, 18, 2, 1, 0},
   {"240X240", 240, 240, 18, 2, 1, 0},
-  {"QVGA", 320, 240, 20, 2, 1, 39},   // PY260 | driver clock 22.2 (PLL tier 180) | clock-tuned: 39.47 MEASURED 28 Aug at mul 120 / VTS 984 | swept 1-39: exposure = full period at every fps (VTS 984 < AEC cap)
+  {"QVGA", 320, 240, 20, 2, 1, 39},   // PY260 | driver clock 22.2 (PLL tier 180) | clock-tuned: 39.47 MEASURED 28 Aug at mul 120 / VTS 984 | swept 1-39: exposure = full period at every fps (VTS 984 < AEC cap) | re-swept 2 Sep 2026 lit q10: register tier identical, 39.0 delivered at 39 (11 KB frames, boost 0)
   {"320X320", 320, 320, 20, 2, 1, 0}, // PY260 only
   {"CIF", 400, 296, 20, 2, 1, 0},
   {"HVGA", 480, 320, 20, 2, 1, 0},
-  {"VGA", 640, 480, 20, 3, 1, 39},    // PY260 | driver clock 22.2 ceiling | clock-tuned: 5 rates 10-30 MEASURED 28 Aug (same 2060x984 timing as QVGA), 39 ceiling | swept 1-39: exposure = full period at every fps
+  {"VGA", 640, 480, 20, 3, 1, 39},    // PY260 | driver clock 22.2 ceiling | clock-tuned: 5 rates 10-30 MEASURED 28 Aug (same 2060x984 timing as QVGA), 39 ceiling | swept 1-39: exposure = full period at every fps | re-swept 2 Sep 2026 lit q10: register tier identical, 39.0 delivered at 39 (31 KB frames, boost 0)
   {"SVGA", 800, 600, 21, 3, 1, 0},    // measured 22.1, already at HTS_FLOOR | scaler size, untuned
   {"XGA", 1024, 768, 24, 3, 1, 0},    // 24.5 at HTS_FLOOR, same timing as 1280X960 which measured it | scaler size, untuned
-  {"HD", 1280, 720, 30, 3, 1, 52},    // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52.06 MEASURED 27 Aug, exact 12-52 | exposure-first sweep 28 Aug: 95ms @10fps, 399ms @1fps (SCLK walk, VTS held 1968 below 19fps)
+  {"HD", 1280, 720, 30, 3, 1, 52},    // PY260 | measured 31.9 at HTS_FLOOR, 25.3 before it | tuned 52.06 MEASURED 27 Aug, exact 12-52 | exposure-first sweep 28 Aug: 95ms @10fps, 399ms @1fps (SCLK walk, VTS held 1968 below 19fps) | re-swept 2 Sep 2026 lit q10: register tier identical; 52 delivers 51.4 at governor boost 2, 51 delivers 48.5 at boost 1 - storage time per 75 KB frame (17 of 19 ms), scene-dependent, not the sensor (BOARD_TESTING 26)
   {"SXGA", 1280, 1024, 11, 3, 1, 17}, // measured 11.3 cropped, 4.6 before it | tuned 17 predicted at the 2200 full-res HTS floor (AEC stats floor - see applyCropWindow)
   {"UXGA", 1600, 1200, 9, 3, 1, 14},  // PY260 | measured 9.6 cropped, 2.8 before | scale 3 not 4, see below | tuned 14 predicted at HTS 2200
-  {"FHD", 1920, 1080, 10, 3, 1, 16},  // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before | tuned: 15.0 verified at the 2200 floor, 16 ceiling (HTS 2200 x2 x VTS 1112) | swept 1-16 28 Aug incl 16.0 delivered; 191ms @5fps. 15-16fps delivery is frame-window-gated: dim/noisy q6 frames outgrow the JPEG window and vanish (see BOARD_TESTING 19)
+  {"FHD", 1920, 1080, 10, 3, 1, 16},  // 3MP Sensors only // PY260 | measured 10.7 cropped, 5.9 before | tuned: 15.0 verified at the 2200 floor, 16 ceiling (HTS 2200 x2 x VTS 1128 - 1112 is the cropped row count, the VTS floor adds 16) | swept 1-16 28 Aug incl 16.0 delivered; 191ms @5fps. 15-16fps delivery is frame-window-gated: dim/noisy q6 frames outgrow the JPEG window and vanish (see BOARD_TESTING 19) | re-swept 2 Sep 2026 lit q10: register tier identical, 16.0 exact at 232 KB frames, boost 1 (unlit the same point was SD-bound at 15.5, 252 KB, boost 4)
   {"P_HD", 720, 1280, 9, 3, 1, 13},   // measured 9.9 cropped, 5.0 before | tuned 13 predicted at HTS 2200
   {"P_3MP", 864, 1536, 4, 3, 1, 0},   // OV3660 only - not selectable on this sensor, set by analogy
   {"QXGA", 2048, 1536, 7, 4, 1, 11},  // was stills only - 7.2 predicted cropped at driver clock | tuned 11 predicted
   {"QHD", 2560, 1440, 2, 4, 1, 9},    // 5MP Sensors only | 2.8 @ 77% busy at 3, backed off for SD margin | tuned 9 predicted (no crop possible - full array read)
   {"WQXGA", 2560, 1600, 2, 4, 1, 8},  // measured 2.8 @ 85% busy at req 3, backed off | tuned 8 predicted
   {"P_FHD", 1080, 1920, 4, 3, 1, 9},  // measured 4.0 @ 37% busy | scale 3 not 4, see below | tuned 9 predicted
-  {"QSXGA", 2560, 1920, 2, 4, 1, 7},  // measured 2.0 @ 59% busy | tuned 7.00 MEASURED 27 Aug (full array, HTS 2844 x2); q6 frames 764KB - see the budget badge | swept 1-7 28 Aug all exact; 140ms @7fps, 952ms @1fps (SCLK 11.73)
+  {"QSXGA", 2560, 1920, 2, 4, 1, 7},  // measured 2.0 @ 59% busy | tuned 7.00 MEASURED 27 Aug (full array, HTS 2844 x2); q6 frames 764KB - see the budget badge | swept 1-7 28 Aug all exact; 140ms @7fps, 952ms @1fps (SCLK 11.73) | re-swept 2 Sep 2026 lit q10: register tier identical, 7.0 exact at 354 KB frames, boost 0, busy 54%
   {"5MP", 2592, 1944, 4, 4, 1, 0},    // PY260 only - unreachable on OV5640, left as inherited
   // Custom sizes past the driver's framesize_t. That enum lives in the precompiled
   // esp32-camera library, so a size it lacks has to be carried here instead. Rows below this
   // point are never handed to the driver - setSensorSize() maps them onto a base size and
   // then overrides only the registers that differ
-  {"1280X960", 1280, 960, 24, 3, 1, 39} // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39.03 MEASURED 27 Aug, exact 12-39 (scaler pass is 1:1, exempt from the scaler halving) | exposure-first sweep 28 Aug: same timing as HD, 95ms @10fps
+  {"1280X960", 1280, 960, 24, 3, 1, 39} // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39.03 MEASURED 27 Aug, exact 12-39 (scaler pass is 1:1, exempt from the scaler halving) | exposure-first sweep 28 Aug: same timing as HD, 95ms @10fps | re-swept 2 Sep 2026 lit q10: register tier identical (39.47 counted); 39 delivers 37.7 and 38 delivers 37.5 - 98 KB frames cost 22 ms of storage in a 25.6 ms period while KB/s demand sits at 88%, under the governor's push line. Ceiling kept: the sensor is exact and the shortfall is scene-dependent storage time (BOARD_TESTING 26)
 };
 
 // 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
