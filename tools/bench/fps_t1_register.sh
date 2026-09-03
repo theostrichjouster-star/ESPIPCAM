@@ -10,7 +10,7 @@ if [ "${1:-}" = "--from" ]; then FROM_IDX=${2%%:*}; FROM_FPS=${2##*:}; fi
 SIZES=("QVGA:6:39:scaler" "VGA:10:39:scaler" "HD:13:52:vts" "1280X960:25:39:vts" "FHD:16:16:vts" "QSXGA:23:7:vts")
 
 preflight
-[ -f "$CSV" ] || echo "idx,size,fps,regime,sclk,hts,lf,vts,sensorFps,maxExpMs,gateRate,gate33,gate100,match28,flag" > "$CSV"
+[ -f "$CSV" ] || echo "idx,size,fps,regime,pixclk,hts,lf,vts,sensorFps,maxExpMs,gateRate,gate33,gate100,match28,flag" > "$CSV"
 log "T1 register tier start -> $CSV"
 total=0; good=0; skipping=${FROM_IDX:+1}
 for entry in "${SIZES[@]}"; do

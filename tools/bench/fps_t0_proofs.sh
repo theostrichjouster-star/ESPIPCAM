@@ -12,13 +12,13 @@ echo "proof,idx,fps,q,retimeRow,vsync,file,frames,actFps,avgBytes,storageMs,sdKB
 
 proof() {  # proof <name> <idx> <fps> <q> <dur> <expSclk> <expVts> <expExpMs> <vsync yes|no> <regime>
   local name=$1 idx=$2 fps=$3 q=$4 dur=$5 xs=$6 xv=$7 xe=$8 vs=$9 regime=${10} ceil=${11}
-  log "-- proof $name $fps fps: expect SCLK $xs VTS $xv maxExp ${xe}ms, delivered ~$fps --"
+  log "-- proof $name $fps fps: expect PIXCLK $xs VTS $xv maxExp ${xe}ms, delivered ~$fps --"
   set_size "$idx" "$q" "$fps"
   local row rc vsync="n/a" rec verdict=PASS
   row=$(get_retime "$name" "$fps" "$ceil" "$regime" "$OUT/t0_${idx}_${fps}_retime.log"); rc=$?
   log "  retime: $row"
-  IFS=, read -r _ _ _ sclk _ _ vts _ maxexp _ <<< "$row"
-  python - "$sclk" "$xs" "$vts" "$xv" "$maxexp" "$xe" <<'EOF' || verdict=CHECK
+  IFS=, read -r _ _ _ pixclk _ _ vts _ maxexp _ <<< "$row"
+  python - "$pixclk" "$xs" "$vts" "$xv" "$maxexp" "$xe" <<'EOF' || verdict=CHECK
 import sys; s,xs,v,xv,e,xe = sys.argv[1:7]
 ok = abs(float(s)-float(xs)) <= 0.06 and int(v) == int(xv) and abs(float(e)-float(xe)) <= 2
 sys.exit(0 if ok else 1)

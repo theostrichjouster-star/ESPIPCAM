@@ -679,10 +679,12 @@ volatile int pendingFS = -1;
 volatile int pendingFPS = -1;
 
 static bool pickPll(float targetMHz, int* mulOut, int* sysDivOut) {
-  // mul/sys_div pair for the closest SCLK to targetMHz on the pre_div 3 tree at XCLK
-  // 20MHz: SCLK MHz = mul x 2/3 / sys_div. Selection window: mul 75-150 keeps VCO in the
-  // datasheet's 500-1000 best range (even values only above 127 per section 7.1), SCLK
-  // capped at the verified 80MHz (image cliff 88-92). The window spans a full 2x, so
+  // mul/sys_div pair for the closest PIXCLK to targetMHz on the pre_div 3 tree at XCLK
+  // 20MHz: PIXCLK MHz = mul x 2/3 / sys_div, which is the full chain
+  // (XCLK/pre_div x mul / sys_div x 2/5) / 4 simplified for pre_div 3 - it is only valid on
+  // that tree, and applyTunedTiming always programs it. Selection window: mul 75-150 keeps
+  // VCO in the datasheet's 500-1000 best range (even values only above 127 per section
+  // 7.1), PIXCLK capped at the verified 80MHz (image cliff 88-92). The window spans a full 2x, so
   // consecutive sys_div steps can never leave an unreachable gap; smallest workable
   // sys_div = lowest in-range VCO. Shared by applyScalerClock and the exposure-first
   // low-fps regime of applyTunedTiming
@@ -690,7 +692,7 @@ static bool pickPll(float targetMHz, int* mulOut, int* sysDivOut) {
     int m = (int)(targetMHz * 1.5f * sd + 0.5f);
     if (m > 127) m &= ~1; // even only above 127
     if (m < 75 || m > 150) continue; // VCO outside 500-1000
-    if (m * 2.0f / 3 / sd > 80.05f) continue; // above the verified SCLK ceiling
+    if (m * 2.0f / 3 / sd > 80.05f) continue; // above the verified PIXCLK ceiling
     *mulOut = m;
     *sysDivOut = sd;
     return true;
@@ -774,7 +776,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
       // correct with the old capped-exposure behavior
       if (pickPll(targetMHz, &mul, &sysDiv)) vts = targetVts;
     } else {
-      // below the verified 10MHz SCLK floor (fps 1-2 at most sizes): floor the clock
+      // below the verified 10MHz PIXCLK floor (fps 1-2 at most sizes): floor the clock
       // and grow VTS past the cap. The exposure ceiling is capped at 1964 rows, but
       // tROW is now so long the ceiling still lands in the hundreds of ms
       mul = 76; sysDiv = 5; // 10.13MHz, the verified floor combo (see applyScalerClock)
@@ -799,14 +801,14 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     LOG_WRN("Tuned timing: PLL mul wrote %d but reads %d - VTS left alone", mul, gotMul);
     return;
   }
-  float sclkMHz = mul * 2.0f / 3 / sysDiv;
+  float pixClkMHz = mul * 2.0f / 3 / sysDiv;
   if (!senWrite16(s, 0x380E, vts)) LOG_WRN("Tuned timing: VTS %d did not read back", vts);
   else {
     int expLines = vts - 4;
     if (expLines > 1964) expLines = 1964; // the AEC engine cap, applyAecLimits
-    LOG_INF("Tuned timing %s: SCLK %.2fMHz, HTS %d x%d, VTS %d -> sensor %.2ffps for request %u, max exposure %.0fms",
-      frameData[fs].frameSizeStr, sclkMHz, hts, lf, vts, sclkMHz * 1e6f / ((float)hts * lf * vts), fps,
-      (float)expLines * hts * lf * 1000.0f / (sclkMHz * 1e6f));
+    LOG_INF("Tuned timing %s: PIXCLK %.2fMHz, HTS %d x%d, VTS %d -> sensor %.2ffps for request %u, max exposure %.0fms",
+      frameData[fs].frameSizeStr, pixClkMHz, hts, lf, vts, pixClkMHz * 1e6f / ((float)hts * lf * vts), fps,
+      (float)expLines * hts * lf * 1000.0f / (pixClkMHz * 1e6f));
   }
 }
 
@@ -822,12 +824,12 @@ static bool scalerClockSize(framesize_t fs) {
 static void applyScalerClock(sensor_t* s, framesize_t fs) {
   // The scaler-size counterpart of applyTunedTiming(): the fps setting is hit by choosing
   // the PLL multiplier and system divider while HTS and VTS stay at the driver's values
-  // (2060 x 984 for VGA/QVGA). SCLK MHz = mul x 2/3 / sys_div on the pre_div 3 tree at
-  // XCLK 20MHz, so fps = SCLK / (HTS x lf x VTS). Bench-verified: 29.925/24.990/19.894/
+  // (2060 x 984 for VGA/QVGA). PIXCLK MHz = mul x 2/3 / sys_div on the pre_div 3 tree at
+  // XCLK 20MHz, so fps = PIXCLK / (HTS x lf x VTS). Bench-verified: 29.925/24.990/19.894/
   // 14.965/9.949 counted against five computed targets (0.3% worst error), stills clean,
   // auto AEC healthy, QVGA 39.47 at the mul 120 ceiling.
   // Selection window: mul 75-150 keeps VCO in the datasheet's 500-1000 best range (even
-  // values only above 127 per section 7.1), and SCLK is capped at the verified 80MHz -
+  // values only above 127 per section 7.1), and PIXCLK is capped at the verified 80MHz -
   // the image cliff sits at 88-92. The window spans a full 2x, so consecutive sys_div
   // steps (worst ratio 2, at 1->2) can never leave an unreachable fps gap.
   uint8_t fps = desiredFPS(fs);
@@ -841,16 +843,16 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
   }
   // the sensor runs FPS_OVERDRIVE above the request; the frame timer paces delivery at
   // the request itself (see applyTunedTiming - same scheme, clock instead of VTS)
-  float plainMHz = (float)fps * hts * lf * vts / 1e6f; // the SCLK that matches the request exactly
+  float plainMHz = (float)fps * hts * lf * vts / 1e6f; // the PIXCLK that matches the request exactly
   float targetMHz = plainMHz * FPS_OVERDRIVE;
   // both ends are measured, not derived: 80 is the verified ceiling (image cliff 88-92);
   // below ~10 the sensor degrades - 8.1MHz ran grainy with a 2.5% rate sag and 6.1MHz
   // produced a solid false-colour frame with no scene content at all
-  const float SCLK_FLOOR_MHZ = 10.0f;
+  const float PIXCLK_FLOOR_MHZ = 10.0f;
   int mul = 0, sysDiv = 0;
-  if (targetMHz > 80.0f || targetMHz < SCLK_FLOOR_MHZ) {
+  if (targetMHz > 80.0f || targetMHz < PIXCLK_FLOOR_MHZ) {
     // outside the achievable range: clamp, like the tuned path's ceiling clamp.
-    // The floor combo is the verified 5fps point (SCLK 10.13, counted 4.961). Below it
+    // The floor combo is the verified 5fps point (PIXCLK 10.13, counted 4.961). Below it
     // the frame TIMER still paces the requested 1-4fps exactly - the sensor just free-runs
     // at ~5. An overdrive-only ceiling bust is expected and silent; only a request the
     // sensor itself cannot reach warns
@@ -874,10 +876,10 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
     LOG_WRN("Scaler clock: PLL mul wrote %d but reads %d", mul, gotMul);
     return;
   }
-  float sclkMHz = mul * 2.0f / 3 / sysDiv;
-  LOG_INF("Scaler clock %s: SCLK %.2fMHz (mul %d sys_div %d), HTS %d x%d, VTS %d -> sensor %.2ffps for request %u",
-    frameData[fs].frameSizeStr, sclkMHz, mul, sysDiv, hts, lf, vts,
-    sclkMHz * 1e6f / ((float)hts * lf * vts), fps);
+  float pixClkMHz = mul * 2.0f / 3 / sysDiv;
+  LOG_INF("Scaler clock %s: PIXCLK %.2fMHz (mul %d sys_div %d), HTS %d x%d, VTS %d -> sensor %.2ffps for request %u",
+    frameData[fs].frameSizeStr, pixClkMHz, mul, sysDiv, hts, lf, vts,
+    pixClkMHz * 1e6f / ((float)hts * lf * vts), fps);
 }
 
 static void applySensorTuning(sensor_t* s, framesize_t fs) {
@@ -1748,7 +1750,7 @@ static void idleSetRate(uint8_t fps, bool throttled) {
   // fetched, while the sensor keeps streaming at its tuned rate into the driver's DMA
   // and burns the same power - measured, 360mA flat with the timer at 5fps. The sensor's
   // fps-derived timing flows through desiredFPS(), so raise the flag first, then re-run
-  // applySensorTuning() (crop, HTS floor, tuned VTS/SCLK, AEC limits) to make it real
+  // applySensorTuning() (crop, HTS floor, tuned VTS/PIXCLK, AEC limits) to make it real
   idleRateActive = throttled;
   setFPS(fps);
   sensor_t* s = esp_camera_sensor_get();
