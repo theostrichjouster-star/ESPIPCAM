@@ -592,9 +592,10 @@ const frameStruct frameData[] = {
   {"1280X960", 1280, 960, 24, 3, 1, 39}, // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39.03 MEASURED 27 Aug, exact 12-39 (scaler pass is 1:1, exempt from the scaler halving) | exposure-first sweep 28 Aug: same timing as HD, 95ms @10fps | re-swept 2 Sep 2026 lit q10: register tier identical (39.47 counted); 39 delivers 37.7 and 38 delivers 37.5 - 98 KB frames cost 22 ms of storage in a 25.6 ms period while KB/s demand sits at 88%, under the governor's push line. Ceiling kept: the sensor is exact and the shortfall is scene-dependent storage time (BOARD_TESTING 26)
   // The two wider 1080p variants. Same 1920x1080 output as FHDNARROW, read off a LARGER slice
   // of the array and downsized by the ISP scaler instead of cropped 1:1 - see the FHD ladder
-  // note below. Ceilings are PREDICTED here until the bench run replaces them
-  {"FHDMID", 1920, 1080, 10, 3, 1, 12},  // pre-scale 2304x1296 (scaler 1.2x), window 2368x1328, HTS 2444 x2, VTS 1344 | 90% of array width, 68% of its height | ceiling 12.18 predicted, max exposure 82ms
-  {"FHDFULL", 1920, 1080, 9, 3, 1, 9}    // pre-scale 2560x1440 (scaler 1.333x) - the DRIVER'S OWN window, so no window register is written at all | 100% of array width, 75% of its height | ceiling 9.45 predicted, max exposure 110ms
+  // note below. Both MEASURED on COM4, 3 Sep 2026, the register tier generating their sweep.csv
+  // reference. The scaler-halving hazard did NOT bite either of them
+  {"FHDMID", 1920, 1080, 10, 3, 1, 12},  // pre-scale 2304x1296 (scaler 1.2x), window 2368x1328, HTS 2444 x2, VTS 1344 | 90% of array width, 68% of its height | clock-tuned: ceiling 12.178 VSYNC-COUNTED against 12.18 computed, 8fps exact at 53.33MHz | register tier 12/12 all gates, max exposure 82ms at the ceiling to 647ms at 1fps | recordings 12 and 6 delivered exact at 152KB frames (34% of the frame window), boost 0, busy 42/20%
+  {"FHDFULL", 1920, 1080, 9, 3, 1, 9}    // pre-scale 2560x1440 (scaler 1.333x) - the DRIVER'S OWN window, so no window register is written at all | 100% of array width, 75% of its height | clock-tuned: ceiling 9.059 VSYNC-COUNTED against 9.06 computed, 6fps exact at 51.33MHz | register tier 9/9 all gates, max exposure 110ms at the ceiling to 833ms at 1fps | recordings 9 and 5 delivered exact at 188/171KB frames, boost 0, busy 39/19% - far more headroom at its ceiling than FHDNARROW has at 16 (busy 99%)
 };
 
 // 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
@@ -611,9 +612,18 @@ const frameStruct frameData[] = {
 // driver's 16:9 window is 2624x1472 at offsets 32/16, ie a pre-scale of exactly 2560x1440.
 //
 //   size       pre-scale   window     HTS   VTS   ceiling  maxExp  width  height  scaler
-//   FHDNARROW  1920x1080   1984x1112  2200  1128   16fps    62ms    76%    57%    off (1:1)
-//   FHDMID     2304x1296   2368x1328  2444  1344   12fps    82ms    90%    68%    1.2x
-//   FHDFULL    2560x1440   2624x1472  2844  1488    9fps   110ms   100%    75%    1.333x
+//   FHDNARROW  1920x1080   1984x1112  2200  1128   16.120   62ms    76%    57%    off (1:1)
+//   FHDMID     2304x1296   2368x1328  2444  1344   12.178   82ms    90%    68%    1.2x
+//   FHDFULL    2560x1440   2624x1472  2844  1488    9.059  110ms   100%    75%    1.333x
+//
+// Ceilings are VSYNC counts off the pin, 3 Sep 2026, not the computed figures - and each
+// agreed with its computation to better than 0.01fps. The halving did not happen: the implied
+// pixel clock came back at 80.01, 80.00 and 76.68MHz against 80.00, 80.00 and 76.67 computed.
+//
+// The wide variants also produce SMALLER frames than the 1:1 crop despite covering more scene
+// (152KB and 188KB against 228KB at q10), because downscaling averages away sensor noise the
+// crop keeps. So they cost less to store as well as seeing more, and both sit near 40% busy at
+// their ceilings where FHDNARROW sits at 99%.
 //
 // FHDFULL asks for the driver's own pre-scale, so applyCropWindow()'s "nothing to crop" early
 // return fires and not one window, HTS or VTS register is written - the safest form the change

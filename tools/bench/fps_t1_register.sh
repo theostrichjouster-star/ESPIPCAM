@@ -10,7 +10,12 @@ if [ "${1:-}" = "--from" ]; then FROM_IDX=${2%%:*}; FROM_FPS=${2##*:}; fi
 # FHD became FHDNARROW on 3 Sep 2026 when FHDMID and FHDFULL joined it - same size, same
 # timing, new name (sweep.csv was renamed to match). The two wide variants are scaler regime:
 # they keep the ISP scaler on, so their fps moves the PLL at a pinned VTS
-SIZES=("QVGA:6:39:scaler" "VGA:10:39:scaler" "HD:13:52:vts" "1280X960:25:39:vts" "FHDNARROW:16:16:vts" "FHDMID:26:12:scaler" "FHDFULL:27:9:scaler" "QSXGA:23:7:vts")
+# SIZES_LIST overrides the set for one run, space separated in the same name:idx:ceiling:regime
+# form. Needed whenever part of the sweep has a reference and part does not: a size with no
+# sweep.csv row DIFFs at every point and trips the two-consecutive-anomaly abort, so a new size
+# has to be generated (REF=-) in its own run while the established ones stay checked
+if [ -n "${SIZES_LIST:-}" ]; then read -r -a SIZES <<< "$SIZES_LIST"
+else SIZES=("QVGA:6:39:scaler" "VGA:10:39:scaler" "HD:13:52:vts" "1280X960:25:39:vts" "FHDNARROW:16:16:vts" "FHDMID:26:12:scaler" "FHDFULL:27:9:scaler" "QSXGA:23:7:vts"); fi
 
 preflight
 [ -f "$CSV" ] || echo "idx,size,fps,regime,pixclk,hts,lf,vts,sensorFps,maxExpMs,gateRate,gate33,gate100,match28,flag" > "$CSV"
