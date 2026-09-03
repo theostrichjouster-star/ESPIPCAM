@@ -389,6 +389,20 @@ void stopWatchDog() {
   else LOG_WRN("Task watchdog still armed (%s) - an update longer than %us will reset the board", espErrMsg(res), wifiTimeoutSecs * 2);
 }
 
+void starveWatchDog() {
+  // Debug: prove the task watchdog instrument end to end. Enrols the calling task and then
+  // never feeds it, so the TWDT fires for real and esp_task_wdt_isr_user_handler() writes
+  // the starved task name into the RTC ring, exactly as a genuine stall would. A watchdog
+  // reset cannot be faked any other way, and the two that happened on 2 Sep left nothing
+  // behind to work from - which is the entire reason the instrument exists, so it does not
+  // get shipped untested. Called on the httpd worker, so this request never returns and the
+  // board reboots under it after the configured timeout
+  esp_task_wdt_add(NULL); // no-op if this task is already enrolled
+  uint32_t waited = 0;
+  while (waited++ < 300) delay(1000); // deliberately never esp_task_wdt_reset()
+  LOG_WRN("Task watchdog starve test ran 300s without firing - the TWDT is not armed");
+}
+
 static void statusCheck() {
   // regular status checks
   if (!timeSynchronized) getLocalNTP();

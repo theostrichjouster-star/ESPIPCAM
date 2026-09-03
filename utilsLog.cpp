@@ -10,6 +10,16 @@
  
 #include "appGlobals.h"
 #include "freertos/atomic.h"
+#include <esp_timer.h>
+
+// The task watchdog hook is defined in this file without including esp_task_wdt.h,
+// deliberately. That header declares it __attribute__((weak)), and a definition inherits
+// the attribute from its declaration - which would leave TWO weak definitions of the
+// symbol, ours and the IDF's do-nothing default, with the winner decided by link order
+// alone. With no weak declaration in scope, ours is strong and overrides outright. Verify
+// after any toolchain change with addr2line on the symbol: it must resolve to this file.
+// extern "C" for the same family of reason as verifyRollbackLater - a C++ definition
+// mangles to a name the ISR never calls, and the core default silently wins
 
 bool dbgVerbose = false;
 
@@ -138,6 +148,59 @@ static void ramLogStore(const char* outBuf, size_t msgLen) {
     mlogEnd = 0;
   } else memcpy(messageLog + mlogEnd, outBuf, msgLen);
   mlogEnd += msgLen;
+}
+
+/*********************** Task watchdog forensics ***********************/
+// A task watchdog reset reboots the board and names the starved task only on the serial
+// console, over ESP_EARLY_LOGE - which nobody is watching on a deployed board. Two of the
+// 2 Sep uncontrolled reboots were task WDT resets and the RAM log could not say which task
+// stopped feeding. esp_task_wdt_isr_user_handler is the IDF's own hook, called from the
+// TWDT ISR before the panic, so a note written here reaches the RTC ring.
+//
+// The first version of this called esp_task_wdt_print_triggered_tasks() to get the IDF's
+// own list of starved tasks. Do not reinstate that. The TWDT ISR has already called it
+// before invoking this hook and still holds the watchdog's spinlock, so re-entering it
+// risks deadlocking inside the ISR with interrupts disabled - which is a dead chip, no
+// console, no reset, exactly the failure this instrument exists to explain. A deliberate
+// starve test on 3 Sep wedged the board for nine hours and left no evidence either way,
+// so the call is gone rather than left as a suspect.
+//
+// What is left is lock free and fixed size: the two cores' currently running tasks. That
+// is a hint, not the answer - the ISR runs on whichever core noticed, and the starved task
+// may be neither of these - but it costs nothing and cannot hang. pcTaskGetName() just
+// returns the TCB's name field and takes no lock.
+//
+// ISR rules apply throughout: ramLogStore() is a plain memcpy into RTC memory that takes no
+// lock and allocates nothing, the LOG_ macros are not used (they post to a queue), and the
+// integers are formatted by hand because newlib's snprintf can lock and allocate.
+static void twdtStore(const char* str) {
+  if (str == NULL) return;
+  size_t strLen = strlen(str);
+  if (strLen) ramLogStore(str, strLen);
+}
+
+static void twdtStoreNum(uint32_t val) {
+  char digits[12];
+  size_t i = sizeof(digits) - 1;
+  digits[i] = 0;
+  do { digits[--i] = '0' + (val % 10); val /= 10; } while (val && i);
+  twdtStore(digits + i);
+}
+
+extern "C" void esp_task_wdt_isr_user_handler(void) {
+  twdtStore("\n");
+  twdtStoreNum((uint32_t)(esp_timer_get_time() / 1000));
+  twdtStore("ms ERR TASK WDT fired on core ");
+  twdtStoreNum((uint32_t)xPortGetCoreID());
+  twdtStore(", running:");
+  for (int core = 0; core < portNUM_PROCESSORS; core++) {
+    twdtStore(" cpu");
+    twdtStoreNum((uint32_t)core);
+    twdtStore("=");
+    TaskHandle_t running = xTaskGetCurrentTaskHandleForCore(core);
+    twdtStore(running == NULL ? "none" : pcTaskGetName(running));
+  }
+  twdtStore(" - rebooting\n");
 }
 
 void markSagStage1() {

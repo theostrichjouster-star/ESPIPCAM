@@ -200,6 +200,14 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     delay(50);
     debugDirtyReboot();
   }
+  // debug: starve the task watchdog on purpose so it fires for real. Proves the RTC ring
+  // gets the starved task name from esp_task_wdt_isr_user_handler - the one piece of
+  // evidence the two 2 Sep watchdog reboots could not supply. This request never returns
+  else if (!strcmp(variable, "wdtTest")) {
+    LOG_ALT("Debug: starving the task watchdog - expect a WDT reboot in about %us", wifiTimeoutSecs * 2);
+    delay(50);
+    starveWatchDog();
+  }
   // debug: arm the comparator at a given level for the false trip soak. Never terminal
   // from here - a web request must not be able to arm the killswitch.
   // Level 1 (3.30V) is at the nominal rail, so arming it asserts a PERMANENT brownout:
