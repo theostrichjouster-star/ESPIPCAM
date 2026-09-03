@@ -34,16 +34,24 @@ g_rate = "OK" if (pt["sensor"] >= fps - 0.005 or exempt) else "FAIL"
 g33 = "OK" if pt["maxexp"] >= min(33, period) - 1 else "FAIL"
 g100 = "OK" if pt["maxexp"] >= min(100, period) - 1 else "FAIL"
 
-match = "NOROW"
+# sweep "-" means no reference: the run is generating one. The gates still decide pass/fail,
+# but a comparison that was never made must not be allowed to fail the point - and with a
+# stale reference every point would DIFF, which trips the two-consecutive-anomaly abort in
+# bench_lib.sh after two points. NOCSV and NOROW stay failures when a reference WAS asked for
+refChecked = sweep != "-"
+match = "REGEN" if not refChecked else "NOROW"
 try:
+    if not refChecked: raise FileNotFoundError
     with open(sweep, newline="") as f:
         for r in csv.DictReader(f):
             if r["size"] == size and int(r["fps"]) == fps:
                 diffs = []
+                # the reference column was SCLK_MHz before the 3 Sep rename; accept either
+                refClk = r.get("PIXCLK_MHz", r.get("SCLK_MHz"))
                 # sweep.csv is the stored 28 Aug reference and keeps its original SCLK_MHz
                 # column heading deliberately - it is a measurement record, not something to
                 # retitle after the fact. Same quantity as the PIXCLK the firmware now prints
-                if abs(float(r["SCLK_MHz"]) - pt["pixclk"]) > 0.011: diffs.append(f"pixclk {r['SCLK_MHz']}")
+                if abs(float(refClk) - pt["pixclk"]) > 0.011: diffs.append(f"pixclk {refClk}")
                 if int(r["HTS"]) != pt["hts"]: diffs.append(f"hts {r['HTS']}")
                 if int(r["lf"]) != pt["lf"]: diffs.append(f"lf {r['lf']}")
                 if int(r["VTS"]) != pt["vts"]: diffs.append(f"vts {r['VTS']}")
@@ -52,9 +60,9 @@ try:
                 match = "OK" if not diffs else "DIFF(" + "; ".join(diffs) + ")"
                 break
 except FileNotFoundError:
-    match = "NOCSV"
+    if refChecked: match = "NOCSV"
 
 rescue = "RESCUE" if re.search(r"rescue", text, re.I) else ""
 print(f"{size},{fps},{regime},{pt['pixclk']:.2f},{pt['hts']},{pt['lf']},{pt['vts']},{pt['sensor']:.2f},{pt['maxexp']:.0f},{g_rate},{g33},{g100},{match},{rescue}")
-ok = g_rate == "OK" and g33 == "OK" and g100 == "OK" and match == "OK" and not rescue
+ok = g_rate == "OK" and g33 == "OK" and g100 == "OK" and not rescue and (not refChecked or match == "OK")
 sys.exit(0 if ok else 1)

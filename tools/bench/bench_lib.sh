@@ -8,6 +8,11 @@ set -u
 B="http://$BOARD"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${OUT:-FPS_RECAL_stills/retune_$(date +%Y%m%d)}"
+# The register-tier reference to compare each point against. REF=- means no comparison,
+# ie this run is GENERATING a reference. Needed because a stale reference DIFFs at every
+# point, and two consecutive anomalies abort the tier - so a regeneration run would die
+# after two points if the comparison were unconditional
+REF="${REF:-FPS_RECAL_stills/sweep.csv}"
 mkdir -p "$OUT"
 LOGF="$OUT/campaign.log"
 ANOM=0   # consecutive anomalies; two in a row abort the tier (FPS_RECAL method)
@@ -92,7 +97,7 @@ get_retime() {  # get_retime <size name> <fps> <ceiling> <regime> <logfile> -> t
   local size=$1 fps=$2 ceil=$3 regime=$4 logf=$5 i L row rc
   for i in 1 2 3 4; do
     L=$(ramlog); printf '%s\n' "$L" > "$logf"
-    row=$(printf '%s\n' "$L" | python "$HERE/t1_point.py" "$size" "$fps" "$ceil" "$regime" "FPS_RECAL_stills/sweep.csv"); rc=$?
+    row=$(printf '%s\n' "$L" | python "$HERE/t1_point.py" "$size" "$fps" "$ceil" "$regime" "$REF"); rc=$?
     [ "$rc" -ne 2 ] && { printf '%s\n' "$row"; return $rc; }
     sleep 2
   done
