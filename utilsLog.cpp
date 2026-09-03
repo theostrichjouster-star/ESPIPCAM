@@ -319,6 +319,10 @@ static void logTask(void *pvParams) {
         msg[msgLen - 2] = '\n';
         msg[--msgLen] = 0;
       }
+      // LOG_ALT, LOG_WRN and LOG_ERR all end their text with '~'. Latch it before the strip
+      // below removes it - it is the only thing that distinguishes an alert line by the time
+      // the SD sync decision is made
+      bool isAlert = msgLen > 1 && msg[msgLen - 2] == '~';
       if (msgLen > 1) {
         wsAsyncSendText(msg); // output to browser over web socket
         if (msg[msgLen - 2] == '~') msg[msgLen - 2] = ' '; // remove '~' if present
@@ -334,13 +338,17 @@ static void logTask(void *pvParams) {
           if (log_remote_fp != NULL) {
             // output to SD if file opened
             fwrite(msg, sizeof(char), msgLen, log_remote_fp); // log.txt
-            // Periodic sync to SD, but never for a warning or an error: those are the
+            // Periodic sync to SD, but never wait for one on an alert line: those are the
             // lines that explain a failure, and on a battery board the failure is a
             // supply loss that discards everything not yet synced. The whole of a 85
             // minute battery run was lost this way (28 Aug) - the SD log is only a black
-            // box if the interesting lines are on the card before the lights go out
-            if (counter_write++ % WRITE_CACHE_CYCLE == 0
-                || strstr(msg, "WARN") != NULL || strstr(msg, "ERR") != NULL) {
+            // box if the interesting lines are on the card before the lights go out.
+            // The '~' marker replaces a substring search for WARN and ERR, which missed
+            // LOG_ALT entirely: the deliberate watchdog starve of 3 Sep announced itself
+            // with LOG_ALT, the board wedged before the next periodic sync, and the line
+            // never reached the card - so the one record of what was asked for was lost.
+            // The marker covers ALT, WRN and ERR alike and cannot be faked by message text
+            if (counter_write++ % WRITE_CACHE_CYCLE == 0 || isAlert) {
               // fflush first or the fsync pushes everything EXCEPT this line - fwrite
               // leaves it in the stdio buffer, which defeated the whole point of syncing
               // on warnings (they persisted only when a later line happened to flush them)
