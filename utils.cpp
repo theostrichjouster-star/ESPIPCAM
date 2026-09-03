@@ -390,13 +390,23 @@ void stopWatchDog() {
 }
 
 void starveWatchDog() {
-  // Debug: prove the task watchdog instrument end to end. Enrols the calling task and then
-  // never feeds it, so the TWDT fires for real and esp_task_wdt_isr_user_handler() writes
-  // the starved task name into the RTC ring, exactly as a genuine stall would. A watchdog
-  // reset cannot be faked any other way, and the two that happened on 2 Sep left nothing
-  // behind to work from - which is the entire reason the instrument exists, so it does not
-  // get shipped untested. Called on the httpd worker, so this request never returns and the
-  // board reboots under it after the configured timeout
+  // Debug: intended to prove the task watchdog instrument end to end by enrolling the
+  // calling task and never feeding it, so the TWDT fires for real and
+  // esp_task_wdt_isr_user_handler() writes the starved task name into the RTC ring.
+  //
+  // IT DOES NOT WORK ON THIS BOARD AND HAS NEVER ONCE PRODUCED A WATCHDOG REBOOT. Three
+  // runs on 3 Sep 2026 (one with the old re-entrant handler, two with the current
+  // lock-free one) all ended in a hard wedge: no reboot, no console output beyond the
+  // announcement, and the 300s bail-out below never reached the SD card in any run, so the
+  // board dies before it. Whether the watchdog fires at all is still unknown - the IDF
+  // console is UART0 with USB Serial/JTAG only secondary, so its message may go to pins
+  // nobody is reading, and RTC is wiped by every recovery.
+  //
+  // Before running this again, add a LOG_WRN heartbeat to the wait loop below. WRN forces
+  // an SD sync, so the card would show how far the board got: stopping near the timeout
+  // implicates the watchdog deadline, stopping immediately means the wedge has nothing to
+  // do with the watchdog. See BOARD_TESTING.md 29. Called on the httpd worker, so this
+  // request never returns
   esp_task_wdt_add(NULL); // no-op if this task is already enrolled
   uint32_t waited = 0;
   while (waited++ < 300) delay(1000); // deliberately never esp_task_wdt_reset()

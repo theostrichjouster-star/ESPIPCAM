@@ -200,11 +200,13 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     delay(50);
     debugDirtyReboot();
   }
-  // debug: starve the task watchdog on purpose so it fires for real. Proves the RTC ring
-  // gets the starved task name from esp_task_wdt_isr_user_handler - the one piece of
-  // evidence the two 2 Sep watchdog reboots could not supply. This request never returns
+  // debug: starve the task watchdog. INTENDED to make it fire so the RTC ring gets the
+  // starved task name from esp_task_wdt_isr_user_handler. DANGER: on this board it does not
+  // do that. Three runs on 3 Sep 2026 all ended in a hard wedge needing a physical reset -
+  // no watchdog reboot, and not even the 300s bail-out below ever reached the card. Treat
+  // this as a reliable way to hang the board, not as a self-test. See BOARD_TESTING.md 29
   else if (!strcmp(variable, "wdtTest")) {
-    LOG_ALT("Debug: starving the task watchdog - expect a WDT reboot in about %us", wifiTimeoutSecs * 2);
+    LOG_ALT("Debug: starving the task watchdog - WARNING, all 3 runs so far wedged the board instead of rebooting it");
     delay(50);
     starveWatchDog();
   }
