@@ -50,13 +50,33 @@ static bool zoneDetectOK = false; // sensor has the zone grid (OV5640) - set by 
 // 3600 caps it at 3 minutes at the 20fps default, ~6-7 under heavy shedding
 int maxFrames = 3600; // maximum number of frames in video before auto close
 
-// The sensor is tuned this factor ABOVE the requested fps while the frame timer stays at
-// the request: one frame is taken per timer tick off a GRAB_LATEST queue, so the surplus
-// means every tick finds a fresh frame and the delivered rate is the timer's. Measured
-// without it: recordings ran 0.7-1.3% under the request (ticks that found no frame when a
-// zone check or SD write stalled the task). Costs 5% of the maximum exposure; the surplus
-// frames feed the AEC/AWB. Ceiling requests get no overdrive and run ~1% low by design
-#define FPS_OVERDRIVE 1.05f
+// The sensor is tuned ABOVE the requested fps while the frame timer stays at the request:
+// one frame is taken per timer tick off a GRAB_LATEST queue, so the surplus means every
+// tick finds a fresh frame and the delivered rate is the timer's. Measured without it:
+// recordings ran 0.7-1.3% under the request (ticks that found no frame when a zone check or
+// SD write stalled the task). The surplus frames also feed the AEC/AWB.
+//
+// The surplus is bought out of the exposure ceiling, because max exposure is the frame
+// period less a few blanking rows, and it was a flat 5% at every rate. What the surplus has
+// to cover is scheduling jitter, which is an amount of TIME, not a fraction of the frame
+// period - so a flat fraction over-provisions badly where the period is long. At the HD
+// ceiling 5% is about 1ms of slack; at 11fps the same 5% is 4.5ms, and it is taken out of
+// the exposure ceiling exactly where light is scarcest.
+//
+// So hold the slack at ~1ms instead: overdrive = 1 + fps/1000, clamped. That reproduces
+// today's value at the top of the range, where it was tuned and where delivery accuracy
+// matters most, and relaxes towards the floor as the period lengthens. Ceiling requests
+// still get no effective overdrive (the VTS floor caps them) and run ~1% low by design.
+#define FPS_OVERDRIVE_MAX 1.05f  // the historic flat value, retained at the top of the range
+#define FPS_OVERDRIVE_MIN 1.01f  // never less than this: the measured deficit reached 1.3%
+#define FPS_OVERDRIVE_SLACK_MS 1.0f
+
+static float fpsOverdrive(uint8_t fps) {
+  float od = 1.0f + FPS_OVERDRIVE_SLACK_MS * fps / 1000.0f;
+  if (od > FPS_OVERDRIVE_MAX) od = FPS_OVERDRIVE_MAX;
+  if (od < FPS_OVERDRIVE_MIN) od = FPS_OVERDRIVE_MIN;
+  return od;
+}
 
 uint8_t fpsCeiling(framesize_t fs) {
   // the top of the fps slider: the tuned ceiling when tuning is on and the size has one,
@@ -724,7 +744,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // variant (retired hdProfile 2) remains reproducible at runtime via camPll if the zombie
   // investigation ever needs it again - see BOARD_TESTING.md.
   //
-  // The sensor is tuned FPS_OVERDRIVE above the request while the frame timer stays at the
+  // The sensor is tuned fpsOverdrive() above the request while the frame timer stays at the
   // request itself: the capture task takes one frame per timer tick off a GRAB_LATEST
   // queue, so with a surplus every tick finds a fresh frame and the delivered rate IS the
   // timer rate. The measured 0.7-1.3% delivery deficit came from ticks that found no frame
@@ -755,7 +775,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
 // VTS-4 == the 1964-row AEC engine cap (applyAecLimits): rows above this are blanking
 // the AEC can never convert to exposure
 #define AEC_VTS_CEIL 1968
-  int vts = (int)(80e6f / ((float)hts * lf * fps * FPS_OVERDRIVE));
+  int vts = (int)(80e6f / ((float)hts * lf * fps * fpsOverdrive(fps)));
   int mul = 120, sysDiv = 1; // PIXCLK 80MHz, the high-fps default
   if (vts > AEC_VTS_CEIL) {
     // Exposure-first low-fps regime. VTS-only stretching froze the exposure ceiling at
@@ -769,7 +789,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     // on a binned size. The clock path has no such cliff - scaler sizes run it 10-80MHz
     // and HD ran the retired 40MHz profile
     int targetVts = (AEC_VTS_CEIL > vtsFloor) ? AEC_VTS_CEIL : vtsFloor;
-    float targetMHz = (float)fps * FPS_OVERDRIVE * hts * lf * targetVts / 1e6f;
+    float targetMHz = (float)fps * fpsOverdrive(fps) * hts * lf * targetVts / 1e6f;
     if (targetMHz >= 10.0f) {
       // pickPll cannot fail for 10-80 (the mul window spans 2x per sys_div step), but
       // if it ever does the mul 120 default stands and the naive VTS keeps the rate
@@ -780,7 +800,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
       // and grow VTS past the cap. The exposure ceiling is capped at 1964 rows, but
       // tROW is now so long the ceiling still lands in the hundreds of ms
       mul = 76; sysDiv = 5; // 10.13MHz, the verified floor combo (see applyScalerClock)
-      vts = (int)((mul * 2e6f / 3 / sysDiv) / ((float)hts * lf * fps * FPS_OVERDRIVE));
+      vts = (int)((mul * 2e6f / 3 / sysDiv) / ((float)hts * lf * fps * fpsOverdrive(fps)));
     }
   }
   if (vts < vtsFloor) {
@@ -841,10 +861,10 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
     LOG_WRN("Scaler clock: HTS %d / VTS %d readback implausible - clock left alone", hts, vts);
     return;
   }
-  // the sensor runs FPS_OVERDRIVE above the request; the frame timer paces delivery at
+  // the sensor runs fpsOverdrive() above the request; the frame timer paces delivery at
   // the request itself (see applyTunedTiming - same scheme, clock instead of VTS)
   float plainMHz = (float)fps * hts * lf * vts / 1e6f; // the PIXCLK that matches the request exactly
-  float targetMHz = plainMHz * FPS_OVERDRIVE;
+  float targetMHz = plainMHz * fpsOverdrive(fps);
   // both ends are measured, not derived: 80 is the verified ceiling (image cliff 88-92);
   // below ~10 the sensor degrades - 8.1MHz ran grainy with a 2.5% rate sag and 6.1MHz
   // produced a solid false-colour frame with no scene content at all
