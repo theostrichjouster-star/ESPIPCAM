@@ -350,6 +350,12 @@ uint16_t frameWindowKB(int fs) {
       // 1280X960 survives 383KB on identical sensor timing), and these emit the same
       // 1920x1080 as FHDNARROW. Replace with a measured figure if either is ever swept
       if (fs == FS_FHDMID || fs == FS_FHDFULL) return 443;
+      // QHD deliberately stays 0. It was swept and recorded on 3 Sep 2026, but its cliff was
+      // NOT measured - that needs the random-pattern descend of BOARD_TESTING 20, not a rate
+      // sweep - and it cannot be inherited from anything: 2560x1440 sits between FHD's 443KB
+      // and QSXGA's 946KB with no basis for interpolating. Lit q10 frames measured 372KB at
+      // 9fps, and a dim scene roughly doubles frame size, so the headroom is genuinely unknown.
+      // 0 means "no prediction", which leaves noFrameRescue() as the guard rather than a guess
       return 0;
   }
 }

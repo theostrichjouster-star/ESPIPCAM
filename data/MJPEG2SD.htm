@@ -971,7 +971,14 @@
                         <option class="OV5640 hidden" value="23">QSXGA(2560x1920)</option>
                         <option class="hidden" value="22">P_FHD(1080x1920)</option>
                         <option class="hidden" value="21">WQXGA(2560x1600) - stills only</option>
-                        <option class="hidden" value="20">QHD(2560x1440) - stills only</option>
+                        <!-- QHD records, and is now selectable. Two things were stale here: the
+                             stills-only label (3.69MP is inside the QSXGA video cap, and it
+                             recorded fine when swept on 3 Sep 2026, ceiling 9.092 counted), and
+                             the class, which carried no camera model at all - so showModel()
+                             never revealed it for ANY sensor and the size could only be reached
+                             through /control?framesize=20. Same readout as FHDFULL, emitted 1:1
+                             at 2560x1440 instead of downscaled -->
+                        <option class="OV5640 hidden" value="20">QHD(2560x1440)</option>
                         <option class="OV3660 hidden" value="19">QXGA(2048x1536) - stills only</option>
                         <option class="OV3660 hidden" value="18">P_3MP(864x1536)</option>
                         <option class="OV3660 hidden" value="17">P_HD(720x1280)</option>
