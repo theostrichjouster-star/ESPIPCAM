@@ -3147,35 +3147,42 @@ void setSubSample(const char* csv) {
   //                      xclkStat back-solved the implied clock at 39.99MHz against 80.00
   //                      computed, exactly half, which is the tell.
   //   VGA   4x, VTS 496: sensor stopped producing frames entirely, still returned 0 bytes.
-  // WHY, corrected 3 Sep 2026 once the datasheet was actually to hand. The first explanation
-  // written here said binning averages row pairs and so doubles the per-row cost, cancelling
-  // the saving. That is WRONG, and a direct test refuted it: clearing 0x3820 at 2x left the
-  // frame rate identical (39.474 -> 39.448) while the JPEG grew 50%, so binning changes the
-  // IMAGE and costs no frame time at all.
+  // WHY - SETTLED 3 Sep 2026 by a VTS walk at both factors. Two earlier explanations were
+  // written here and both were wrong in part; this one is measured directly, so read the
+  // table rather than re-deriving it.
   //
-  // The real reason is datasheet section 3.2, in a sentence the first reading skipped:
-  // "During subsampling, information is periodically dropped WHEN DATA IS OUTPUT. When the
-  // binning function is ON, voltage levels of adjacent pixels are averaged before being sent
-  // to the ADC. If the binning function is OFF, the pixels, which are not output, are merely
-  // skipped." Followed by: "The OV5640 supports 2x2, 1x2, and 2x1 binning."
+  // The experiment nobody had run: hold the window fixed, walk VTS, and count VSYNC at 2x
+  // and at 4x. The two behave completely differently.
   //
-  // So the two do different jobs. BINNING is an array operation that reduces ADC work and
-  // therefore readout time, and it is capped at 2x2. SUBSAMPLING drops data at OUTPUT and
-  // buys no readout time by itself. The stock 2x vertical decimation is a binning operation
-  // (section 3.2: vertical binning turns on automatically in vertical-subsampled formats),
-  // which is why VTS 984 covers a 1952-row array. Asking for 4x leaves binning still at its
-  // 2x limit, so the extra factor is dropped downstream and the sensor still clocks ~976 row
-  // times. Programming VTS 496 then under-runs the real readout, which is the corruption
-  // condition - hence the shredded frames, and at VGA no frames at all. The "implied clock
-  // exactly half" is the same fact seen from the other side: the arithmetic assumed VTS 496
-  // where the sensor was really running about twice that.
+  //   VTS    2x counted        4x counted   lf-1 prediction   4x ratio
+  //   984    39.464            19.734       39.47             2.0001
+  //   800    39.464 (pinned)   24.273       48.54             1.9998
+  //   700    39.464 (pinned)   27.740       55.48             2.0000
+  //   600    39.464 (pinned)   32.365       64.72             1.9997
+  //   496    39.464 (pinned)   39.151       78.30             1.9999
   //
-  // UNRESOLVED, and worth saying rather than papering over: table 2-1 claims VGA 90fps and
-  // QVGA 120fps by "subsampling from 1280x960", and those rates need the frame genuinely
-  // shortened to ~484 and ~242 row times. Either those modes crop as well, or the increment
-  // does save readout time when the WHOLE mode is configured consistently and our piecemeal
-  // write of 0x3815 alone left it inconsistent. The datasheet publishes the modes but not
-  // their register sets, so this cannot be settled from the document.
+  // At 2x, VTS below 984 is simply IGNORED - the rate pins, because the readout still needs
+  // its 976 rows and the sensor clamps to that. At 4x, VTS IS honoured and the rate tracks it
+  // exactly, but every line costs 2 x HTS instead of 1 x HTS. Five points, ratio 2.0000.
+  //
+  // So the net frame cost is identical and the cancellation is exact, by construction:
+  //   4x: 488 output rows x 2 HTS = 976 HTS-times
+  //   2x: 976 output rows x 1 HTS = 976 HTS-times
+  //
+  // The mechanism follows from datasheet section 3.2, which says the part "supports 2x2, 1x2,
+  // and 2x1 binning" - 2x is the limit. A 4x vertical mode therefore cannot be one binned
+  // pass; it takes two, which is precisely the doubled line cost measured. Note what this
+  // does NOT mean: binning itself costs no frame time. Clearing 0x3820 at 2x left the rate
+  // unchanged (39.474 -> 39.448) while the JPEG grew 50%, so at 2x binning decides averaged
+  // versus skipped - the image - and nothing about timing.
+  //
+  // CONSEQUENCE, and it closes table 2-1's VGA/QVGA question: vertical subsampling can NEVER
+  // raise the frame rate on this part, at any factor, because the line cost absorbs exactly
+  // what the row count saves. The only lever that shortens a frame is reading fewer rows, ie
+  // cropping the window - which is what VGANARROW/QVGANARROW do, and they deliver the full
+  // 2x and 3.7x. Table 2-1's VGA row reaches 648x484 from 1296x968, half in each axis, and
+  // that has to be a CROP however the column words it. Its remaining advantage over
+  // VGANARROW is line length, ~1067 implied against our 2060, not the subsampling.
   // Both sizes recover fully on the next framesize change, which reloads the register block.
   //
   // So QVGA, VGA and 1280X960 all remain capped at 39.47fps, and the only lever left is the
