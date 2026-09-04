@@ -919,7 +919,7 @@ dcw~1~98~~na
 enableMotion~1~98~~na
 fps~20~98~~na
 framesize~10~98~~na
-gainceiling~511~98~~na
+gainceiling~1023~98~~na
 hmirror~0~98~~na
 lenc~1~98~~na
 lswitch~10~98~~na
