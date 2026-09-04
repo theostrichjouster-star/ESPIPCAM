@@ -120,6 +120,12 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   (datasheet), and above that VTS it parks at 2-28% of the frame with the gain doing the work
   (measured 4 Sep 2026). The low-fps branch holds VTS at 1968 and lets the frame timer
   decimate; more exposure at 1-2 fps needs a longer tROW, not a longer frame.
+- SCLK below 10 MHz is a dead end in the sensor's own clock domain (speckle from 9.6 MHz,
+  flat frames by 6.3, by every route, port clock and FIFO exonerated). Lengthen tROW with HTS
+  instead: at full resolution HTS is free blanking to 8000 (3.1 s ceiling); binned sizes flip
+  their line cost above 2277.
+- Continuous autofocus runs from boot. Any measurement that compares stills must hold the
+  lens (`af_hold`, MCU reset) and say so; a moving lens changes hdiff and the eyeball alike.
 
 ## Git
 
@@ -259,6 +265,20 @@ Destructive or dangerous:
 - `fps_ladder.sh` - one row per requested fps for a size: route, PIXCLK, HTS, VTS, line time,
   max exposure, the settled exposure and gain, one VSYNC count, a forced recording (delivered
   fps, frame KB, storage ms, SD kB/s) and a still through `still_color.py`. Prints the table
+- `pixclk80_check.sh` - the ceiling rungs with the sensor forced onto the 80 MHz tree
+- `dim_check.sh` - the exposure line, gain, zones, VSYNC, a clip and a still per rate in the dark
+- `pixclk_floor_walk.sh`, `pixclk_floor_walk2.sh`, `pclk_port_probe.sh` - the SCLK-below-10 MHz
+  dead end (BOARD_TESTING §37): speckle from 9.6 MHz down by either route, dead by 6.3; the DVP
+  port clock and the JPEG FIFO flag exonerated. Do not re-walk without a new mechanism
+- `hts_stretch.sh` - exposure by lengthening the LINE at the clock floor: HTS walked up by
+  register at VTS 1968 (the AEC's range); full resolution clean to HTS 8000 = 3.1 s ceiling at
+  0.32 fps. Group writes do not land at ~1 fps (the launch poll misses the frame), so it
+  writes the pair plainly, high byte first when raising
+- `bench_lib.sh` `af_hold` / `af_check` / `af_resume` - the lens hold for low-rate work. The AF
+  program runs continuous AF from boot; it has no pause command (only 0x03 / 0x04), a release
+  sends the lens to rest, and at 1-2 fps it neither converges nor answers. Hold = focus at FHD
+  10 fps until the VCM DAC (0x3602/03) settles, then the sensor MCU into reset (0x3000 bit 5);
+  release restarts the program. Check the VCM before and after, always
 - `analog_probe.sh`, `analog_stages.sh` - the binned analog register dead end (BOARD_TESTING
   §37): 0x3709 moves nothing, 0x370C=0x03 scrambles colour. Reusable as an HTS A/B walk at
   VGA with any register set in REFSET, and as a stills-per-register-stage rig

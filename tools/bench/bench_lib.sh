@@ -135,3 +135,44 @@ record_clip() {  # optional 6th arg "probe": updateFPS frameKB/govBoost at 3.5 s
 }
 
 kv() { printf '%s\n' "$1" | grep -a "^$2=" | head -1 | cut -d= -f2-; }
+
+# one register, hex string without 0x, from the ring (camRegRd is LOG_INF so it lands there)
+regrd() { ctl "camRegRd=$1" > /dev/null; sleep 0.6; ramlog | grep -a "camRegRd: $1" | tail -1 | sed 's/.*= 0x\([0-9A-Fa-f]*\).*/\1/'; }
+
+# Autofocus hold for low-rate work (4 Sep 2026). The OV5640 AF program (downloaded at boot
+# with INCLUDE_AF) runs continuous AF; at 1-2 fps it never converges and ignores commands, and
+# a release (0x08) sends the lens to rest and changes the focus. So: focus where the program
+# has detail and frames (FHD at 10 fps), then PAUSE (0x06), which freezes the VCM, and prove
+# it with the VCM DAC (0x3602/0x3603) before and after the size change. Command handshake, the
+# library's own: ack 0x3023 = 1, the command in 0x3022, the MCU clears the ack when taken. A
+# wedged program (ack never clears) is restarted from its loaded image by the MCU reset bit
+# (0x3000[5]); measured 12:06: status back to 0x70 idle, continuous re-accepted, VCM settled
+af_cmd() { ctl "camReg=0x3023,0x01" > /dev/null; sleep 0.3; ctl "camReg=0x3022,$1" > /dev/null; local i a; for i in $(seq 1 10); do sleep 1; a=$(regrd 0x3023); [ "$a" = "00" ] && return 0; done; return 1; }
+af_vcm() { echo "$(regrd 0x3602)$(regrd 0x3603)"; }
+AF_VCM=""
+af_hold() {  # af_hold <size idx to return to> <quality> <fps to return to>
+  set_size 16 10 10; sleep 3
+  if ! af_cmd 0x04; then
+    log "AF program not answering - MCU restart (0x3000 bit 5)"
+    ctl "camReg=0x3000,0x20" > /dev/null; sleep 0.5; ctl "camReg=0x3000,0x00" > /dev/null; sleep 3
+    af_cmd 0x04 || { log "ABORT: AF program dead after the MCU restart"; exit 9; }
+  fi
+  local v1 v2 i; v1=$(af_vcm)
+  for i in $(seq 1 15); do sleep 2; v2=$(af_vcm); [ "$v2" = "$v1" ] && [ "$i" -ge 2 ] && break; v1=$v2; done
+  log "AF at FHD 10 fps: status 0x$(regrd 0x3029), VCM 0x$v2 stable after $((i * 2))s"
+  # The hold: the sensor's MCU into reset (0x3000[5]). This AF blob knows only 0x03 (single)
+  # and 0x04 (continuous) - a pause (0x06) is never acknowledged, healthy or not - and with
+  # the MCU stopped nothing rewrites the VCM DAC. Measured 12:11: VCM 0x0210 identical
+  # through the reset, a size change, the drop to 1 fps and 8 s; the 1 fps still sharper
+  # (hdiff 3.5) than any walk-1 frame. Releasing the reset restarts the program to idle
+  ctl "camReg=0x3000,0x20" > /dev/null; sleep 1
+  AF_VCM=$(af_vcm)
+  [ "$(regrd 0x3000)" = "20" ] || { log "ABORT: MCU reset bit did not take - lens not held"; exit 9; }
+  set_size "$1" "$2" "$3"; sleep 3
+  log "AF MCU held (0x3000 0x20) at VCM 0x$AF_VCM; after the size change VCM 0x$(af_vcm)"
+}
+af_check() { local v; v=$(af_vcm); [ "$v" = "$AF_VCM" ] && log "AF held: VCM 0x$v unchanged" || log "WARN: VCM moved 0x$AF_VCM -> 0x$v"; }
+af_resume() {  # MCU out of reset (the program restarts to idle), then continuous AF as the boot leaves it
+  ctl "camReg=0x3000,0x00" > /dev/null; sleep 3
+  af_cmd 0x04 && log "AF MCU released, continuous again, status 0x$(regrd 0x3029)" || log "WARN: AF continuous command not acknowledged after the MCU release (status 0x$(regrd 0x3029))"
+}
