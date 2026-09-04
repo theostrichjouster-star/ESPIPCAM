@@ -104,6 +104,11 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - jsonBuff is shared by design but only ever touched from the single httpd worker -
   keep it that way.
 - Never program HTS above 2277 on a binned frame size (line-cost flip).
+- 0x3108 (root dividers) is never written by the tuner and survives every framesize/fps
+  change. A stale 0x11 doubles the next tuned clock. Restore it to 0x26 BEFORE any PLL write.
+- Never trust a still on byte count, dimensions or the AEC's health: the HTS floor campaign
+  passed magenta, green-blown and confetti frames on all three. Channel ratio plus adjacent
+  pixel noise (`still_color.py`) plus the user's eyeball.
 
 ## Git
 
@@ -223,8 +228,14 @@ Destructive or dangerous:
 - `frame_window_descend.sh` - frame-window cliff by random-pattern quality descend
   (§20 method, §34 run). Recordings not stills, low fps, abort on any HTTP failure
 - `overdrive_ab.sh`, `subsample_ab.sh` - the A/B rigs for those two changes
+- `hts_floor.sh` - the HTS walk. Its AEC/byte gates PASSED CORRUPT FRAMES (BOARD_TESTING §37);
+  never trust a still that has not been through `still_color.py` and an eyeball
+- `sclk96_probe.sh` - the in-spec clock route (0x3108 = 0x11, SCLK = mul x 4/3) ladder and HTS
+  walk at 1280X960; restores 0x3108 FIRST on every exit path, copy that order anywhere 0x3108
+  is written
 - Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
-  `parse_motion.py`, `jfield.py` (/status field), `jpeg_dims.py`
+  `parse_motion.py`, `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel
+  ratio + adjacent-pixel noise: the two gates that catch a corrupt still)
 
 Reference data: `FPS_RECAL_stills/sweep.csv` is the current register reference (222 points
 across 9 sizes as of 3 Sep 2026); `sweep_20260828_flat_overdrive.csv` is the superseded
