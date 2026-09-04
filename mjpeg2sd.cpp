@@ -3050,8 +3050,23 @@ void dumpCamRegs() {
   // so at FHD these two lines disagree by 2624x1472 against 1920x1080. Pre-scaling size is the
   // input less twice the offset (datasheet figure 4-3); when it equals the output size the
   // scaler is doing nothing and 0x5001[5] should be clear
-  LOG_DIA("ISP: input %dx%d, pre-scale %dx%d, scale %s (0x5001=0x%02X)",
-    xEnd - xSt + 1, yEnd - ySt + 1, xEnd - xSt + 1 - 2 * xOff, yEnd - ySt + 1 - 2 * yOff,
+  //
+  // Subsampling happens AT THE ARRAY, upstream of the ISP, so the ISP input is the window
+  // DIVIDED by the subsample factor - not the window itself. This line used to print the raw
+  // window as the input, which overstated both figures by exactly that factor on every binned
+  // size: VGA reads a 2624x1952 window, but the ISP sees 1312x976 and its pre-scale is
+  // 1280x960, where this reported 2624x1952 and 2592x1936. Full resolution was always right
+  // because its factor is 1, which is why it went unnoticed. Corrected 3 Sep 2026 while
+  // answering what VGA actually subsamples - the wrong figures make the shared 1280x960 stage
+  // behind the QVGA/VGA/1280X960 rate ceiling invisible, which is the one thing this line
+  // exists to show
+  int ssX = (xInc < 0) ? 1 : ((((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2);
+  int ssY = (yInc < 0) ? 1 : ((((yInc >> 4) & 0x0F) + (yInc & 0x0F)) / 2);
+  if (ssX < 1) ssX = 1;
+  if (ssY < 1) ssY = 1;
+  int ispW = (xEnd - xSt + 1) / ssX, ispH = (yEnd - ySt + 1) / ssY;
+  LOG_DIA("ISP: window %dx%d / subsample %dx%d = input %dx%d, pre-scale %dx%d, scale %s (0x5001=0x%02X)",
+    xEnd - xSt + 1, yEnd - ySt + 1, ssX, ssY, ispW, ispH, ispW - 2 * xOff, ispH - 2 * yOff,
     (isp01 < 0) ? "?" : ((isp01 & 0x20) ? "on" : "off"), isp01);
   LOG_DIA("Subsample: 0x3814=0x%02X 0x3815=0x%02X (%.1fx by %.1fx) 0x3820=0x%02X 0x3821=0x%02X",
     xInc, yInc, xBin, yBin, camReg(s, OV5640_TIMING_TC_R20), camReg(s, OV5640_TIMING_TC_R21));
