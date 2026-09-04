@@ -210,7 +210,9 @@ Registers and timing:
 - `camRegGrp=0x380C,0x08,0x380D,0x40` - up to 8 registers landed together at the next frame
   boundary (datasheet 0x3212 group write). Use this for HTS, never two plain camReg writes:
   a mid-frame HTS write latched a magenta cast that a whole campaign then blamed on the line
-  length (BOARD_TESTING §37)
+  length (BOARD_TESTING §37). The control query string is refused at 64 chars ("Query string
+  too long"), so one call carries at most 4 pairs - split larger sets and order the calls so
+  no interval is invalid
 - `xclkStat=1` - **ground truth**: counts XCLK and VSYNC off the pins and back-solves the
   implied pixel clock. Refused while capturing. Use this, never the computed figure
 - `camPll=<csv>` - set the PLL directly; `subSample=<y>,<vts>[,<x>]` - subsample probe,
