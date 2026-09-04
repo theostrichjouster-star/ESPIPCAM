@@ -23,6 +23,9 @@ set -u
 OUT=${OUT:-FPS_RECAL_stills/hts_stretch_$(date +%Y%m%d_%H%M)}
 source "$(dirname "${BASH_SOURCE[0]}")/bench_lib.sh"
 IDX=${IDX:-16}; Q=${Q:-10}; REQ=1; HTS0=${HTS0:-2200}; LF=${LF:-2}
+SCLK=${SCLK:-10.13}   # MHz, the tuner's clock at request 1 for the size: 10.13 for FHDNARROW,
+                      # 11.33 for QSXGA (the floor would give 0.905 fps at HTS 2844, so the tuner
+                      # lifts it); the "Tuned timing" line logged below is the check
 SETTLE=${SETTLE:-20}
 WALK=${WALK:-"2400 2844 3500 4200 5600 7000 8000"}
 FIELD_SIZE=13; FIELD_FPS=30
@@ -66,7 +69,7 @@ BASE_HDIFF=""
 
 sample() {  # sample <hts>
   local hts=$1 pred lineUs ceil line vs tag stats rescue
-  read -r lineUs pred ceil <<< "$(python -c "tl=$hts*$LF/10.13; print('%.1f %.3f %.0f'%(tl, 1e6/(tl*1968), 1964*tl/1000))")"
+  read -r lineUs pred ceil <<< "$(python -c "tl=$hts*$LF/$SCLK; print('%.1f %.3f %.0f'%(tl, 1e6/(tl*1968), 1964*tl/1000))")"
   sleep "$SETTLE"; assert_alive
   ctl "xclkStat=1" > /dev/null; sleep 14
   line=$(ramlog | grep -a "VSYNC counted\|VSYNC count failed" | tail -1)
@@ -76,10 +79,10 @@ sample() {  # sample <hts>
   L=$(ramlog)
   rd() { printf '%s\n' "$L" | grep -a "camRegRd: $1" | tail -1 | sed 's/.*= 0x\([0-9A-Fa-f]*\).*/\1/'; }
   read -r zm zmin zmax yavg lo hi st <<< "$(printf '%s\n' "$L" | python "$HERE/parse_zones.py")"
-  read -r gotHts expLines expMs gain <<< "$(python - "$LF" "$(rd 0x380C)" "$(rd 0x380D)" "$(rd 0x3500)" "$(rd 0x3501)" "$(rd 0x3502)" "$(rd 0x350A)" "$(rd 0x350B)" <<'PY'
+  read -r gotHts expLines expMs gain <<< "$(python - "$LF" "$SCLK" "$(rd 0x380C)" "$(rd 0x380D)" "$(rd 0x3500)" "$(rd 0x3501)" "$(rd 0x3502)" "$(rd 0x350A)" "$(rd 0x350B)" <<'PY'
 import sys
-lf = int(sys.argv[1]); h0, h1, e0, e1, e2, g0, g1 = [int(x, 16) for x in sys.argv[2:9]]
-hts = (h0 << 8) | h1; tl = hts * lf / 10.13
+lf = int(sys.argv[1]); sclk = float(sys.argv[2]); h0, h1, e0, e1, e2, g0, g1 = [int(x, 16) for x in sys.argv[3:10]]
+hts = (h0 << 8) | h1; tl = hts * lf / sclk
 lines = ((e0 & 0x0F) << 12) | (e1 << 4) | (e2 >> 4)
 print("%d %d %.1f %.2f" % (hts, lines, lines * tl / 1000.0, (((g0 & 3) << 8) | g1) / 16.0))
 PY
@@ -88,11 +91,16 @@ PY
   # the still handler waits MAX_FRAME_WAIT (1.2 s) for the capture task to keep a frame, so
   # below ~0.8 fps one request is a coin flip - 13:21: nothing at 4200 (0.52 fps) with frames
   # arriving and no rescue, and the binned 3500 miss at 0.67 fps looks the same. Retry, and
-  # say how many it took: a run of empties WITH rescues is the frame window instead
+  # say how many it took: a run of empties WITH rescues is the frame window instead.
+  # The retries must not be phase-locked to the frame: at QSXGA 7000 (period 2.56 s) six
+  # requests 2.45 s apart all missed with frames arriving - the 1.2 s window slid 0.1 s per
+  # try. So the cadence is 7/6 of the predicted period (1.25 s of wait + overhead, then the
+  # sleep), which walks the window a sixth of a period per try and covers a whole period in six
+  local retryGap; retryGap=$(python -c "print('%.2f' % max(0.2, 7.0 / (6 * $pred) - 1.25))")
   while [ "$tries" -lt 6 ]; do
     tries=$((tries + 1))
     curl -s -m 90 -o "$OUT/$tag.jpg" "$B/control?still=1" && [ -s "$OUT/$tag.jpg" ] && break
-    sleep 1
+    sleep "$retryGap"
   done
   [ -s "$OUT/$tag.jpg" ] || log "   no still at $tag after $tries requests"
   stats=$(python "$HERE/still_color.py" "$OUT/$tag.jpg" 2>/dev/null) || stats="0 0 0 0 0 0 0 0 0 999 999"
@@ -103,7 +111,7 @@ PY
   echo "$gotHts,$lineUs,$pred,$vs,$ceil,$expLines,$expMs,$gain,$yavg,$st,$w,$h,$bytes,$ratio,$gsat,$rsat,$hdiff,$vdiff,$rescue,$qs,$tries" >> "$CSV"
 }
 
-log "== HTS stretch, size idx $IDX request $REQ, quality $Q, llevel=$(status_field llevel) night=$(status_field night) =="
+log "== HTS stretch, size idx $IDX request $REQ, quality $Q, SCLK $SCLK MHz assumed, llevel=$(status_field llevel) night=$(status_field night) =="
 assert_campaign_config "$Q"
 # audio off for the long-exposure runs (user, 13:24): micGain 0 is the firmware's off switch
 # for recording and streaming; the restore puts the field value back

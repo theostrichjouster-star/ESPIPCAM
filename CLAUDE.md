@@ -136,11 +136,17 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   at 3.1 s), so the 1.19x floor there would need HTS 120,000 - 15x past the register.
 - Stills below ~0.8 fps are a coin flip: the still handler waits `MAX_FRAME_WAIT` (1.2 s) for
   the capture task to keep a frame, so one request lands with probability 1.2 x fps. Retry,
-  and read "no still" at a slow rate as that before blaming the frame.
-- In the dark at FHD the q10 frame does not exist: at 31.9x the noise pushes it past the 443 KB
-  frame window, the driver delivers nothing, and the no-frame rescue steps the sensor's quality
-  (sticky) until it fits - q20 in one room, q24 in a brighter one. `/status` still says the
-  config's quality; 0x4407 (JPEG CTRL07) and the file's quantizer table say the sensor's.
+  and read "no still" at a slow rate as that before blaming the frame. Retries at a fixed
+  cadence near the frame period are ONE trial, not several (six misses in a row at QSXGA
+  7000, requests 2.45 s apart against a 2.56 s frame): walk the phase, 7/6 of the period.
+- In the dark the q10 frame does not exist: at 31.9x the noise pushes FHD past its 443 KB
+  frame window and QSXGA past the 983 KB buffer, the driver delivers nothing, and the no-frame
+  rescue steps the sensor's quality (sticky) until it fits - FHD q20-24, QSXGA q24 in the
+  dark and q28 in band (860-955 KB). `/status` still says the config's quality; 0x4407 (JPEG
+  CTRL07) and the file's quantizer table say the sensor's.
+- At request 1 the tuner will not go below 1 fps: QSXGA runs 11.33 MHz at HTS 2844 (the 10.13
+  floor gives 0.905), so its 8191 ceiling is 2.84 s where FHDNARROW's is 3.18 s. Measured to
+  the register's end at QSXGA in the dark: 2840 ms at 23x, 0.27 fps, every rung at 1964 lines.
 
 ## Git
 
@@ -289,10 +295,13 @@ Destructive or dangerous:
   register at VTS 1968 (the AEC's range); full resolution clean to HTS 8000 = 3.1 s ceiling at
   0.32 fps. Group writes do not land at ~1 fps (the launch poll misses the frame), so it
   writes the pair plainly, high byte first when raising. `Q=` sets the campaign quality,
-  `AF_VCM_SET=B20A` places the lens for a dark run, the still is retried up to six times
+  `SCLK=` the tuner's clock for the size (10.13 FHDNARROW, 11.33 QSXGA - the "Tuned timing"
+  line is the check), `IDX=`/`HTS0=`/`WALK=` the size and rungs, `AF_VCM_SET=B20A` places the
+  lens for a dark run, the still is retried up to six times at 7/6 of the frame period
   (`stillTries` column) and 0x4407 is read per rung (`qs` column, the rescue's sticky
-  quality). In the dark (BOARD_TESTING §37) the AEC used the whole ceiling at every rung and
-  the gain came off 31.9x at HTS 5600; the mic is off for the run (`micGain=0`)
+  quality). In the dark (BOARD_TESTING §37) the AEC used the whole ceiling at every rung at
+  FHDNARROW and QSXGA to HTS 8191, and the gain came off 31.9x at HTS 5600 in both; the mic
+  is off for the run (`micGain=0`)
 - `bench_lib.sh` `af_hold` / `af_check` / `af_resume` - the lens hold for low-rate work. The AF
   program runs continuous AF from boot; it has no pause command (only 0x03 / 0x04), a release
   sends the lens to rest, and at 1-2 fps it neither converges nor answers. Hold = focus at FHD
