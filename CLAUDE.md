@@ -116,6 +116,10 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   margin; a shorter line needs a soak, not a dozen clean stills.
 - The banding filter is off by config (`banding=0`) so the AEC spends the whole frame on
   exposure before gain; `applyAecLimits` re-asserts it after every retime.
+- Never program VTS past ~1984 and expect the AEC to use the frame: its range is 1964 x tROW
+  (datasheet), and above that VTS it parks at 2-28% of the frame with the gain doing the work
+  (measured 4 Sep 2026). The low-fps branch holds VTS at 1968 and lets the frame timer
+  decimate; more exposure at 1-2 fps needs a longer tROW, not a longer frame.
 
 ## Git
 

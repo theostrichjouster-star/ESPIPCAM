@@ -943,11 +943,20 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
       // correct with the old capped-exposure behavior
       if (pickPll(targetMHz, &mul, &sysDiv)) vts = targetVts;
     } else {
-      // below the verified 10MHz PIXCLK floor (fps 1-2 at most sizes): floor the clock
-      // and grow VTS past the cap. The exposure ceiling is capped at 1964 rows, but
-      // tROW is now so long the ceiling still lands in the hundreds of ms
+      // below the verified 10MHz PIXCLK floor (fps 1-2 at most sizes): floor the clock and
+      // KEEP VTS at the target. This used to grow VTS past the cap so the sensor rate matched
+      // the request, and the log promised the 1964-row ceiling at the long tROW. Measured 4 Sep
+      // 2026 (BOARD_TESTING 37, dim check 2): the AEC engine stops using its 1964-row range
+      // once VTS exceeds it by more than a few lines - intact at VTS 1984, collapsed to 48
+      // lines at the 31.9x gain ceiling at 2100, parked at 14-28% of the frame with 3.6-7.5x
+      // gain at 2326 and 4653 - so 1280X960 at 1-2 fps got 58-118 ms of the 418 the registers
+      // allowed, deterministically, banding on or off. The datasheet's maximum exposure
+      // interval is 1964 x tROW whatever VTS is, so growing VTS never bought exposure; it only
+      // cost it. The sensor now runs faster than the request (2.39 fps at 1280X960, 2.50 at
+      // HD, 1.17 at FHDNARROW) and the frame timer takes every Nth frame, which is how the
+      // scaler sizes have always done 1-4 fps
       mul = 76; sysDiv = 5; // 10.13MHz, the verified floor combo (see applyScalerClock)
-      vts = (int)((mul * 2e6f / 3 / sysDiv) / ((float)hts * lf * fps * fpsOverdrive(fps)));
+      vts = targetVts;
     }
   }
   float routeB = routeBMHz(fs);
