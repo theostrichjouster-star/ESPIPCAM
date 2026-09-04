@@ -126,6 +126,21 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   their line cost above 2277.
 - Continuous autofocus runs from boot. Any measurement that compares stills must hold the
   lens (`af_hold`, MCU reset) and say so; a moving lens changes hdiff and the eyeball alike.
+  The AF program cannot focus in low light: it parks the lens wherever it gives up (DAC codes
+  42 / 114 / 612 in one dark room against 171-256 lit), so a dark hold must place the lens at
+  a lit code by register (`AF_VCM_SET`, datasheet table 3-2: code = 0x3603[5:0] << 4 |
+  0x3602[7:4]) with the MCU stopped, and prove it by readback.
+- HTS is 13 bits (0x380C[4:0], 0x380D): 8191 is the register's end, 3.18 s of ceiling at the
+  10.13 MHz floor. Above the AEC band the sensor trades gain for line length 1:1 (57
+  gain-seconds in the dark bench room, measured 4 Sep 2026: 26x at 2.2 s, 20x at 2.7 s, 19x
+  at 3.1 s), so the 1.19x floor there would need HTS 120,000 - 15x past the register.
+- Stills below ~0.8 fps are a coin flip: the still handler waits `MAX_FRAME_WAIT` (1.2 s) for
+  the capture task to keep a frame, so one request lands with probability 1.2 x fps. Retry,
+  and read "no still" at a slow rate as that before blaming the frame.
+- In the dark at FHD the q10 frame does not exist: at 31.9x the noise pushes it past the 443 KB
+  frame window, the driver delivers nothing, and the no-frame rescue steps the sensor's quality
+  (sticky) until it fits - q20 in one room, q24 in a brighter one. `/status` still says the
+  config's quality; 0x4407 (JPEG CTRL07) and the file's quantizer table say the sensor's.
 
 ## Git
 
@@ -273,12 +288,18 @@ Destructive or dangerous:
 - `hts_stretch.sh` - exposure by lengthening the LINE at the clock floor: HTS walked up by
   register at VTS 1968 (the AEC's range); full resolution clean to HTS 8000 = 3.1 s ceiling at
   0.32 fps. Group writes do not land at ~1 fps (the launch poll misses the frame), so it
-  writes the pair plainly, high byte first when raising
+  writes the pair plainly, high byte first when raising. `Q=` sets the campaign quality,
+  `AF_VCM_SET=B20A` places the lens for a dark run, the still is retried up to six times
+  (`stillTries` column) and 0x4407 is read per rung (`qs` column, the rescue's sticky
+  quality). In the dark (BOARD_TESTING §37) the AEC used the whole ceiling at every rung and
+  the gain came off 31.9x at HTS 5600; the mic is off for the run (`micGain=0`)
 - `bench_lib.sh` `af_hold` / `af_check` / `af_resume` - the lens hold for low-rate work. The AF
   program runs continuous AF from boot; it has no pause command (only 0x03 / 0x04), a release
   sends the lens to rest, and at 1-2 fps it neither converges nor answers. Hold = focus at FHD
   10 fps until the VCM DAC (0x3602/03) settles, then the sensor MCU into reset (0x3000 bit 5);
-  release restarts the program. Check the VCM before and after, always
+  release restarts the program. Check the VCM before and after, always. In low light the
+  program parks instead of focusing, so pass `AF_VCM_SET=<3602><3603>` from a lit hold
+  (0xB20A = code 171) and the hold writes it after the reset; `af_code` decodes a pair
 - `analog_probe.sh`, `analog_stages.sh` - the binned analog register dead end (BOARD_TESTING
   §37): 0x3709 moves nothing, 0x370C=0x03 scrambles colour. Reusable as an HTS A/B walk at
   VGA with any register set in REFSET, and as a stills-per-register-stage rig

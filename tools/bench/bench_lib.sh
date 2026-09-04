@@ -142,13 +142,17 @@ regrd() { ctl "camRegRd=$1" > /dev/null; sleep 0.6; ramlog | grep -a "camRegRd: 
 # Autofocus hold for low-rate work (4 Sep 2026). The OV5640 AF program (downloaded at boot
 # with INCLUDE_AF) runs continuous AF; at 1-2 fps it never converges and ignores commands, and
 # a release (0x08) sends the lens to rest and changes the focus. So: focus where the program
-# has detail and frames (FHD at 10 fps), then PAUSE (0x06), which freezes the VCM, and prove
-# it with the VCM DAC (0x3602/0x3603) before and after the size change. Command handshake, the
-# library's own: ack 0x3023 = 1, the command in 0x3022, the MCU clears the ack when taken. A
-# wedged program (ack never clears) is restarted from its loaded image by the MCU reset bit
-# (0x3000[5]); measured 12:06: status back to 0x70 idle, continuous re-accepted, VCM settled
+# has detail and frames (FHD at 10 fps), then stop the sensor's MCU (0x3000[5]), which freezes
+# the VCM, and prove it with the VCM DAC (0x3602/0x3603) before and after the size change.
+# Command handshake, the library's own: ack 0x3023 = 1, the command in 0x3022, the MCU clears
+# the ack when taken. A wedged program (ack never clears) is restarted from its loaded image
+# by the same MCU reset bit; measured 12:06: status back to 0x70 idle, continuous re-accepted,
+# VCM settled.
+# The DAC code (datasheet table 3-2): code = 0x3603[5:0] << 4 | 0x3602[7:4], 0x3602[3:0] the
+# slew mode. af_vcm prints 0x3602 then 0x3603, so 0xB20A is code 171.
 af_cmd() { ctl "camReg=0x3023,0x01" > /dev/null; sleep 0.3; ctl "camReg=0x3022,$1" > /dev/null; local i a; for i in $(seq 1 10); do sleep 1; a=$(regrd 0x3023); [ "$a" = "00" ] && return 0; done; return 1; }
 af_vcm() { echo "$(regrd 0x3602)$(regrd 0x3603)"; }
+af_code() { printf '%d' $(( ((16#${1:2:2} & 0x3F) << 4) | (16#${1:0:2} >> 4) )); }
 AF_VCM=""
 af_hold() {  # af_hold <size idx to return to> <quality> <fps to return to>
   set_size 16 10 10; sleep 3
@@ -159,7 +163,7 @@ af_hold() {  # af_hold <size idx to return to> <quality> <fps to return to>
   fi
   local v1 v2 i; v1=$(af_vcm)
   for i in $(seq 1 15); do sleep 2; v2=$(af_vcm); [ "$v2" = "$v1" ] && [ "$i" -ge 2 ] && break; v1=$v2; done
-  log "AF at FHD 10 fps: status 0x$(regrd 0x3029), VCM 0x$v2 stable after $((i * 2))s"
+  log "AF at FHD 10 fps: status 0x$(regrd 0x3029), VCM 0x$v2 (code $(af_code "$v2")) stable after $((i * 2))s"
   # The hold: the sensor's MCU into reset (0x3000[5]). This AF blob knows only 0x03 (single)
   # and 0x04 (continuous) - a pause (0x06) is never acknowledged, healthy or not - and with
   # the MCU stopped nothing rewrites the VCM DAC. Measured 12:11: VCM 0x0210 identical
@@ -168,6 +172,18 @@ af_hold() {  # af_hold <size idx to return to> <quality> <fps to return to>
   ctl "camReg=0x3000,0x20" > /dev/null; sleep 1
   AF_VCM=$(af_vcm)
   [ "$(regrd 0x3000)" = "20" ] || { log "ABORT: MCU reset bit did not take - lens not held"; exit 9; }
+  # In the dark the program parks the lens near rest instead of focusing (13:08, llevel 17:
+  # code 42 against 171 / 242 / 256 from three lit holds). With the MCU stopped the DAC is
+  # ours to write: AF_VCM_SET=<3602><3603> (hex, e.g. B20A = code 171, the lit FHD stretch)
+  # puts the lens where a lit hold left it, and the readback is the proof
+  if [ -n "${AF_VCM_SET:-}" ] && [ "$AF_VCM" != "$AF_VCM_SET" ]; then
+    local was=$AF_VCM
+    ctl "camReg=0x3603,0x${AF_VCM_SET:2:2}" > /dev/null; sleep 0.3
+    ctl "camReg=0x3602,0x${AF_VCM_SET:0:2}" > /dev/null; sleep 1
+    AF_VCM=$(af_vcm)
+    [ "$AF_VCM" = "$AF_VCM_SET" ] || { log "ABORT: VCM set to 0x$AF_VCM_SET reads back 0x$AF_VCM"; exit 9; }
+    log "AF program had left the lens at 0x$was (code $(af_code "$was")); VCM set to 0x$AF_VCM (code $(af_code "$AF_VCM")) with the MCU held"
+  fi
   set_size "$1" "$2" "$3"; sleep 3
   log "AF MCU held (0x3000 0x20) at VCM 0x$AF_VCM; after the size change VCM 0x$(af_vcm)"
 }

@@ -22,12 +22,17 @@
 set -u
 OUT=${OUT:-FPS_RECAL_stills/hts_stretch_$(date +%Y%m%d_%H%M)}
 source "$(dirname "${BASH_SOURCE[0]}")/bench_lib.sh"
-IDX=${IDX:-16}; Q=10; REQ=1; HTS0=${HTS0:-2200}; LF=${LF:-2}
+IDX=${IDX:-16}; Q=${Q:-10}; REQ=1; HTS0=${HTS0:-2200}; LF=${LF:-2}
 SETTLE=${SETTLE:-20}
 WALK=${WALK:-"2400 2844 3500 4200 5600 7000 8000"}
 FIELD_SIZE=13; FIELD_FPS=30
 CSV="$OUT/stretch.csv"
-[ -f "$CSV" ] || echo "hts,lineUs,predFps,vsync,ceilMs,expLines,expMs,gain,yavg,aec,w,h,bytes,ratio,gsat,rsat,hdiff,vdiff,rescue" > "$CSV"
+# qs = the sensor's JPEG quantization scale (0x4407) read back at the sample: the no-frame
+# rescue steps the sensor's quality +2 (sticky) whenever the capture task sees nothing for
+# 4000 / FPS ms, and in the dark it did (13:14: FHD frames at q10-18 dropped, q20 the first
+# to land), so the still's quality is what the sensor says, not Q. stillTries = requests it
+# took to land a still (see sample)
+[ -f "$CSV" ] || echo "hts,lineUs,predFps,vsync,ceilMs,expLines,expMs,gain,yavg,aec,w,h,bytes,ratio,gsat,rsat,hdiff,vdiff,rescue,qs,stillTries" > "$CSV"
 
 set_hts_grp() {  # group write first; at ~1 fps the firmware's 1.5 s launch poll misses the
                  # frame boundary and the group never lands (12:32: HTS read back 2200 after
@@ -66,7 +71,7 @@ sample() {  # sample <hts>
   ctl "xclkStat=1" > /dev/null; sleep 14
   line=$(ramlog | grep -a "VSYNC counted\|VSYNC count failed" | tail -1)
   vs=$(printf '%s\n' "$line" | sed -n 's/.*VSYNC counted: \([0-9.]*\)fps.*/\1/p'); [ -n "$vs" ] || vs=0
-  for r in 0x3500 0x3501 0x3502 0x350A 0x350B 0x380C 0x380D; do ctl "camRegRd=$r" > /dev/null; sleep 0.5; done
+  for r in 0x3500 0x3501 0x3502 0x350A 0x350B 0x380C 0x380D 0x4407; do ctl "camRegRd=$r" > /dev/null; sleep 0.5; done
   ctl "avgZones=1" > /dev/null; sleep 1
   L=$(ramlog)
   rd() { printf '%s\n' "$L" | grep -a "camRegRd: $1" | tail -1 | sed 's/.*= 0x\([0-9A-Fa-f]*\).*/\1/'; }
@@ -79,18 +84,30 @@ lines = ((e0 & 0x0F) << 12) | (e1 << 4) | (e2 >> 4)
 print("%d %d %.1f %.2f" % (hts, lines, lines * tl / 1000.0, (((g0 & 3) << 8) | g1) / 16.0))
 PY
 )"
-  tag="hts${hts}"
-  curl -s -m 90 -o "$OUT/$tag.jpg" "$B/control?still=1" || log "   still fetch failed at $tag"
+  tag="hts${hts}"; qs=$(rd 0x4407); tries=0
+  # the still handler waits MAX_FRAME_WAIT (1.2 s) for the capture task to keep a frame, so
+  # below ~0.8 fps one request is a coin flip - 13:21: nothing at 4200 (0.52 fps) with frames
+  # arriving and no rescue, and the binned 3500 miss at 0.67 fps looks the same. Retry, and
+  # say how many it took: a run of empties WITH rescues is the frame window instead
+  while [ "$tries" -lt 6 ]; do
+    tries=$((tries + 1))
+    curl -s -m 90 -o "$OUT/$tag.jpg" "$B/control?still=1" && [ -s "$OUT/$tag.jpg" ] && break
+    sleep 1
+  done
+  [ -s "$OUT/$tag.jpg" ] || log "   no still at $tag after $tries requests"
   stats=$(python "$HERE/still_color.py" "$OUT/$tag.jpg" 2>/dev/null) || stats="0 0 0 0 0 0 0 0 0 999 999"
   read -r w h bytes mr mg mb ratio gsat rsat hdiff vdiff <<< "$stats"
   [ -n "$BASE_HDIFF" ] || BASE_HDIFF=$hdiff
   rescue=$(printf '%s\n' "$L" | grep -a -c "No frames for")
-  log "   HTS $gotHts (line ${lineUs}us): VSYNC $vs (pred $pred) | ceiling ${ceil}ms, exposure $expLines lines = ${expMs}ms, gain ${gain}x, YAVG $yavg $st | still ${w}x${h} ${bytes}B ratio $ratio gsat $gsat rsat $rsat hdiff $hdiff vdiff $vdiff (base $BASE_HDIFF) | rescues $rescue"
-  echo "$gotHts,$lineUs,$pred,$vs,$ceil,$expLines,$expMs,$gain,$yavg,$st,$w,$h,$bytes,$ratio,$gsat,$rsat,$hdiff,$vdiff,$rescue" >> "$CSV"
+  log "   HTS $gotHts (line ${lineUs}us): VSYNC $vs (pred $pred) | ceiling ${ceil}ms, exposure $expLines lines = ${expMs}ms, gain ${gain}x, YAVG $yavg $st | still ${w}x${h} ${bytes}B ratio $ratio gsat $gsat rsat $rsat hdiff $hdiff vdiff $vdiff (base $BASE_HDIFF) qs 0x$qs, $tries request(s) | rescues $rescue"
+  echo "$gotHts,$lineUs,$pred,$vs,$ceil,$expLines,$expMs,$gain,$yavg,$st,$w,$h,$bytes,$ratio,$gsat,$rsat,$hdiff,$vdiff,$rescue,$qs,$tries" >> "$CSV"
 }
 
-log "== HTS stretch, size idx $IDX request $REQ, lit: llevel=$(status_field llevel) =="
+log "== HTS stretch, size idx $IDX request $REQ, quality $Q, llevel=$(status_field llevel) night=$(status_field night) =="
 assert_campaign_config "$Q"
+# audio off for the long-exposure runs (user, 13:24): micGain 0 is the firmware's off switch
+# for recording and streaming; the restore puts the field value back
+ctl micGain=0 > /dev/null; log "audio: micGain=$(status_field micGain)"
 preflight
 af_hold "$IDX" "$Q" "$REQ"
 log "motion: $(checks) (counter reset)"
