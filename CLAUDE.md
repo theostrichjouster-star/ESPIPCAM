@@ -135,5 +135,89 @@ shows up only on the NEXT boot as a refused camera frame buffer.
 - `BATTERY.md` - battery deployment guide (committed)
 - `tools/core/README.md` - custom arduino-esp32 core: why, how to build, the four
   version pins, the sdkconfig gate, and candidate future config changes (committed)
-- `BOARD_TESTING.md` - local bench notebook: boards, calibrations, measured laws
+- `tools/bench/README.md` - how to run the sweep campaigns and the rules they enforce
+- `BOARD_TESTING.md` - local bench notebook: boards, calibrations, measured laws.
+  Numbered sections; §12 is the register cheat sheet, §19-20 the fps/frame-window
+  method, §31-34 the recent dead ends and campaigns
 - `THERMAL_SOAK.md`, `FPS_RECAL.md` - local bench campaigns (untracked)
+- `OV5640_*_post.md` - writeups of the DVDD and overheating work (untracked)
+
+## Datasheets
+
+**The OV5640 and ESP32-S3 datasheets are expected as gitignored markdown but are NOT
+present** - searched the whole repo and the parent `dev` tree, every extension, ignored
+files included (3 Sep 2026). The `OV5640_*_post.md` files are our own writeups, not the
+datasheet. **Ask the user for the path before answering any datasheet question, and record
+it here once known.** Never infer datasheet content: a wrong register meaning is expensive
+here (the SCLK/PIXCLK misnaming sent a whole investigation after an ISP clock ceiling that
+does not exist).
+
+What IS on record, second-hand, is scattered through BOARD_TESTING.md and the code
+comments - always cited with a section number, e.g. table 2-1 scaling methods (§10 six-size
+sweep), table 4-2 subsample increments (§31), §3.2 auto vertical binning (§31), figure 4-3
+pre-scale arithmetic (`applyCropWindow`), table 8-5 pixel clock limits (`camClocks`).
+Treat those as our reading of it, not as the source.
+
+## Where log output actually goes
+
+Getting this wrong wastes a whole diagnostic cycle - `dumpCam` looks silent if you only
+read the RTC ring.
+
+- `LOG_DIA` -> **SD log only**, deliberately, to keep boot dumps out of the 7KB RTC ring.
+  `dumpCamRegs()` is entirely LOG_DIA. Read it with `/web?log.txt` (large, use `-m 90`).
+- `LOG_INF` and above -> RTC ring **and** SD. `/control?displayLog=1` reads the ring,
+  which survives resets. `camRegRd` is LOG_INF, so it lands in the ring.
+- `LOG_WRN`/`LOG_ERR`/`LOG_ALT` force an SD sync; INF may sit in the stdio buffer.
+
+## On-board diagnostics (`/control?<key>`)
+
+Registers and timing:
+- `dumpCam=1` - clock tree, PLL decode, **geometry** (window / subsample / ISP input /
+  pre-scale / output / offsets / binning bits / scaler enable), timing, exposure, JPEG state
+- `camRegRd=0x3800` - read ONE register (LOG_INF, reaches the ring)
+- `camReg=0x380C,0x0A` - write one register. Lost on the next `set_framesize`. Writing
+  timing registers mid-stream has hung the board once (BOARD_TESTING E3) - order writes so
+  no transient is invalid, and never write a VTS below the rows being read
+- `xclkStat=1` - **ground truth**: counts XCLK and VSYNC off the pins and back-solves the
+  implied pixel clock. Refused while capturing. Use this, never the computed figure
+- `camPll=<csv>` - set the PLL directly; `subSample=<y>,<vts>[,<x>]` - subsample probe,
+  kept as the record of a dead end (§31)
+
+State and budgets:
+- `updateFPS=1` - fpsCeil, aecMax, budgetKBs, live frameKB, govBoost, frameCapKB
+- `motionStats=1`, `zoneStats`, `avgZones` - detector counters and the AEC 4x4 zone grid
+- `sdBusClk` / `sdBusDiv`, `battScale` / `sagTest`, `extDVDD`, `lencFhd` (LENC A/B)
+
+Destructive or dangerous:
+- `wdtTest` - **DO NOT RUN.** Wedged the board 3 of 3 times and never fired a watchdog
+  reboot (§29). Needs the LOG_WRN heartbeat first
+- `crashTest`, `bodLevel`/`bodDump`, `formatSD` (never)
+
+## Bench scripts (`tools/bench/`, `BOARD=<addr>` from the environment)
+
+- `bench_lib.sh` - shared helpers: preflight (240s uptime, record=0, idleFps=0,
+  tunedFps=1), campaign config, per-point ring reads, reboot detection, two-anomaly abort
+- `fps_t0_proofs.sh` - one-variable proofs and ceiling+1 probes
+- `fps_t1_register.sh` - **the regression tier**: every integer fps per mainstay against
+  `FPS_RECAL_stills/sweep.csv`. `SIZES_LIST=` overrides the size set for one run,
+  `REF=-` generates a reference instead of checking one, `--from <idx>:<fps>` resumes
+- `fps_t3_record.sh` - boundary recordings, lit room, stills for the eyeball gate
+- `fps_t4_playback.sh` - plays each boundary clip back (silence the other board first)
+- `frame_window_descend.sh` - frame-window cliff by random-pattern quality descend
+  (§20 method, §34 run). Recordings not stills, low fps, abort on any HTTP failure
+- `overdrive_ab.sh`, `subsample_ab.sh` - the A/B rigs for those two changes
+- Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
+  `parse_motion.py`, `jfield.py` (/status field), `jpeg_dims.py`
+
+Reference data: `FPS_RECAL_stills/sweep.csv` is the current register reference (222 points
+across 9 sizes as of 3 Sep 2026); `sweep_20260828_flat_overdrive.csv` is the superseded
+pre-overdrive one, kept deliberately as a measurement record.
+
+## Tuner entry points (mjpeg2sd.cpp)
+
+`applySensorTuning()` is the one place that runs after every `set_framesize`, in order:
+`setOutputSize` (custom output) -> `applyCropWindow` (readout geometry, all sizes now,
+binned included) -> `applyHtsFloor` (binned line length) -> `applyScalerClock` **or**
+`applyTunedTiming` (rate) -> `applyAecLimits` (banding and exposure ceiling, last because
+it reads back whatever landed). `cropPreScaleW()` picks each size's target pre-scale;
+`camClocks()` is the single clock decode; `senLineFactor()` returns 1 binned, 2 full-res.
