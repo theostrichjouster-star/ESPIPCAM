@@ -144,6 +144,17 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   rescue steps the sensor's quality (sticky) until it fits - FHD q20-24, QSXGA q24 in the
   dark and q28 in band (860-955 KB). `/status` still says the config's quality; 0x4407 (JPEG
   CTRL07) and the file's quantizer table say the sensor's.
+- The 1964-line exposure limit is the AEC engine's, not the pixel's: with 0x3503 = 0x03 and
+  the exposure written by register, 3932 lines gave 5x the AEC's best frame at the same gain
+  and 5900+ saturated (4 Sep 2026, BOARD_TESTING §37). But manual mode has two unexplained
+  quirks: after entering it the frame does not integrate its register value until a LARGE
+  exposure increase is written, and any exposure DEcrease (by register or by the driver's
+  `aec_value`) gives a persistent flat black frame. Gain through the driver's `agc_gain` is
+  safe both ways; the gain scale above 0x1FF is unproven except 0x3FF = 2 x 0x1FF. Leave
+  manual mode by 0x3503 = 0x00 (AEC auto), never by stepping down.
+- The gain ceiling is `gainceiling~1023` (63.9x, the datasheet's 64x) since 4 Sep 2026,
+  persisted on both boards by `save=1`; 511 (31.94x) was a repair value from eb61cf1, not a
+  limit. Gain-seconds figures measured before 15:52 that day were under the 511 ceiling.
 - At request 1 the tuner will not go below 1 fps: QSXGA runs 11.33 MHz at HTS 2844 (the 10.13
   floor gives 0.905), so its 8191 ceiling is 2.84 s where FHDNARROW's is 3.18 s. Measured to
   the register's end at QSXGA in the dark: 2840 ms at 23x, 0.27 fps, every rung at 1964 lines;
@@ -307,6 +318,13 @@ Destructive or dangerous:
   quality). In the dark (BOARD_TESTING §37) the AEC used the whole ceiling at every rung at
   FHDNARROW and QSXGA to HTS 8191, and the gain came off 31.9x at HTS 5600 in both; the mic
   is off for the run (`micGain=0`)
+- `manual_exposure.sh` - AEC and AGC off, exposure and VTS by register past 1964 lines at QSXGA
+  on the floor (`POINTS="vts:lines ..."`, `GAIN=`): a control point (same exposure, doubled
+  frame) validates the rig before the 2x, 3x and 3.4x steps; gain through the driver's
+  `agc_gain`, the exposure only ever raised (see the manual-mode rule above)
+- `manual_probe.sh` - which registers take effect in manual mode: auto settled, the same values
+  by hand, gain 0x3FF, exposure halved, AEC-only manual, then the driver's `agc_gain` and
+  `aec` / `aec_value` with their registers read back. One still per step at FHDNARROW 1 fps
 - `bench_lib.sh` `af_hold` / `af_check` / `af_resume` - the lens hold for low-rate work. The AF
   program runs continuous AF from boot; it has no pause command (only 0x03 / 0x04), a release
   sends the lens to rest, and at 1-2 fps it neither converges nor answers. Hold = focus at FHD
@@ -324,8 +342,10 @@ Destructive or dangerous:
   gain near the ceiling. Both decide how bright a still looks before the tuning does
   (BOARD_TESTING §37)
 - Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
-  `parse_motion.py`, `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel
-  ratio + adjacent-pixel noise: the two gates that catch a corrupt still)
+  `parse_motion.py`, `parse_zones.py` (the avgZones grid: mean / min / max / YAVG / band / AEC
+  state), `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel ratio +
+  adjacent-pixel noise: the two gates that catch a corrupt still). `tools/bench/README.md`
+  carries the full inventory with each script's purpose and env knobs
 
 Reference data: `FPS_RECAL_stills/sweep.csv` is the current register reference (224 points
 across 9 sizes as of 4 Sep 2026, 1280X960 at HTS 2156 / ceiling 41); the displaced rows live
