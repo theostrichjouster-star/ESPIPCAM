@@ -596,6 +596,15 @@ const frameStruct frameData[] = {
   // reference. The scaler-halving hazard did NOT bite either of them
   {"FHDMID", 1920, 1080, 10, 3, 1, 12},  // pre-scale 2304x1296 (scaler 1.2x), window 2368x1328, HTS 2444 x2, VTS 1344 | 90% of array width, 68% of its height | clock-tuned: ceiling 12.178 VSYNC-COUNTED against 12.18 computed, 8fps exact at 53.33MHz | register tier 12/12 all gates, max exposure 82ms at the ceiling to 647ms at 1fps | recordings 12 and 6 delivered exact at 152KB frames (34% of the frame window), boost 0, busy 42/20%
   {"FHDFULL", 1920, 1080, 9, 3, 1, 9}    // pre-scale 2560x1440 (scaler 1.333x) - the DRIVER'S OWN window, so no window register is written at all | 100% of array width, 75% of its height | clock-tuned: ceiling 9.059 VSYNC-COUNTED against 9.06 computed, 6fps exact at 51.33MHz | register tier 9/9 all gates, max exposure 110ms at the ceiling to 833ms at 1fps | recordings 9 and 5 delivered exact at 188/171KB frames, boost 0, busy 39/19% - far more headroom at its ceiling than FHDNARROW has at 16 (busy 99%)
+  ,
+  // The narrow pair. Same trade as the FHD ladder run the other way: these buy RATE with field
+  // of view and with light, by cropping the array until the ISP scaler lands at 1:1. Their
+  // parents read the whole 2624x1952 array and throw most of it away in the scaler, which is
+  // exactly what pins QVGA, VGA and 1280X960 to a shared 39.47 ceiling.
+  // New rows APPEND. Never insert above an existing custom size - that shifts its index out
+  // from under its FS_ define, its UI option value and its sweep.csv rows, silently
+  {"VGANARROW", 640, 480, 20, 3, 1, 77},   // window 1344x992 -> 2x2 -> ISP in 672x496 -> pre-scale 640x480, scaler 1:1 | 51% of array width and height | MEASURED 3 Sep 2026: 77.022 VSYNC-counted at VTS 504, against 39.448 for full-frame VGA | costs light too: max exposure 12.9ms against 25.2
+  {"QVGANARROW", 320, 240, 20, 2, 1, 147}  // window 704x512 -> 2x2 -> ISP in 352x256 -> pre-scale 320x240, scaler 1:1 | 27% of array width, 26% of height | MEASURED 3 Sep 2026: 147.059 VSYNC-counted at VTS 264, against 39.474 for full-frame QVGA | max exposure 6.7ms, so this size needs real light
 };
 
 // 1280x960 is the largest 4:3 size the OV5640 can still read 2x2 binned, and binning is what
@@ -635,9 +644,18 @@ const frameStruct frameData[] = {
 // clock (27/28 Aug), and the safe side of that rule is a pinned VTS with fps on the PLL. It
 // costs nothing: applyTunedTiming clamps VTS upward only, so the ceiling is the same either
 // way, and a slower clock lengthens every row where VTS above 1968 buys no exposure at all.
-#define NUM_CUSTOM_FS 3
+// The narrow pair are the first BINNED sizes to be cropped. Everything above them crops at full
+// resolution, where the window is the ISP input; here the window is TWICE the ISP input in each
+// axis, because 2x2 subsampling sits between them. applyCropWindow() multiplies by the live
+// subsample factor for exactly this reason, and their frame length follows the binned rule
+// (rows after subsampling, plus 8) rather than the full-resolution one.
+#define NUM_CUSTOM_FS 5
 #define FS_1280X960 (FRAMESIZE_INVALID + 0) // index 25, first row past the driver's enum
 #define FS_1280X960_BASE FRAMESIZE_XGA      // same binned window, same line timing
 #define FS_FHDMID (FRAMESIZE_INVALID + 1)   // index 26
 #define FS_FHDFULL (FRAMESIZE_INVALID + 2)  // index 27
 #define FS_FHD_BASE FRAMESIZE_FHD           // both wide variants ride the driver's FHD window
+#define FS_VGANARROW (FRAMESIZE_INVALID + 3)  // index 28
+#define FS_QVGANARROW (FRAMESIZE_INVALID + 4) // index 29
+#define FS_VGANARROW_BASE FRAMESIZE_VGA       // same binned window, cropped by applyCropWindow
+#define FS_QVGANARROW_BASE FRAMESIZE_QVGA

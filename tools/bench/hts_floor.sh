@@ -74,6 +74,12 @@ sample() {
   ctl "camRegRd=0x350B"; sleep 0.6
   ctl "camRegRd=0x3A18"; sleep 0.6
   ctl "camRegRd=0x3A19"; sleep 0.6
+  # AEC extra frame lines. In poor light the AEC EXTENDS the frame past VTS to buy exposure
+  # (0x350C/0x350D, datasheet 4.6.2), so the real frame is VTS + extra. Without this the rate
+  # model is wrong exactly when the light is marginal - it read 1280X960 and HD as failing at
+  # the first step of the lit arm, when the sensor was simply running a longer frame than VTS
+  ctl "camRegRd=0x350C"; sleep 0.6
+  ctl "camRegRd=0x350D"; sleep 0.6
   L=$(ring)
   zones=$(printf '%s\n' "$L" | python "$HERE/parse_zones.py")
   # Both are 10-bit PAIRS in real-gain format, value = 16x the multiplier. Reading only the low
@@ -86,13 +92,17 @@ sample() {
   c1=$(printf '%s\n' "$L" | grep -a "camRegRd: 0x3A19" | tail -1 | sed 's/.*= 0x\([0-9A-Fa-f]*\).*/\1/')
   gain=$(python -c "print(((0x${g0:-0} & 3) << 8) | 0x${g1:-0})" 2>/dev/null || echo 0)
   gainCeil=$(python -c "v=((0x${c0:-1} & 3) << 8) | 0x${c1:-FF}; print(v if v else 511)" 2>/dev/null || echo 511)
+  local e0 e1 vextra
+  e0=$(printf '%s\n' "$L" | grep -a "camRegRd: 0x350C" | tail -1 | sed 's/.*= 0x\([0-9A-Fa-f]*\).*/\1/')
+  e1=$(printf '%s\n' "$L" | grep -a "camRegRd: 0x350D" | tail -1 | sed 's/.*= 0x\([0-9A-Fa-f]*\).*/\1/')
+  vextra=$(python -c "print((0x${e0:-0} << 8) | 0x${e1:-0})" 2>/dev/null || echo 0)
   # VSYNC off the pin is ground truth, never the computed figure
   ctl "xclkStat=1"; sleep 8
   rate=$(ring | grep -a "VSYNC counted" | tail -1 | sed 's/.*VSYNC counted: \([0-9.]*\)fps.*/\1/')
   curl -s -m 30 -o "$OUT/${tag}.jpg" "http://$B/control?still=1" 2>/dev/null
   bytes=$(wc -c < "$OUT/${tag}.jpg" 2>/dev/null || echo 0)
   dims=$(python "$HERE/jpeg_dims.py" "$OUT/${tag}.jpg" 2>/dev/null | awk '{print $1}')
-  echo "${rate:-0} $zones ${gain:-0} ${gainCeil:-511} ${bytes:-0} ${dims:-none}"
+  echo "${rate:-0} $zones ${gain:-0} ${gainCeil:-511} ${bytes:-0} ${dims:-none} ${vextra:-0}"
 }
 
 say "== HTS floor walk, $LIGHT arm =="
@@ -107,27 +117,69 @@ for spec in $SIZES; do
   # relative to it, because YAVG is a weighted aggregate and no absolute threshold is valid
   set_hts $BASE_HTS $BASE_HTS
   sleep "$SETTLE"
-  read -r bRate bMean bMin bMax bYavg bLo bHi bState bGain bCeil bBytes bDims <<< "$(sample "${name}_${LIGHT}_$BASE_HTS")"
+  read -r bRate bMean bMin bMax bYavg bLo bHi bState bGain bCeil bBytes bDims bExtra <<< "$(sample "${name}_${LIGHT}_$BASE_HTS")"
   say "   baseline HTS $BASE_HTS: ${bRate}fps zoneMean $bMean YAVG $bYavg gain $bGain/$bCeil still $bBytes ($bDims)"
   echo "$LIGHT,$name,$idx,$BASE_HTS,$vts,$(python -c "print('%.2f'%(80e6/($BASE_HTS*$vts)))"),$bRate,$bMean,$bMin,$bMax,$bYavg,$bLo,$bHi,$bState,$bGain,$bCeil,$bBytes,$bDims,-,-,-,baseline" >> "$CSV"
+
+  # A size whose BASELINE is already unhealthy cannot be walked - there is no good state to
+  # measure a floor against, and every step below would "fail" for a reason that has nothing to
+  # do with the line length. QVGANARROW hit this on the lit arm: its frame allows only 6.7ms of
+  # exposure, so it sat pegged at gain 511/511 at HTS 2060 before anything was changed. That is
+  # itself the answer for that size - it is exposure-limited already and cannot afford a shorter
+  # line in ANY lighting - so record it and move on rather than walking it
+  if [ "$(python -c "print(1 if ($bGain > 0.9*$bCeil) else 0)")" = "1" ]; then
+    say "   BASELINE UNHEALTHY: gain already $bGain/$bCeil at HTS $BASE_HTS - $name is exposure-limited before the walk starts, skipping"
+    echo "$LIGHT,$name,$idx,$BASE_HTS,$vts,-,-,-,-,-,-,-,-,-,$bGain,$bCeil,$bBytes,$bDims,-,FAIL,-,unassessable" >> "$CSV"
+    set_hts $BASE_HTS $BASE_HTS
+    continue
+  fi
 
   prev=$BASE_HTS
   for h in $WALK; do
     set_hts "$h" "$prev"; prev=$h
     sleep "$SETTLE"
-    read -r rate mean zmin zmax yavg lo hi state gain gceil bytes dims <<< "$(sample "${name}_${LIGHT}_$h")"
-    pred=$(python -c "print('%.2f'%(80e6/($h*$vts)))")
-    read -r gRate gAec gStill verdict <<< "$(python - "$rate" "$pred" "$mean" "$bMean" "$gain" "$gceil" "$bytes" "$bBytes" "$dims" "$bDims" "$ceil" <<'PY'
+    read -r rate mean zmin zmax yavg lo hi state gain gceil bytes dims vextra <<< "$(sample "${name}_${LIGHT}_$h")"
+    # the frame is VTS + whatever the AEC has extended it by, not VTS
+    pred=$(python -c "print('%.2f'%(80e6/($h*($vts+$vextra))))")
+    read -r gRate gAec gStill verdict <<< "$(python - "$rate" "$pred" "$mean" "$bMean" "$gain" "$gceil" "$bytes" "$bBytes" "$dims" "$bDims" "$ceil" "$yavg" "$lo" "$hi" <<'PY'
 import sys
-rate,pred,mean,bmean,gain,gceil,by,bby,dims,bdims,ceil = sys.argv[1:12]
+rate,pred,mean,bmean,gain,gceil,by,bby,dims,bdims,ceil,yavg,bandLo,bandHi = sys.argv[1:15]
 f=lambda x: float(x) if x not in ("","none") else 0.0
 # rate is informational on the untuned spot-check sizes, whose clock is the driver's
 gr = "OK" if (ceil == "0" or (f(pred) and abs(f(rate)-f(pred))/f(pred) <= 0.015)) else "FAIL"
-# the AEC gate: the scene has not moved, so the zone mean must not, and the gain must not peg
-drift = abs(f(mean)-f(bmean))/f(bmean) if f(bmean) else 1.0
-ga = "OK" if (drift <= 0.25 and f(gceil) and f(gain) <= 0.9*f(gceil)) else "FAIL"
+
+# THE AEC GATE, stated as "is the exposure loop still in control of this scene".
+#
+# Two failure shapes were seen on the lit arm and one detector has to catch both. QVGA at 1750
+# blew out - zones AND YAVG both went to 67, twice the deadband - while VGANARROW at 1750 went
+# black, zones and YAVG at 2 with the gain pegged at 511. In BOTH the zone grid and YAVG moved
+# together, so a divergence test between them fires on neither. Divergence is the shape the
+# 27 Aug full-resolution case took (zones ~8, YAVG pinned mid-band); it is one symptom, not
+# the definition.
+#
+# What actually defines the failure is that the AEC no longer holds the scene where it is
+# trying to hold it. Its own deadband is reported per point, so use that: the zone mean must
+# sit near the band, and the gain must not be pegged against its ceiling. Healthy points sit
+# inside the band (33-35 against a 32..37 band); both failures land far outside it.
+lo, hi = f(bandLo), f(bandHi)
+inband = (lo - 15.0) <= f(mean) <= (hi + 20.0)
+pegged = not (f(gceil) and f(gain) <= 0.9 * f(gceil))
+# divergence kept as a REPORTED diagnostic rather than a gate - when it does fire it names
+# blindness specifically, which the in-band test alone would not distinguish from a real
+# scene change
+ga = "OK" if (inband and not pegged) else "FAIL"
+
 gs = "OK" if (f(by) >= 0.4*f(bby) and dims == bdims and dims != "none") else "FAIL"
-print(gr, ga, gs, "pass" if gr=="OK" and ga=="OK" and gs=="OK" else "FAIL")
+
+# The rate is REPORTED but does not stop the walk. This campaign measures the AEC floor, and
+# whether the readout honours a shorter line was settled separately on 3 Sep - QVGA tracked the
+# model exactly from 2060 down to 1400. Gating on it here stopped 1280X960 and HD at the first
+# step for a reason that had nothing to do with exposure: on both, the frame runs LONGER than
+# the programmed VTS (1280X960 implied 1066 against 984, HD 769 against 744), so the counted
+# rate is not a clean function of HTS. That is worth chasing on its own - it is the AEC
+# extending the frame, and the extension registers read 0 when sampled before the count - but
+# it is a separate question from where the exposure engine goes blind.
+print(gr, ga, gs, "pass" if ga=="OK" and gs=="OK" else "FAIL")
 PY
 )"
     say "   HTS $h: ${rate}fps (pred $pred) zoneMean $mean (base $bMean) YAVG $yavg gain $gain/$gceil still $bytes -> rate:$gRate aec:$gAec still:$gStill"
