@@ -74,6 +74,10 @@ Exposure (§37):
 - `manual_probe.sh` - which registers take effect in manual mode: auto settled, the same
   values by hand, gain 0x3FF, exposure halved, AEC-only manual, then the driver's `agc_gain`
   and `aec` / `aec_value` with their registers read back; one still per step at 1 fps
+- `awb_eval.sh` - the AWB during long exposures: QSXGA at fps 5, fps 1, HTS 5600, HTS 8191
+  and a manual 3932-line stage; the 12-bit AWB gains (0x3400-0x3405) and the manual bit
+  (0x3406) sampled every 10 s, a still per stage with the star-chart box's and the frame's
+  R/G and B/G (`BOX=` the chart in QSXGA pixels, `EGAIN=` the manual stage's agc_gain)
 
 Dead ends kept as records (§31, §37) - do not re-walk without a new mechanism:
 - `hts_floor.sh` - the HTS floor walk whose gates passed corrupt frames (the reason for

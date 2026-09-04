@@ -152,6 +152,12 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   `aec_value`) gives a persistent flat black frame. Gain through the driver's `agc_gain` is
   safe both ways; the gain scale above 0x1FF is unproven except 0x3FF = 2 x 0x1FF. Leave
   manual mode by 0x3503 = 0x00 (AEC auto), never by stepping down.
+- The AWB works at every rate down to 0.35 fps (HTS 8191 at QSXGA) and under manual
+  exposure: it is the ISP's frame-counted state machine, so it converges in a handful of
+  frames whatever the rate, then holds within 0.5% (4 Sep 2026, `awb_eval.sh`). Its gains
+  track the AEC's gain (the high-gain pedestal), not the rate. It hunts on a frame without
+  signal (YAVG ~13): give it a lit frame before judging it. The chart box's R/G and B/G is the
+  witness; the whole-frame ratio is confounded by the pedestal at high gain.
 - The gain ceiling is `gainceiling~1023` (63.9x, the datasheet's 64x) since 4 Sep 2026,
   persisted on both boards by `save=1`; 511 (31.94x) was a repair value from eb61cf1, not a
   limit. Gain-seconds figures measured before 15:52 that day were under the 511 ceiling.
@@ -322,6 +328,9 @@ Destructive or dangerous:
   on the floor (`POINTS="vts:lines ..."`, `GAIN=`): a control point (same exposure, doubled
   frame) validates the rig before the 2x, 3x and 3.4x steps; gain through the driver's
   `agc_gain`, the exposure only ever raised (see the manual-mode rule above)
+- `awb_eval.sh` - does the AWB work during long exposures: QSXGA at fps 5, fps 1, HTS 5600,
+  HTS 8191 and a manual 3932-line stage, the AWB gains (0x3400-0x3405, 0x3406) sampled every
+  10 s and a still per stage with the star-chart box's R/G and B/G (`BOX=`, `EGAIN=`)
 - `manual_probe.sh` - which registers take effect in manual mode: auto settled, the same values
   by hand, gain 0x3FF, exposure halved, AEC-only manual, then the driver's `agc_gain` and
   `aec` / `aec_value` with their registers read back. One still per step at FHDNARROW 1 fps
