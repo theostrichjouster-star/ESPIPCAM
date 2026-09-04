@@ -539,7 +539,22 @@ static inline uint8_t desiredFPS(framesize_t forFS) {
 // 2049 at VTS 984 and 2069 at VTS 744. The datasheet's 1296 for these modes is unreachable
 #define HTS_FLOOR 2060
 
-static void applyHtsFloor(sensor_t* s) {
+// The two per-size timing facts Phase B of the SCLK work added (BOARD_TESTING 37, 4 Sep 2026),
+// kept together so the size-specific knowledge lives in one place next to cropPreScaleW():
+//  - htsFloorFor(): 1280X960 runs HTS 2112, not 2060. Its 1280-wide output path stretches
+//    2-5% of frames at 2060 (counted 39.468 / 39.470 / 38.195 at identical registers) and
+//    never at 2112+, and 2112 is a 24.0us line at 88 MHz, inside the ~24us row-time floor
+//    where 2060 at 88 (23.4us) is not. HD shares the width and the stretch but has not been
+//    walked, so it keeps 2060 until it is.
+//  - routeBMHz(): the clock a size may run at its ceiling on the 0x3108 = 0x11 route, or 0
+//    for "route A only". Only 1280X960 is measured: SCLK 88 clean (84 and 88 clean, 92
+//    column-striped, 96 pure noise, all with an exact VSYNC rate), 42.343 fps counted three
+//    times with min = max. Every other size stays byte-identical to the register tier
+//    reference until it has had its own walk through still_color.py and an eyeball
+static int htsFloorFor(framesize_t fs) { return (fs == FS_1280X960) ? 2112 : HTS_FLOOR; }
+static float routeBMHz(framesize_t fs) { return (fs == FS_1280X960) ? 88.0f : 0.0f; }
+
+static void applyHtsFloor(sensor_t* s, framesize_t fs) {
   // Worth 19.2 -> 24.5fps at 1280x960 and 25.3 -> 31.9 at HD, for one register pair.
   //
   // Binned sizes only, and deliberately so. Full resolution has since been measured and is a
@@ -576,12 +591,26 @@ static void applyHtsFloor(sensor_t* s) {
   if (xInc < 0) return;
   if ((((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2 < 2) return; // not binned
   int hts = (s->get_reg(s, 0x380C, 0xFF) << 8) | s->get_reg(s, 0x380D, 0xFF);
-  if (hts <= HTS_FLOOR) return; // already there, which is the case for VGA and below
-  s->set_reg(s, 0x380C, 0xFF, (HTS_FLOOR >> 8) & 0xFF);
-  s->set_reg(s, 0x380D, 0xFF, HTS_FLOOR & 0xFF);
+  int floor = htsFloorFor(fs);
+  // Written whenever the live value differs, in EITHER direction. This used to return when
+  // HTS was already at or below the floor, which left a stale short value from a bench
+  // register write in force across a frame size change - the board produced no frames until
+  // HTS was repaired by hand (4 Sep). Every binned size's driver value is at or above 2060
+  // (VGA and SVGA exactly 2060, XGA and HD higher), so raising to the floor never moves a
+  // driver-chosen value; it only undoes a probe
+  if (hts == floor) return;
+  // high byte first when raising, low byte first when lowering: no transient is shorter than
+  // both the value in force and the one wanted (a shorter transient corrupts a frame)
+  if (floor > hts) {
+    s->set_reg(s, 0x380C, 0xFF, (floor >> 8) & 0xFF);
+    s->set_reg(s, 0x380D, 0xFF, floor & 0xFF);
+  } else {
+    s->set_reg(s, 0x380D, 0xFF, floor & 0xFF);
+    s->set_reg(s, 0x380C, 0xFF, (floor >> 8) & 0xFF);
+  }
   int got = (s->get_reg(s, 0x380C, 0xFF) << 8) | s->get_reg(s, 0x380D, 0xFF);
-  if (got != HTS_FLOOR) LOG_WRN("HTS floor wrote %d but reads back %d", HTS_FLOOR, got);
-  else LOG_VRB("HTS %d -> %d", hts, HTS_FLOOR);
+  if (got != floor) LOG_WRN("HTS floor wrote %d but reads back %d", floor, got);
+  else LOG_VRB("HTS %d -> %d", hts, floor);
 }
 
 static int senReg16(sensor_t* s, int reg) {
@@ -883,6 +912,13 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
 #define AEC_VTS_CEIL 1968
   int vts = (int)(80e6f / ((float)hts * lf * fps * fpsOverdrive(fps)));
   int mul = 120, sysDiv = 1; // PIXCLK 80MHz, the high-fps default
+  // 0x3108 root dividers: 0x26 is route A (SCLK = pll_clki/4, the tree every reference point
+  // was measured on), 0x11 is route B (every root divider halved, so the same SCLK comes from
+  // half the VCO). The tuner never used to write this register at all, which left whatever a
+  // bench probe had put there in force across every retime - so it is now written on every
+  // retime, in the order that keeps the transient SLOW (see the register block below)
+  int r3108 = 0x26;
+  float clkMHz = 80.0f;
   if (vts > AEC_VTS_CEIL) {
     // Exposure-first low-fps regime. VTS-only stretching froze the exposure ceiling at
     // 1964 x tROW once VTS crossed the engine cap (HD: 50.6ms for everything under
@@ -909,8 +945,22 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
       vts = (int)((mul * 2e6f / 3 / sysDiv) / ((float)hts * lf * fps * fpsOverdrive(fps)));
     }
   }
+  float routeB = routeBMHz(fs);
+  if (vts < vtsFloor && routeB > 0.0f) {
+    // Route B, the in-spec 0x3108 = 0x11 tree, used ONLY when the request exceeds what the
+    // 80 MHz tree can deliver at the VTS floor, so every sub-ceiling point keeps the route A
+    // registers the reference was measured on. SCLK = mul x 4/3 here: mul 66 gives 88 MHz at
+    // VCO 440 (datasheet 2.5 max 800), the point measured clean at 1280X960 on 4 Sep. Raising
+    // the multiplier on route A instead would put the VCO at 880, and 92 MHz is
+    // column-striped on either route - the ~90 MHz cliff is the sensor's digital path
+    mul = (int)(routeB * 0.75f + 0.5f); // 88 -> 66
+    sysDiv = 1;
+    r3108 = 0x11;
+    clkMHz = routeB;
+    vts = (int)(clkMHz * 1e6f / ((float)hts * lf * fps * fpsOverdrive(fps)));
+  }
   if (vts < vtsFloor) {
-    float ceilFps = 80e6f / ((float)hts * lf * vtsFloor);
+    float ceilFps = clkMHz * 1e6f / ((float)hts * lf * vtsFloor);
     // an overdrive-only clamp is expected near the ceiling; only a request the sensor
     // itself cannot reach is worth a warning
     if ((float)fps > ceilFps) LOG_WRN("Tuned timing: %ufps is beyond the %s ceiling %.1f - delivering the ceiling",
@@ -918,16 +968,24 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     vts = vtsFloor;
   }
   if (vts > 0xFFFF) vts = 0xFFFF; // 16 bit register; ~0.02fps floor at HD, never plausible
+  // Order matters between 0x3108 and the multiplier. Leaving route B for route A with the
+  // multiplier written first would run SCLK at 160 MHz (mul 120 on the halved dividers) until
+  // 0x3108 caught up - past the cliff, corrupt frames at best. So the LARGER divider (0x26) is
+  // written before the PLL and the smaller one (0x11) after: every transient is slow
+  if (r3108 == 0x26) s->set_reg(s, 0x3108, 0xFF, r3108);
   s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
   s->set_reg(s, 0x3035, 0xFF, (sysDiv << 4) | 0x01); // [7:4] sys_div, [3:0] MIPI div stays 1
   s->set_reg(s, 0x3036, 0xFF, mul);
   delay(50); // let the PLL relock, same settle setCamPll() uses
+  if (r3108 != 0x26) s->set_reg(s, 0x3108, 0xFF, r3108);
   int gotMul = s->get_reg(s, 0x3036, 0xFF);
-  if (gotMul != mul) {
-    LOG_WRN("Tuned timing: PLL mul wrote %d but reads %d - VTS left alone", mul, gotMul);
+  int got3108 = s->get_reg(s, 0x3108, 0xFF);
+  if (gotMul != mul || got3108 != r3108) {
+    LOG_WRN("Tuned timing: PLL mul wrote %d but reads %d, 0x3108 wrote 0x%02X reads 0x%02X - VTS left alone",
+      mul, gotMul, r3108, got3108);
     return;
   }
-  float pixClkMHz = mul * 2.0f / 3 / sysDiv;
+  float pixClkMHz = mul * 2.0f / 3 / sysDiv * ((r3108 == 0x11) ? 2.0f : 1.0f);
   if (!senWrite16(s, 0x380E, vts)) LOG_WRN("Tuned timing: VTS %d did not read back", vts);
   else {
     int expLines = vts - 4;
@@ -999,6 +1057,9 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
     sysDiv = 1;
     LOG_WRN("Scaler clock: no divider fit for %ufps - delivering the ceiling", fps);
   }
+  // route A only on the scaler sizes; 0x3108 is written first so a stale route B value from a
+  // probe or from 1280X960's ceiling can never double this clock (see applyTunedTiming)
+  s->set_reg(s, 0x3108, 0xFF, 0x26);
   s->set_reg(s, 0x3037, 0xFF, 0x03); // pre_div 3, root_2x 0
   s->set_reg(s, 0x3035, 0xFF, (sysDiv << 4) | 0x01); // [7:4] sys_div, [3:0] MIPI div stays 1
   s->set_reg(s, 0x3036, 0xFF, mul);
@@ -1026,7 +1087,7 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // mutually exclusive by design - the crop handles full resolution sizes and the HTS floor
   // the binned ones, each returning immediately when handed the other's case
   applyCropWindow(s, fs);
-  applyHtsFloor(s);
+  applyHtsFloor(s, fs);
   // the retiming must precede applyAecLimits(), which derives banding and the exposure
   // ceiling from whatever clock and VTS are in force by the time it reads them back - a
   // scaler clock change would otherwise leave stale banding steps (visible stripes,
@@ -2805,9 +2866,10 @@ typedef struct {
   int r34, r35, mul, r37, r39, r08;             // raw PLL registers, for reporting
   int pclkDiv, pclkMan;
   int sysDiv, preDiv, pclkRoot, pclkRootDiv;
+  int sclkRoot, sclkRootDiv, sclk2xRoot, sclk2xRootDiv; // 0x3108[1:0] and [3:2], section 7.2
   bool root2x, bypass, pclkManual;
   float preDivVal;
-  uint32_t xclk, refin, vco, pllClk, pixClk, pclkDriver;
+  uint32_t xclk, refin, vco, pllClk, pixClk, sclk2x, pclkDriver;
 } camClocks_t;
 
 static camClocks_t camClocks(sensor_t* s) {
@@ -2829,12 +2891,16 @@ static camClocks_t camClocks(sensor_t* s) {
   c.preDiv = c.r37 & 0x0F;
   c.root2x = (c.r37 & 0x10) ? true : false;
   c.pclkRoot = (c.r08 >> 4) & 0x03;
+  c.sclk2xRoot = (c.r08 >> 2) & 0x03;
+  c.sclkRoot = c.r08 & 0x03;
   c.bypass = (c.r39 & 0x80) ? true : false;
   c.pclkManual = (c.pclkMan == 0x22);
   static const float preDivMap[] = {1, 1, 2, 3, 4, 1.5, 6, 2.5, 8};
-  static const int pclkRootMap[] = {1, 2, 4, 8};
+  static const int rootDivMap[] = {1, 2, 4, 8}; // 0x3108: each 2-bit field is /1 /2 /4 /8
   c.preDivVal = preDivMap[c.preDiv > 8 ? 0 : c.preDiv];
-  c.pclkRootDiv = pclkRootMap[c.pclkRoot];
+  c.pclkRootDiv = rootDivMap[c.pclkRoot];
+  c.sclk2xRootDiv = rootDivMap[c.sclk2xRoot];
+  c.sclkRootDiv = rootDivMap[c.sclkRoot];
 
   c.xclk = xclkMhz * OneMHz;
   c.refin = (uint32_t)(c.xclk / c.preDivVal);
@@ -2857,8 +2923,17 @@ static camClocks_t camClocks(sensor_t* s) {
   // on the next line computes 12.5MHz, four times low, which is why its figure was never
   // usable. Treat pixClk as an identification supported by agreement with table 8-5 and with
   // every measurement taken, not as a proven decode - the divider chain is still unverified
+  //
+  // 4 Sep 2026 update (BOARD_TESTING 37): the /4 that used to sit below is 0x3108[1:0], the
+  // SCLK root divider, and it is decoded now rather than assumed. On the 0x11 route it is /2,
+  // which is how 1280X960 reaches SCLK 88 at VCO 440. VSYNC-counted: mul 72 on 0x26 gave
+  // 48.00 MHz, mul 66 on 0x11 gave 88.02, mul 63 on 0x11 gave 84.01 - the decode is exact both
+  // ways. So what HTS counts is SCLK by the datasheet's name, and "PIXCLK" here is that clock;
+  // the DVP port clock is a separate, slower thing (pclkDriver below, 20 MHz at SCLK 80) that in
+  // JPEG mode only drains the VFIFO and has no part in the frame rate
   c.pllClk = c.bypass ? c.xclk : (c.vco / c.sysDiv * 2 / 5); // 2/5 is 10 bit mode per 0x3034[3:0]
-  c.pixClk = c.pllClk / 4;
+  c.pixClk = c.pllClk / c.sclkRootDiv;
+  c.sclk2x = c.pllClk / c.sclk2xRootDiv;
   c.pclkDriver = c.pllClk / c.pclkRootDiv / ((c.pclkManual && c.pclkDiv) ? c.pclkDiv : 2);
   c.valid = true;
   return c;
@@ -3021,14 +3096,17 @@ void dumpCamRegs() {
     r34, r35, mul, r37, r39);
   LOG_DIA("PCLK regs: 0x3108=0x%02X 0x3824=%d 0x460C=0x%02X 0x3103=0x%02X",
     r08, pclkDiv, pclkMan, camReg(s, OV5640_SYSREM_RESET));
-  LOG_DIA("Decoded: mul=%d sys_div=%d pre_div=%d(/%.1f) root_2x=%d pclk_root=%d(/%d) pclk_manual=%d pclk_div=%d bypass=%d",
-    mul, sysDiv, preDiv, preDivVal, root2x, pclkRoot, c.pclkRootDiv, pclkManual, pclkDiv, bypass);
-  LOG_DIA("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, PIXCLK %.2fMHz (table 8-5: typ 48, max 96), driver PCLK %.2fMHz (4x low, do not use)",
-    refin / 1000000.0, vco / 1000000.0, pllClk / 1000000.0, pixClk / 1000000.0, pclkDriver / 1000000.0);
-  // table 8-5 caps the parallel port pixel clock at 96MHz. The measured cliff on this part sits
-  // between 88 and 92MHz on the pixClk basis, which is close enough to that limit to be the
-  // likely cause rather than a coincidence - worth checking before blaming the pixel array
+  LOG_DIA("Decoded: mul=%d sys_div=%d pre_div=%d(/%.1f) root_2x=%d pclk_root=%d(/%d) sclk2x_root=/%d sclk_root=/%d pclk_manual=%d pclk_div=%d bypass=%d",
+    mul, sysDiv, preDiv, preDivVal, root2x, pclkRoot, c.pclkRootDiv, c.sclk2xRootDiv, c.sclkRootDiv, pclkManual, pclkDiv, bypass);
+  LOG_DIA("Clocks: REFIN %.2fMHz, VCO %.1fMHz, PLL_CLK %.2fMHz, PIXCLK %.2fMHz = SCLK (measured ceiling 88), SCLK2x %.2fMHz, DVP PCLK %.2fMHz (port clock, drains the JPEG FIFO only)",
+    refin / 1000000.0, vco / 1000000.0, pllClk / 1000000.0, pixClk / 1000000.0, c.sclk2x / 1000000.0, pclkDriver / 1000000.0);
+  // The measured cliff sits between 88 and 92 MHz and it is the sensor's clocked path, not the
+  // PLL: 92 is column-striped at VCO 460 exactly as at 920, and 96 is pure noise at VCO 480
+  // with the VSYNC rate still exact (BOARD_TESTING 37). Table 8-5's 96 MHz is the DVP port
+  // clock maximum, a different clock, and the port runs at pclkDriver above
   if (pixClk > 96 * OneMHz) LOG_WRN("PIXCLK %.1fMHz exceeds the 96MHz maximum in table 8-5 - expect a corrupt image",
+    pixClk / 1000000.0);
+  else if (pixClk > 88.05 * OneMHz) LOG_WRN("PIXCLK %.1fMHz is above the measured 88MHz ceiling - 92 stripes, 96 is noise",
     pixClk / 1000000.0);
   // datasheet 2.5 caps the VCO at 800MHz for a 6-27MHz input. Computing more than that means
   // this decode is wrong somewhere, and every clock derived below it inherits the error
@@ -3242,6 +3320,61 @@ void setCamReg(const char* csv) {
   int got = s->get_reg(s, (int)reg, 0xFF);
   if (got != (int)val) LOG_WRN("camReg: 0x%04lX <- 0x%02lX but reads back 0x%02X", reg, val, got);
   else LOG_INF("camReg: 0x%04lX = 0x%02lX", reg, val);
+}
+
+void setCamRegGrp(const char* csv) {
+  // Bench: write up to 8 registers as ONE group so they all land at the same frame boundary.
+  // Datasheet 2.x table 2-4 (SRM group access, 0x3212): a write of the group id enters hold
+  // mode, subsequent writes are buffered, bit 4 ends the hold, and bits 7+5 launch the buffer
+  // into the real registers at the next frame boundary. Motivation: the HTS floor campaign
+  // wrote 0x380C/0x380D as two plain writes mid-frame and latched a magenta cast that was
+  // then blamed on the line length (BOARD_TESTING 37). csv is addr,val,addr,val,...
+  //
+  // Bench only, deliberately. The tuner keeps its plain writes: a held register reads back
+  // the OLD value until the launch, which would break every readback confirmation in the
+  // tuning path, and no register-tier still has ever shown the latched cast
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->set_reg == NULL) {
+    LOG_WRN("camRegGrp: set_reg not available for this sensor");
+    return;
+  }
+  long regs[8], vals[8];
+  int n = 0;
+  const char* p = csv;
+  while (*p && n < 8) {
+    char* end = NULL;
+    long reg = strtol(p, &end, 0);
+    if (end == p || *end != ',') break;
+    long val = strtol(end + 1, &end, 0);
+    if (reg < 0x3000 || reg > 0x6100 || val < 0 || val > 0xFF) {
+      LOG_WRN("camRegGrp: addr must be 0x3000-0x6100 and value 0-255, got 0x%lX,0x%lX", reg, val);
+      return;
+    }
+    regs[n] = reg; vals[n] = val; n++;
+    if (*end == ',') end++;
+    p = end;
+  }
+  if (n == 0) {
+    LOG_WRN("camRegGrp: need addr,val[,addr,val...] eg 0x380C,0x08,0x380D,0x40 - got '%s'", csv);
+    return;
+  }
+  s->set_reg(s, 0x3212, 0xFF, 0x00);             // enter group 0, hold
+  for (int i = 0; i < n; i++) s->set_reg(s, (int)regs[i], 0xFF, (int)vals[i]);
+  s->set_reg(s, 0x3212, 0xFF, 0x10);             // hold end
+  s->set_reg(s, 0x3212, 0xFF, 0xA0);             // launch enable + launch
+  // the launch lands at the next frame boundary: wait for 0x3213[4] (group launch pending)
+  // to clear, bounded at 1.5 s which covers a 1 fps frame
+  int stat = -1;
+  for (int i = 0; i < 30; i++) {
+    delay(50);
+    stat = s->get_reg(s, 0x3213, 0xFF);
+    if (stat >= 0 && !(stat & 0x10)) break;
+  }
+  for (int i = 0; i < n; i++) {
+    int got = s->get_reg(s, (int)regs[i], 0xFF);
+    if (got != (int)vals[i]) LOG_WRN("camRegGrp: 0x%04lX <- 0x%02lX but reads back 0x%02X (0x3213=0x%02X)", regs[i], vals[i], got, stat);
+    else LOG_INF("camRegGrp: 0x%04lX = 0x%02lX (group launched, 0x3213=0x%02X)", regs[i], vals[i], stat);
+  }
 }
 
 void avgZones(const char* unused) {

@@ -15,7 +15,7 @@ if [ "${1:-}" = "--from" ]; then FROM_IDX=${2%%:*}; FROM_FPS=${2##*:}; fi
 # sweep.csv row DIFFs at every point and trips the two-consecutive-anomaly abort, so a new size
 # has to be generated (REF=-) in its own run while the established ones stay checked
 if [ -n "${SIZES_LIST:-}" ]; then read -r -a SIZES <<< "$SIZES_LIST"
-else SIZES=("QVGA:6:39:scaler" "VGA:10:39:scaler" "HD:13:52:vts" "1280X960:25:39:vts" "FHDNARROW:16:16:vts" "FHDMID:26:12:scaler" "FHDFULL:27:9:scaler" "QHD:20:9:vts" "QSXGA:23:7:vts"); fi
+else SIZES=("QVGA:6:39:scaler" "VGA:10:39:scaler" "HD:13:52:vts" "1280X960:25:42:vts" "FHDNARROW:16:16:vts" "FHDMID:26:12:scaler" "FHDFULL:27:9:scaler" "QHD:20:9:vts" "QSXGA:23:7:vts"); fi
 
 preflight
 [ -f "$CSV" ] || echo "idx,size,fps,regime,pixclk,hts,lf,vts,sensorFps,maxExpMs,gateRate,gate33,gate100,match28,flag" > "$CSV"

@@ -170,6 +170,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   // see setSubSample() in mjpeg2sd.cpp and BOARD_TESTING.md 31
   else if (!strcmp(variable, "subSample")) setSubSample(value);
   else if (!strcmp(variable, "camReg")) setCamReg(value);
+  // bench: several registers landed together at one frame boundary (0x3212 group write) -
+  // the atomic HTS write the floor campaign should have used, see setCamRegGrp()
+  else if (!strcmp(variable, "camRegGrp")) setCamRegGrp(value);
   else if (!strcmp(variable, "camRegRd")) getCamReg(value);
   // per-board provisioning, stored in NVS not the config file - see setExtDVDD()
   else if (!strcmp(variable, "extDVDD")) setExtDVDD(intVal);

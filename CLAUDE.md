@@ -200,6 +200,10 @@ Registers and timing:
 - `camReg=0x380C,0x0A` - write one register. Lost on the next `set_framesize`. Writing
   timing registers mid-stream has hung the board once (BOARD_TESTING E3) - order writes so
   no transient is invalid, and never write a VTS below the rows being read
+- `camRegGrp=0x380C,0x08,0x380D,0x40` - up to 8 registers landed together at the next frame
+  boundary (datasheet 0x3212 group write). Use this for HTS, never two plain camReg writes:
+  a mid-frame HTS write latched a magenta cast that a whole campaign then blamed on the line
+  length (BOARD_TESTING §37)
 - `xclkStat=1` - **ground truth**: counts XCLK and VSYNC off the pins and back-solves the
   implied pixel clock. Refused while capturing. Use this, never the computed figure
 - `camPll=<csv>` - set the PLL directly; `subSample=<y>,<vts>[,<x>]` - subsample probe,
@@ -233,6 +237,8 @@ Destructive or dangerous:
 - `sclk96_probe.sh` - the in-spec clock route (0x3108 = 0x11, SCLK = mul x 4/3) ladder and HTS
   walk at 1280X960; restores 0x3108 FIRST on every exit path, copy that order anywhere 0x3108
   is written
+- `route_b_verify.sh` - proves from registers, VSYNC and both still gates that a flashed image
+  runs 1280X960 on route B at 42 and route A below, and that HD after it is back on 0x26
 - Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
   `parse_motion.py`, `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel
   ratio + adjacent-pixel noise: the two gates that catch a corrupt still)
