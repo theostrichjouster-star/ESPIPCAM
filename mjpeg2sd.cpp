@@ -350,6 +350,11 @@ uint16_t frameWindowKB(int fs) {
       // 1280X960 survives 383KB on identical sensor timing), and these emit the same
       // 1920x1080 as FHDNARROW. Replace with a measured figure if either is ever swept
       if (fs == FS_FHDMID || fs == FS_FHDFULL) return 443;
+      // VGANARROW emits the same 640x480 as VGA, and the cliff follows the OUTPUT size, so it
+      // inherits VGA's 266. QVGANARROW inherits QVGA's answer instead, which is that the cliff
+      // is unreachable: frames that small cannot physically grow into it
+      if (fs == FS_VGANARROW) return 266;
+      if (fs == FS_QVGANARROW) return 0;
       // QHD: MEASURED 3 Sep 2026 by the random-pattern descend, twice, at 3fps and 2fps
       // (tools/bench/frame_window_descend.sh). Unlike QSXGA this is a REAL cliff and not the
       // maxFrameBuffSize gate - everything died well below that 960KB software limit.
@@ -605,6 +610,11 @@ static int cropPreScaleW(framesize_t fs) {
   // passes - the same class of failure as the split-frame trap, and just as invisible
   if (fs == FS_FHDMID) return 2304;   // -> 2304x1296 in, 1920x1080 out
   if (fs == FS_FHDFULL) return 2560;  // -> the driver's own pre-scale, so nothing is written
+  // The narrow pair go the other way: a pre-scale EQUAL to the output, which on a binned size
+  // means cropping the window to a quarter of the area the parent reads. That is what buys the
+  // rate - 39.4 -> 77.0 and 39.5 -> 147.1, VSYNC-counted - and it is paid for in field of view
+  if (fs == FS_VGANARROW) return 640;   // -> window 1344x992, VTS 504
+  if (fs == FS_QVGANARROW) return 320;  // -> window 704x512, VTS 264
   return 0;
 }
 
@@ -629,9 +639,21 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
   // about 1.29x tighter than it was. That is inherent to the method and is what the datasheet
   // mode does too. It also costs light: a 1.82x shorter frame is 1.82x less maximum exposure
   if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return;
-  int xInc = s->get_reg(s, 0x3814, 0xFF);
-  if (xInc < 0) return;
-  if ((((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2 >= 2) return; // binned - applyHtsFloor's job
+  int xInc = s->get_reg(s, 0x3814, 0xFF), yInc = s->get_reg(s, 0x3815, 0xFF);
+  if (xInc < 0 || yInc < 0) return;
+  // Subsampling sits BETWEEN the window and the ISP, so on a binned size the window is twice
+  // the ISP input in each axis. Everything below works in ISP-input terms and multiplies by
+  // these at the end - offsets are already post-subsample (VGA: input 1312, offset 16,
+  // pre-scale 1280), which is why they are not scaled
+  int ssX = ((((xInc >> 4) & 0x0F) + (xInc & 0x0F)) / 2);
+  int ssY = ((((yInc >> 4) & 0x0F) + (yInc & 0x0F)) / 2);
+  if (ssX < 1) ssX = 1;
+  if (ssY < 1) ssY = 1;
+  bool binned = (ssX >= 2);
+  // A binned size with no crop wanted is applyHtsFloor's job and nothing else's - that is every
+  // stock binned size. Only the narrow pair ask for a crop here, and they are the first binned
+  // sizes ever to do so
+  if (binned && cropPreScaleW(forFS) <= 0) return;
 
   int xSt = senReg16(s, 0x3800), ySt = senReg16(s, 0x3802);
   int xEnd = senReg16(s, 0x3804), yEnd = senReg16(s, 0x3806);
@@ -649,8 +671,14 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
     preH = frameData[forFS].frameHeight;
   }
   bool scalerNoOp = (preW == frameData[forFS].frameWidth && preH == frameData[forFS].frameHeight);
-  int needW = preW + 2 * xOff;
-  int needH = preH + 2 * yOff;
+  // Two coordinate systems, and mixing them is the trap this arithmetic exists to avoid. The
+  // ISP needs pre-scale plus twice the offset; the WINDOW must supply that times the subsample
+  // factor. They are the same numbers only at full resolution, where the factor is 1 - which is
+  // why this read as one quantity until a binned size was cropped for the first time
+  int ispNeedW = preW + 2 * xOff;
+  int ispNeedH = preH + 2 * yOff;
+  int needW = ispNeedW * ssX;
+  int needH = ispNeedH * ssY;
   // bigger than the window means there is nothing to crop, which is what leaves QSXGA, 5MP,
   // QHD and WQXGA alone - at those the output already is the whole array
   if (needW > haveW || needH > haveH) return;
@@ -663,18 +691,28 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
       frameData[forFS].frameSizeStr, haveW, haveH);
     return;
   }
-  // keep the start even so the Bayer phase is unchanged, or the colours come out wrong
-  int newXSt = (xSt + (haveW - needW) / 2) & ~1;
-  int newYSt = (ySt + (haveH - needH) / 2) & ~1;
+  // Keep the start even so the Bayer phase is unchanged, or the colours come out wrong. A
+  // binned size has a second phase to preserve as well - which pixel of each subsampled group
+  // is taken - so align to the subsample stride there. Both hand-run probes landed on
+  // multiples of 4 (640,480 and 960,720) and produced clean colour; this keeps that property
+  // rather than relying on it
+  int alignX = (ssX >= 2) ? ~(ssX * 2 - 1) : ~1;
+  int alignY = (ssY >= 2) ? ~(ssY * 2 - 1) : ~1;
+  int newXSt = (xSt + (haveW - needW) / 2) & alignX;
+  int newYSt = (ySt + (haveH - needH) / 2) & alignY;
 
   if (!senWrite16(s, 0x3800, newXSt) || !senWrite16(s, 0x3802, newYSt)
    || !senWrite16(s, 0x3804, newXSt + needW - 1) || !senWrite16(s, 0x3806, newYSt + needH - 1)) {
     LOG_WRN("Crop window did not take for %s - sensor left as the driver set it", frameData[forFS].frameSizeStr);
     return;
   }
-  // VTS is the rows read plus 16 lines of blanking at full resolution, measured across every
-  // size. Shortening it without cropping first is the corruption trap warned about below
-  if (!senWrite16(s, 0x380E, needH + 16)) LOG_WRN("Crop VTS %d did not take", needH + 16);
+  // VTS counts the rows the sensor actually clocks out, so it follows the ISP input, not the
+  // window: rows plus 16 lines of blanking at full resolution, rows-after-subsampling plus 8
+  // when binned. Both are measured across every stock size, and applyTunedTiming derives its
+  // own floor with the same two rules. Shortening VTS WITHOUT cropping first is the corruption
+  // trap warned about below
+  int vtsWant = binned ? ispNeedH + 8 : needH + 16;
+  if (!senWrite16(s, 0x380E, vtsWant)) LOG_WRN("Crop VTS %d did not take", vtsWant);
   // 0x5001[5] is the scale enable, and the only scaler register the driver ever writes. The
   // ratio itself is derived from window, offsets and output size, so 0x5600-0x5606 are not
   // involved - confirmed by datasheet 5.9 and table 5-1, which give 0x501E[6] as "scale ratio
@@ -716,13 +754,20 @@ static void applyCropWindow(sensor_t* s, framesize_t forFS) {
   // is an extrapolation. FHDMID lands on 2444 that way. If a wide variant ever delivers no
   // frames at all, raise HTS before suspecting anything else
   #define HTS_FLOOR_FULLRES 2200
-  int htsFloor = needW + 76;
-  if (htsFloor < HTS_FLOOR_FULLRES) htsFloor = HTS_FLOOR_FULLRES;
   int hts = senReg16(s, 0x380C);
-  if (hts > htsFloor && !senWrite16(s, 0x380C, htsFloor)) LOG_WRN("Crop HTS %d did not take", htsFloor);
-  LOG_VRB("Cropped %s to %dx%d at %d,%d, VTS %d, HTS %d, scaler %s", frameData[forFS].frameSizeStr,
-    needW, needH, newXSt, newYSt, needH + 16, (hts > htsFloor) ? htsFloor : hts,
-    scalerNoOp ? "off (1:1)" : "on (downsizing)");
+  // Binned sizes keep their own HTS floor and applyHtsFloor() owns it - both floors above are
+  // full-resolution findings, and the AEC-blindness one explicitly does not apply because
+  // binned statistics were verified healthy at 2060. A binned crop therefore changes rows
+  // only, which is the whole mechanism: the narrow pair keep HTS 2060 and halve or quarter VTS
+  if (!binned) {
+    int htsFloor = needW + 76;
+    if (htsFloor < HTS_FLOOR_FULLRES) htsFloor = HTS_FLOOR_FULLRES;
+    if (hts > htsFloor && !senWrite16(s, 0x380C, htsFloor)) LOG_WRN("Crop HTS %d did not take", htsFloor);
+    if (hts > htsFloor) hts = htsFloor;
+  }
+  LOG_VRB("Cropped %s: window %dx%d at %d,%d (subsample %dx%d -> ISP in %dx%d), VTS %d, HTS %d, scaler %s",
+    frameData[forFS].frameSizeStr, needW, needH, newXSt, newYSt, ssX, ssY,
+    ispNeedW, ispNeedH, vtsWant, hts, scalerNoOp ? "off (1:1)" : "on (downsizing)");
 }
 
 static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
@@ -1003,6 +1048,8 @@ static framesize_t hwFrameSize(framesize_t fs) {
   // applySensorTuning() rewrites the registers that differ
   if (fs == FS_1280X960) return FS_1280X960_BASE;
   if (fs == FS_FHDMID || fs == FS_FHDFULL) return FS_FHD_BASE;
+  if (fs == FS_VGANARROW) return FS_VGANARROW_BASE;
+  if (fs == FS_QVGANARROW) return FS_QVGANARROW_BASE;
   return fs;
 }
 
@@ -3100,11 +3147,35 @@ void setSubSample(const char* csv) {
   //                      xclkStat back-solved the implied clock at 39.99MHz against 80.00
   //                      computed, exactly half, which is the tell.
   //   VGA   4x, VTS 496: sensor stopped producing frames entirely, still returned 0 bytes.
-  // The factor of two is datasheet section 3.2: "vertical binning will automatically turn on
-  // when in vertical-subsampled formats", and binning AVERAGES row pairs before the ADC
-  // rather than skipping them. So 4x halves the row count and doubles the per-row cost, and
-  // the two cancel exactly. VGA additionally does not fit: 1952 rows at 4x leaves 488 read,
-  // and its 480-row output does not survive the offsets on top of that.
+  // WHY, corrected 3 Sep 2026 once the datasheet was actually to hand. The first explanation
+  // written here said binning averages row pairs and so doubles the per-row cost, cancelling
+  // the saving. That is WRONG, and a direct test refuted it: clearing 0x3820 at 2x left the
+  // frame rate identical (39.474 -> 39.448) while the JPEG grew 50%, so binning changes the
+  // IMAGE and costs no frame time at all.
+  //
+  // The real reason is datasheet section 3.2, in a sentence the first reading skipped:
+  // "During subsampling, information is periodically dropped WHEN DATA IS OUTPUT. When the
+  // binning function is ON, voltage levels of adjacent pixels are averaged before being sent
+  // to the ADC. If the binning function is OFF, the pixels, which are not output, are merely
+  // skipped." Followed by: "The OV5640 supports 2x2, 1x2, and 2x1 binning."
+  //
+  // So the two do different jobs. BINNING is an array operation that reduces ADC work and
+  // therefore readout time, and it is capped at 2x2. SUBSAMPLING drops data at OUTPUT and
+  // buys no readout time by itself. The stock 2x vertical decimation is a binning operation
+  // (section 3.2: vertical binning turns on automatically in vertical-subsampled formats),
+  // which is why VTS 984 covers a 1952-row array. Asking for 4x leaves binning still at its
+  // 2x limit, so the extra factor is dropped downstream and the sensor still clocks ~976 row
+  // times. Programming VTS 496 then under-runs the real readout, which is the corruption
+  // condition - hence the shredded frames, and at VGA no frames at all. The "implied clock
+  // exactly half" is the same fact seen from the other side: the arithmetic assumed VTS 496
+  // where the sensor was really running about twice that.
+  //
+  // UNRESOLVED, and worth saying rather than papering over: table 2-1 claims VGA 90fps and
+  // QVGA 120fps by "subsampling from 1280x960", and those rates need the frame genuinely
+  // shortened to ~484 and ~242 row times. Either those modes crop as well, or the increment
+  // does save readout time when the WHOLE mode is configured consistently and our piecemeal
+  // write of 0x3815 alone left it inconsistent. The datasheet publishes the modes but not
+  // their register sets, so this cannot be settled from the document.
   // Both sizes recover fully on the next framesize change, which reloads the register block.
   //
   // So QVGA, VGA and 1280X960 all remain capped at 39.47fps, and the only lever left is the
