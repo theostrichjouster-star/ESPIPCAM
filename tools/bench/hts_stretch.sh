@@ -121,6 +121,22 @@ af_hold "$IDX" "$Q" "$REQ"
 log "motion: $(checks) (counter reset)"
 sleep 3
 log "tuner: $(ramlog | grep -a "Tuned timing" | grep -a "request $REQ," | tail -1 | sed 's/^\[[^]]*\] //')"
+# PLL_MUL=<n>: put the sensor on a different multiplier after the tuner's retime, e.g. 76 for
+# the 10.13 floor where the tuner chose 85 (QSXGA at request 1: it will not go below 1 fps,
+# so it holds 11.33 MHz at HTS 2844). The tuner writes 0x3036 plainly and reads it back
+# (applyTunedTiming), so this does the same; the system divider must already be the one SCLK=
+# assumes (0x3035[7:4] = 5) and the root dividers route A (0x3108 = 0x26) - checked, never
+# changed here (a PLL write under 0x11 doubles the clock, BOARD_TESTING 37). The size
+# reload in restore() re-runs the tuner, which puts its own multiplier back
+if [ -n "${PLL_MUL:-}" ]; then
+  r3108=$(regrd 0x3108); r3035=$(regrd 0x3035); was=$(regrd 0x3036)
+  [ "$r3108" = "26" ] || { log "ABORT: 0x3108 is 0x$r3108, not route A - no PLL write"; exit 9; }
+  [ "${r3035:0:1}" = "5" ] || { log "ABORT: 0x3035 is 0x$r3035, system divider not 5 - SCLK= would be wrong"; exit 9; }
+  ctl "camReg=0x3036,$(printf '0x%02X' "$PLL_MUL")" > /dev/null; sleep 3
+  got=$(regrd 0x3036)
+  [ "$((16#$got))" = "$PLL_MUL" ] || { log "ABORT: 0x3036 reads 0x$got after writing $PLL_MUL"; exit 9; }
+  log "PLL multiplier $((16#$was)) -> $PLL_MUL by register (0x3035 0x$r3035, 0x3108 0x$r3108): SCLK now $(python -c "print('%.2f' % ($PLL_MUL * 2 / 3 / 5))") MHz, the script assumes $SCLK"
+fi
 log "-- baseline HTS $HTS0 --"
 sample "$HTS0"
 for hw in $WALK; do   # hw, not h: sample() reads the still's height into h (bash dynamic scope)

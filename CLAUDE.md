@@ -146,7 +146,10 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   CTRL07) and the file's quantizer table say the sensor's.
 - At request 1 the tuner will not go below 1 fps: QSXGA runs 11.33 MHz at HTS 2844 (the 10.13
   floor gives 0.905), so its 8191 ceiling is 2.84 s where FHDNARROW's is 3.18 s. Measured to
-  the register's end at QSXGA in the dark: 2840 ms at 23x, 0.27 fps, every rung at 1964 lines.
+  the register's end at QSXGA in the dark: 2840 ms at 23x, 0.27 fps, every rung at 1964 lines;
+  and on the floor by a multiplier write after the retime (`PLL_MUL=76`, 0x3108 0x26 and
+  0x3035 0x51 checked first): 3176 ms at 19x, 0.308 fps counted. The exposure is the line
+  times 1964 and nothing else; the clock and the size only set the line.
 
 ## Git
 
@@ -296,8 +299,10 @@ Destructive or dangerous:
   0.32 fps. Group writes do not land at ~1 fps (the launch poll misses the frame), so it
   writes the pair plainly, high byte first when raising. `Q=` sets the campaign quality,
   `SCLK=` the tuner's clock for the size (10.13 FHDNARROW, 11.33 QSXGA - the "Tuned timing"
-  line is the check), `IDX=`/`HTS0=`/`WALK=` the size and rungs, `AF_VCM_SET=B20A` places the
-  lens for a dark run, the still is retried up to six times at 7/6 of the frame period
+  line is the check), `IDX=`/`HTS0=`/`WALK=` the size and rungs, `PLL_MUL=76` moves the
+  sensor to the floor after the tuner's retime (route and divider checked, the tuner's own
+  0x3036 write, read back; the restore's size reload puts the tuner's value back),
+  `AF_VCM_SET=B20A` places the lens for a dark run, the still is retried up to six times at 7/6 of the frame period
   (`stillTries` column) and 0x4407 is read per rung (`qs` column, the rescue's sticky
   quality). In the dark (BOARD_TESTING §37) the AEC used the whole ceiling at every rung at
   FHDNARROW and QSXGA to HTS 8191, and the gain came off 31.9x at HTS 5600 in both; the mic
