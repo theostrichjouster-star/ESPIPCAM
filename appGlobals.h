@@ -264,6 +264,7 @@ void dumpCamRegs();
 void setSubSample(const char* csv); // debug probe: subsample increments + VTS, see mjpeg2sd.cpp
 void setCamReg(const char* csv);
 void setCamRegGrp(const char* csv);
+void setBanding(int hz); // config: mains banding filter 0 (off) / 50 / 60, see applyBanding() in mjpeg2sd.cpp
 void getCamReg(const char* addr);
 void setExtDVDD(int val); // per-board NVS key: OV5640 internal regulator bypass for external DVDD
 uint16_t sdBudgetKBs(); // measured SD write ceiling for the live bus clock - UI badge and governor
@@ -358,6 +359,7 @@ extern bool useMotion; // whether to use camera for motion detection (with motio
 extern int dashCamOn; // enable continuous recording, with given interval
 extern int maxFrames;
 extern int tunedFps; // fps choices drive the sensor's own timing, see applyTunedTiming()
+extern int bandingHz; // mains banding filter: 0 off (default), 50 or 60 manual
 extern volatile bool retimePending; // fps changed - capture task retimes on the next frame
 extern volatile int pendingFS; // size chosen mid-recording, applied when the clip closes
 extern volatile int pendingFPS; // rate chosen mid-recording, applied when the clip closes
@@ -590,7 +592,7 @@ const frameStruct frameData[] = {
   // esp32-camera library, so a size it lacks has to be carried here instead. Rows below this
   // point are never handed to the driver - setSensorSize() maps them onto a base size and
   // then overrides only the registers that differ
-  {"1280X960", 1280, 960, 24, 3, 1, 42}, // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39.03 MEASURED 27 Aug, exact 12-39 (scaler pass is 1:1, exempt from the scaler halving) | exposure-first sweep 28 Aug: same timing as HD, 95ms @10fps | re-swept 2 Sep 2026 lit q10: register tier identical (39.47 counted); 39 delivers 37.7 and 38 delivers 37.5 - 98 KB frames cost 22 ms of storage in a 25.6 ms period while KB/s demand sits at 88%, under the governor's push line. Ceiling kept: the sensor is exact and the shortfall is scene-dependent storage time (BOARD_TESTING 26) | 42 as of 4 Sep 2026 (BOARD_TESTING 37): SCLK 88 on the in-spec 0x3108=0x11 route (VCO 440, mul 66) at HTS 2112 / VTS 984, 42.343 VSYNC-counted three times with min = max, still indistinguishable from the 2060/80 baseline (channel ratio 1.023, hdiff 2.3). HTS 2112 not 2060: 24.0us line inside the ~24us row-time floor, and the 1280-wide output stretch (2-5% of frames run long at 2060) is gone at 2112. Requests 38-42 run route B, 37 and below the 80 MHz tree as before. The datasheet's 45 needs a 22.58us line and SCLK 96, both corrupt on this board
+  {"1280X960", 1280, 960, 24, 3, 1, 41}, // measured 24.5 at HTS_FLOOR, 19.1 before it | tuned 39.03 MEASURED 27 Aug, exact 12-39 (scaler pass is 1:1, exempt from the scaler halving) | exposure-first sweep 28 Aug: same timing as HD, 95ms @10fps | re-swept 2 Sep 2026 lit q10: register tier identical (39.47 counted); 39 delivers 37.7 and 38 delivers 37.5 - 98 KB frames cost 22 ms of storage in a 25.6 ms period while KB/s demand sits at 88%, under the governor's push line. Ceiling kept: the sensor is exact and the shortfall is scene-dependent storage time (BOARD_TESTING 26) | 42 as of 4 Sep 2026 (BOARD_TESTING 37): SCLK 88 on the in-spec 0x3108=0x11 route (VCO 440, mul 66) at HTS 2112 / VTS 984, 42.343 VSYNC-counted three times with min = max, still indistinguishable from the 2060/80 baseline (channel ratio 1.023, hdiff 2.3). HTS 2112 not 2060: 24.0us line inside the ~24us row-time floor, and the 1280-wide output stretch (2-5% of frames run long at 2060) is gone at 2112. Requests 38-42 run route B, 37 and below the 80 MHz tree as before. The datasheet's 45 needs a 22.58us line and SCLK 96, both corrupt on this board | 41 later on 4 Sep 2026: HTS 2156 not 2112 - a 24.5us line, the length that has never shown the bistable magenta readout latch (2112 = 24.0us had a dozen clean samples and no soak; 23.75us latches sometimes). Ceiling 41.48, requests 37-41 route B, 36 and below route A. The banding filter is off by config default from the same commit, so exposure at the ceiling is the whole 24.0 ms frame
   // The two wider 1080p variants. Same 1920x1080 output as FHDNARROW, read off a LARGER slice
   // of the array and downsized by the ISP scaler instead of cropped 1:1 - see the FHD ladder
   // note below. Both MEASURED on COM4, 3 Sep 2026, the register tier generating their sweep.csv

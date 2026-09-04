@@ -245,6 +245,8 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "xclkStat")) xclkStat(value); // measure XCLK and VSYNC off the pins
   else if (!strcmp(variable, "lencFhd")) lencFhd(value); // A/B the LENC 4/3 rescale for the FHD crop
   else if (!strcmp(variable, "xclkMhz")) xclkMhz = intVal;
+  // mains banding filter: 0 off (the default), 50 or 60 manual - applyBanding() in mjpeg2sd.cpp
+  else if (!strcmp(variable, "banding")) setBanding(intVal);
   // takes effect on the next size change (or boot), when applySensorTuning() next runs - the
   // sensor cannot be retimed from the web task while the capture task may hold a frame
   else if (!strcmp(variable, "tunedFps")) {
@@ -896,6 +898,7 @@ cpuFreqMhz~240~99~~CPU MHz (80 160 240)
 wifiTxDbm~20~99~~Wifi transmit power dBm (2-20)
 xclkMhz~20~98~~na
 ae_level~-2~98~~na
+banding~0~98~~na
 aec~1~98~~na
 tunedFps~0~98~~na
 sdBusDiv~4~98~~na

@@ -141,18 +141,18 @@ PY
 # Part 2 only when the VGA edge moved at least two steps: 1280X960 on route B
 if [ -z "$edgeRef" ] || { [ -n "$edgeDrv" ] && [ "$edgeRef" -le $(( edgeDrv - 100 )) ]; }; then
   log "-- 1280X960 @42 (route B, 88 MHz) with the reference analog values --"
-  set_size 25 10 42; sleep 4
+  set_size 25 10 41; sleep 4
   ctl "camRegGrp=$REFSET" > /dev/null; sleep 2
   log "   analog now $(analog_now), 0x3108=$(regrd 0x3108), HTS 0x$(regrd 0x380C)$(regrd 0x380D)"
   BASE_HDIFF=""
-  sample 1280X960 ref 2112 42.34 || { log "   1280X960 baseline broken with the reference values"; exit 0; }
+  sample 1280X960 ref 2156 41.48 || { log "   1280X960 baseline broken with the reference values"; exit 0; }
   for h in 2060 2000 1960; do
     pred=$(python -c "print('%.2f'%(88e6/($h*984)))")
     set_hts_grp "$h"
     sample 1280X960 ref "$h" "$pred" || { log "   1280X960 edge with reference values: HTS $h"; break; }
     [ "$G_RATE" = "OK" ] || log "   (1280-wide stretch at HTS $h, image clean)"
   done
-  set_hts_grp 2112
+  set_hts_grp 2156
 fi
 log "== done: $CSV =="
 column -s, -t < "$CSV" 2>/dev/null || cat "$CSV"

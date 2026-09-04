@@ -104,11 +104,18 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - jsonBuff is shared by design but only ever touched from the single httpd worker -
   keep it that way.
 - Never program HTS above 2277 on a binned frame size (line-cost flip).
-- 0x3108 (root dividers) is never written by the tuner and survives every framesize/fps
-  change. A stale 0x11 doubles the next tuned clock. Restore it to 0x26 BEFORE any PLL write.
+- 0x3108 (root dividers) survives every framesize change and the driver never touches it; the
+  tuner writes it on every retime since Phase B (0x26 BEFORE the PLL, 0x11 after), but a bench
+  probe that leaves 0x11 behind doubles the next clock written under it. Restore it to 0x26
+  BEFORE any PLL write, and read it back.
 - Never trust a still on byte count, dimensions or the AEC's health: the HTS floor campaign
   passed magenta, green-blown and confetti frames on all three. Channel ratio plus adjacent
   pixel noise (`still_color.py`) plus the user's eyeball.
+- The binned row-time floor is ~24us and the magenta readout latch is bistable near it: never
+  seen at 24.5us, sometimes at 23.75. 1280X960 runs HTS 2156 (24.5us at 88 MHz) for that
+  margin; a shorter line needs a soak, not a dozen clean stills.
+- The banding filter is off by config (`banding=0`) so the AEC spends the whole frame on
+  exposure before gain; `applyAecLimits` re-asserts it after every retime.
 
 ## Git
 
@@ -213,6 +220,9 @@ State and budgets:
 - `updateFPS=1` - fpsCeil, aecMax, budgetKBs, live frameKB, govBoost, frameCapKB
 - `motionStats=1`, `zoneStats`, `avgZones` - detector counters and the AEC 4x4 zone grid
 - `sdBusClk` / `sdBusDiv`, `battScale` / `sagTest`, `extDVDD`, `lencFhd` (LENC A/B)
+- `banding=0|50|60` - the mains banding filter, persisted with `save=1`. 0 (the default) is
+  off: the AEC then spends the whole frame on exposure before gain. 50/60 select the manual
+  band; `dumpCam` reports the live state on its Exposure line
 
 Destructive or dangerous:
 - `wdtTest` - **DO NOT RUN.** Wedged the board 3 of 3 times and never fired a watchdog
@@ -238,27 +248,36 @@ Destructive or dangerous:
   walk at 1280X960; restores 0x3108 FIRST on every exit path, copy that order anywhere 0x3108
   is written
 - `route_b_verify.sh` - proves from registers, VSYNC and both still gates that a flashed image
-  runs 1280X960 on route B at 42 and route A below, and that HD after it is back on 0x26
+  runs 1280X960 on route B at the ceiling (41, HTS 2156) and route A below, that the banding
+  filter is off and Exposure Level -2 persisted, and that HD after it is back on 0x26
+- `fps_ladder.sh` - one row per requested fps for a size: route, PIXCLK, HTS, VTS, line time,
+  max exposure, the settled exposure and gain, one VSYNC count, a forced recording (delivered
+  fps, frame KB, storage ms, SD kB/s) and a still through `still_color.py`. Prints the table
 - `analog_probe.sh`, `analog_stages.sh` - the binned analog register dead end (BOARD_TESTING
   §37): 0x3709 moves nothing, 0x370C=0x03 scrambles colour. Reusable as an HTS A/B walk at
   VGA with any register set in REFSET, and as a stills-per-register-stage rig
 - `ae_level_probe.sh` - Exposure Level x banding grid x fps: the settled exposure, gain and
-  YAVG per point, all from the ring. Exposure Level -2 is the persisted default and the driver
-  inits manual 50 Hz banding (0x3C00=0x04) - both decide how bright a still looks before the
-  tuning does (BOARD_TESTING §37)
+  YAVG per point, all from the ring. Exposure Level -2 is the persisted default, and the
+  banding filter is OFF by config default (`banding=0`; 50 or 60 re-enable it manual) since
+  4 Sep 2026 - the driver's own init is manual 50 Hz, which held the AEC at two bands plus
+  gain near the ceiling. Both decide how bright a still looks before the tuning does
+  (BOARD_TESTING §37)
 - Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
   `parse_motion.py`, `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel
   ratio + adjacent-pixel noise: the two gates that catch a corrupt still)
 
-Reference data: `FPS_RECAL_stills/sweep.csv` is the current register reference (222 points
-across 9 sizes as of 3 Sep 2026); `sweep_20260828_flat_overdrive.csv` is the superseded
-pre-overdrive one, kept deliberately as a measurement record.
+Reference data: `FPS_RECAL_stills/sweep.csv` is the current register reference (224 points
+across 9 sizes as of 4 Sep 2026, 1280X960 at HTS 2156 / ceiling 41); the displaced rows live
+beside it as `sweep_20260904_hts2112_1280X960.csv` and `sweep_20260904_pre_route_b_1280X960.csv`,
+and `sweep_20260828_flat_overdrive.csv` is the superseded pre-overdrive one, all kept
+deliberately as measurement records.
 
 ## Tuner entry points (mjpeg2sd.cpp)
 
 `applySensorTuning()` is the one place that runs after every `set_framesize`, in order:
 `setOutputSize` (custom output) -> `applyCropWindow` (readout geometry, all sizes now,
 binned included) -> `applyHtsFloor` (binned line length) -> `applyScalerClock` **or**
-`applyTunedTiming` (rate) -> `applyAecLimits` (banding and exposure ceiling, last because
-it reads back whatever landed). `cropPreScaleW()` picks each size's target pre-scale;
+`applyTunedTiming` (rate) -> `applyAecLimits` (banding steps and exposure ceiling, last because
+it reads back whatever landed; it also re-asserts the configured `banding` state through
+`applyBanding`). `cropPreScaleW()` picks each size's target pre-scale;
 `camClocks()` is the single clock decode; `senLineFactor()` returns 1 binned, 2 full-res.

@@ -541,17 +541,19 @@ static inline uint8_t desiredFPS(framesize_t forFS) {
 
 // The two per-size timing facts Phase B of the SCLK work added (BOARD_TESTING 37, 4 Sep 2026),
 // kept together so the size-specific knowledge lives in one place next to cropPreScaleW():
-//  - htsFloorFor(): 1280X960 runs HTS 2112, not 2060. Its 1280-wide output path stretches
+//  - htsFloorFor(): 1280X960 runs HTS 2156, not 2060. Its 1280-wide output path stretches
 //    2-5% of frames at 2060 (counted 39.468 / 39.470 / 38.195 at identical registers) and
-//    never at 2112+, and 2112 is a 24.0us line at 88 MHz, inside the ~24us row-time floor
-//    where 2060 at 88 (23.4us) is not. HD shares the width and the stretch but has not been
-//    walked, so it keeps 2060 until it is.
+//    never at 2112+. 2156 is a 24.5us line at 88 MHz: the line length that has never shown
+//    the bistable magenta readout latch in any sample, where 2112 (24.0us, the first Phase B
+//    value) had a dozen clean samples but no soak, and 23.75us (1900 at 80 MHz) latches
+//    sometimes. Chosen for the margin on 4 Sep 2026: 41.5 fps instead of 42.3. HD shares the
+//    width and the stretch but has not been walked, so it keeps 2060 until it is.
 //  - routeBMHz(): the clock a size may run at its ceiling on the 0x3108 = 0x11 route, or 0
 //    for "route A only". Only 1280X960 is measured: SCLK 88 clean (84 and 88 clean, 92
 //    column-striped, 96 pure noise, all with an exact VSYNC rate), 42.343 fps counted three
 //    times with min = max. Every other size stays byte-identical to the register tier
 //    reference until it has had its own walk through still_color.py and an eyeball
-static int htsFloorFor(framesize_t fs) { return (fs == FS_1280X960) ? 2112 : HTS_FLOOR; }
+static int htsFloorFor(framesize_t fs) { return (fs == FS_1280X960) ? 2156 : HTS_FLOOR; }
 static float routeBMHz(framesize_t fs) { return (fs == FS_1280X960) ? 88.0f : 0.0f; }
 
 static void applyHtsFloor(sensor_t* s, framesize_t fs) {
@@ -826,6 +828,9 @@ static int senLineFactor(sensor_t* s);
 
 int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
 volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
+// config: the mains banding filter. 0 = off (the persisted default since 4 Sep 2026), 50 or
+// 60 = manual band select. Applied by applyBanding() next to applyAecLimits()
+int bandingHz = 0;
 // a size or rate chosen MID-RECORDING is deferred here rather than applied, so one AVI keeps
 // one geometry and one timing throughout - its header carries a single WxH and fps, and
 // settleSensor() used to follow fsizePtr on the next frame regardless of what was consuming
@@ -2817,7 +2822,7 @@ static esp_err_t changeXCLK(camera_config_t config) {
 #define OV5640_ISP_CONTROL01 0x5001 // [5] ISP scale enable - decides crop vs downscale
 #define OV5640_AEC_PK_EXPOSURE 0x3500 // .. 0x3502 exposure, [19:4] lines and [3:0] fraction
 #define OV5640_AEC_PK_REAL_GAIN 0x350a // .. 0x350b AGC gain actually applied, 0x350b[7:0] x/16
-#define OV5640_AEC_CTRL00    0x3a00 // [2] night mode enable - extends the frame in the dark
+#define OV5640_AEC_CTRL00    0x3a00 // [5] band function enable, [2] night mode enable - extends the frame in the dark
 #define OV5640_AEC_GAIN_CEIL 0x3a18 // .. 0x3a19 AGC ceiling, real gain format
 // AEC limits that have to track the frame timing - see applyAecLimits(). All are driver reset
 // table values that nothing recomputes when HTS or VTS move
@@ -2939,6 +2944,51 @@ static camClocks_t camClocks(sensor_t* s) {
   return c;
 }
 
+static bool applyBanding(sensor_t* s, bool announce) {
+  // The mains banding filter as configured (bandingHz: 0 off, 50 or 60 manual). OFF is the
+  // persisted default since 4 Sep 2026 (BOARD_TESTING 37). With the band function enabled the
+  // AEC steps exposure in mains half cycles and near the 1280X960 ceiling it sat at two bands
+  // plus gain at every rate - 20 ms and 1.5x on 50 Hz, 16.7 ms and 2.5x on 60 Hz - where the
+  // frame allows 24 ms. With it off the AEC spends the whole frame on exposure before it
+  // touches gain (measured 24.0 ms = the frame at the 41 fps ceiling, gain at its 1.19x floor
+  // below it), which is the exposure-first behaviour the tuner exists for. The price: exposure is no
+  // longer quantised to the mains half cycle, so a mains-lit scene CAN carry rolling flicker
+  // bands. None showed in the still statistics (vdiff) or to the eye under this bench's light.
+  //
+  // 0x3A00[5] is the band function enable (datasheet 7.8). With the filter on, 0x3C01[7]
+  // selects manual band control and 0x3C00[2] picks 50 Hz (set) or 60 Hz (clear); the driver's
+  // own init is manual 50 Hz. Re-asserted after every retime because the driver's reset table
+  // owns these registers and applySensorTuning() is the one place that knows the configured
+  // state. Read-modify-write, written only when the live value differs, read back after
+  if (s == NULL || s->get_reg == NULL || s->set_reg == NULL) return false;
+  int aec00 = s->get_reg(s, OV5640_AEC_CTRL00, 0xFF);
+  if (aec00 < 0) return false;
+  int want = bandingHz ? (aec00 | 0x20) : (aec00 & ~0x20);
+  bool changed = false;
+  if (want != aec00) { s->set_reg(s, OV5640_AEC_CTRL00, 0xFF, want); changed = true; }
+  if (bandingHz) {
+    int c01 = s->get_reg(s, 0x3C01, 0xFF), c00 = s->get_reg(s, 0x3C00, 0xFF);
+    if (c01 >= 0 && !(c01 & 0x80)) { s->set_reg(s, 0x3C01, 0xFF, c01 | 0x80); changed = true; }
+    int want00 = (bandingHz == 50) ? (c00 | 0x04) : (c00 & ~0x04);
+    if (c00 >= 0 && want00 != c00) { s->set_reg(s, 0x3C00, 0xFF, want00); changed = true; }
+  }
+  int got = s->get_reg(s, OV5640_AEC_CTRL00, 0xFF);
+  bool ok = got >= 0 && ((got & 0x20) != 0) == (bandingHz != 0);
+  if (!ok) LOG_WRN("Banding %s did not take: 0x3A00 reads 0x%02X", bandingHz ? "on" : "off", got);
+  else if (announce || changed) LOG_INF("Banding filter %s (0x3A00 0x%02X -> 0x%02X)",
+    bandingHz == 0 ? "off" : (bandingHz == 50 ? "50 Hz manual" : "60 Hz manual"), aec00, got);
+  return ok;
+}
+
+void setBanding(int hz) {
+  // config handler, banding=0|50|60. The value is kept even before the sensor is up: the
+  // config pass in loadConfig() runs before prepCam(), and prepRecording() re-runs it once the
+  // sensor exists. From then on applyAecLimits() re-asserts it after every retime
+  if (hz != 0 && hz != 50 && hz != 60) { LOG_WRN("banding %d refused - 0 (off), 50 or 60", hz); return; }
+  bandingHz = hz;
+  applyBanding(esp_camera_sensor_get(), true);
+}
+
 static void applyAecLimits(sensor_t* s) {
   // The AEC's limits are fixed values from the driver's reset table and nothing recomputes them
   // when the timing changes. set_framesize() writes only 0x38xx, and applyHtsFloor() and
@@ -2949,8 +2999,10 @@ static void applyAecLimits(sensor_t* s) {
   //  - The banding steps at 0x3A08/0x3A0A are line counts spanning one mains half cycle, so they
   //    are a function of the line time, HTS/pixclk. The driver ships 295 and 246, which are right
   //    for a line time we do not use. At HTS 2060 and 45MHz the correct values are 218 and 182,
-  //    ~35% lower. 0x3A00[5] has the banding filter ENABLED, so these are actively wrong rather
-  //    than dormant, and exposure quantises to multiples of them.
+  //    ~35% lower. The driver's init has 0x3A00[5], the banding filter, ENABLED, so these were
+  //    actively wrong rather than dormant, with exposure quantised to multiples of them. The
+  //    filter is off by config default since 4 Sep 2026 (applyBanding, above); the steps are
+  //    still kept right so that turning it back on lands on the true mains grid.
   //  - The exposure ceiling at 0x3A02 must fit inside the frame. The driver leaves it at 984
   //    lines for every size. At HD, VTS is 744, so the AEC was choosing 885 lines - 36.46ms of a
   //    30.65ms frame - and the sensor clipped it. Measured 0x350C/0x350D stayed zero, so this was
@@ -2966,6 +3018,7 @@ static void applyAecLimits(sensor_t* s) {
     LOG_WRN("AEC limits not applied: clock %s, HTS %d, VTS %d", c.valid ? "ok" : "undecodable", hts, vts);
     return;
   }
+  applyBanding(s, false); // the configured filter state, before the limits that only bite when it is on
   // line time is HTS clocks binned, 2 x HTS at full resolution - see senLineFactor()
   int lf = senLineFactor(s);
   int b50 = c.pixClk / (100 * hts * lf);    // lines per 50Hz half cycle
@@ -3021,8 +3074,9 @@ static void applyAecLimits(sensor_t* s) {
   if (e0 >= 0 && e1 >= 0 && e2 >= 0 && bandSel >= 0) {
     int expo = ((e0 & 0x0F) << 12) | (e1 << 4) | (e2 >> 4); // [19:4] lines, [3:0] fraction
     int step = (bandSel & 1) ? b50 : b60; // 0x3C0C[0]: the band the engine is quantising to
-    // below one band the engine's own auto-band-off applies and freeform is by design
-    if (expo > step) {
+    // below one band the engine's own auto-band-off applies and freeform is by design; with
+    // the filter off altogether (bandingHz 0) there is no grid, and freeform is the config
+    if (bandingHz && expo > step) {
       int n = (expo + step / 2) / step;
       if (n * step > maxExp) n = maxExp / step;
       int snapped = n * step;
@@ -3126,11 +3180,14 @@ void dumpCamRegs() {
   int gainRaw = camReg16(s, OV5640_AEC_PK_REAL_GAIN) & 0x3FF;
   int gainCeil = camReg16(s, OV5640_AEC_GAIN_CEIL) & 0x3FF;
   int aec00 = camReg(s, OV5640_AEC_CTRL00);
+  int band00 = camReg(s, 0x3C00), band01 = camReg(s, 0x3C01); // band select: [7] manual, [2] 50 Hz
   float expLines = (expRaw < 0) ? 0.0f : (float)(expRaw & 0xFFFFF) / 16.0f;
   float expMs = (pixClk > 0 && hts > 0) ? expLines * hts * lineFactor * 1000.0f / pixClk : 0.0f;
-  LOG_DIA("Exposure: %.1f lines = %.2fms of the %.2fms frame, gain %.2fx (ceiling %.2fx), night mode %s",
+  LOG_DIA("Exposure: %.1f lines = %.2fms of the %.2fms frame, gain %.2fx (ceiling %.2fx), night mode %s, banding %s",
     expLines, expMs, (fpsPix > 0) ? 1000.0f / fpsPix : 0.0f, gainRaw / 16.0f, gainCeil / 16.0f,
-    (aec00 < 0) ? "?" : ((aec00 & 0x04) ? "ON - frame may extend" : "off"));
+    (aec00 < 0) ? "?" : ((aec00 & 0x04) ? "ON - frame may extend" : "off"),
+    (aec00 < 0 || band00 < 0 || band01 < 0) ? "?" : (!(aec00 & 0x20) ? "off" :
+      (!(band01 & 0x80) ? "auto" : ((band00 & 0x04) ? "50 Hz manual" : "60 Hz manual"))));
   // 0x4417[0] is the JPEG FIFO overflow flag, and it is here because it separates two
   // explanations of the same symptom. When the image breaks up at a high pixel clock, either
   // the clock has passed the 96MHz maximum in table 8-5, or the JPEG engine could not keep up
