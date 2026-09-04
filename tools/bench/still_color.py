@@ -17,7 +17,7 @@ what this prints:
          31, alternating-column stripes at 121. Smaller outputs run higher (QVGA 5.8), so
          gate it against the same size's own baseline, not an absolute
 
-Usage: python still_color.py <file.jpg>  ->  "W H bytes meanR meanG meanB ratio gsat rsat hdiff"
+Usage: python still_color.py <file.jpg>  ->  "W H bytes meanR meanG meanB ratio gsat rsat hdiff vdiff"
 Exit 2 if the file does not decode. Pillow is required.
 """
 import os
@@ -62,5 +62,9 @@ ratio = g / ((r + b) / 2.0) if (r + b) > 0 else 0.0
 from PIL import ImageChops, ImageStat
 luma = im.convert("L")
 hdiff = ImageStat.Stat(ImageChops.difference(luma.crop((0, 0, w - 1, h)), luma.crop((1, 0, w, h)))).mean[0]
-print("%d %d %d %.1f %.1f %.1f %.3f %.2f %.2f %.1f" % (
-    w, h, os.path.getsize(path), r, g, b, ratio, 100.0 * gsat / n, 100.0 * rsat / n, hdiff))
+# vertically adjacent difference: horizontal structure such as rolling mains-flicker bands
+# (banding filter off under mains light) raises this while leaving hdiff alone. Clean
+# 1280x960 stills sit at 4.3-5.2
+vdiff = ImageStat.Stat(ImageChops.difference(luma.crop((0, 0, w, h - 1)), luma.crop((0, 1, w, h)))).mean[0]
+print("%d %d %d %.1f %.1f %.1f %.3f %.2f %.2f %.1f %.1f" % (
+    w, h, os.path.getsize(path), r, g, b, ratio, 100.0 * gsat / n, 100.0 * rsat / n, hdiff, vdiff))

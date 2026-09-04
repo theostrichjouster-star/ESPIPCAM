@@ -24,13 +24,20 @@ source "$(dirname "${BASH_SOURCE[0]}")/bench_lib.sh"
 SETTLE=${SETTLE:-15}
 LEVELS=${LEVELS:-"-1 0"}
 RATES=${RATES:-"42 30 10"}
-BAND=${BAND:-60}                 # 60 -> 0x3C00 bit2 clear; 50 -> set. 0x3C01 stays manual (0xA4)
+# 60 -> 0x3C00 bit 2 clear; 50 -> set (0x3C01 stays manual, 0xA4); off -> 0x3A00 bit 5 (band
+# function enable) cleared, exposure freeform up to the frame. The datasheet's own note: with
+# banding off the minimum integration time is no longer quantised, and under mains light the
+# picture can carry rolling flicker bands - vdiff in the still stats is the number for that,
+# the eyeball is the judge
+BAND=${BAND:-60}
 FIELD_SIZE=13; FIELD_FPS=30
 CSV="$OUT/points.csv"
-[ -f "$CSV" ] || echo "band,level,fps,pixclk,hts,vts,expLines,expMs,frameMs,maxExpMs,gain,yavg,bandLo,bandHi,aec,bytes,ratio,gsat,rsat,hdiff" > "$CSV"
+[ -f "$CSV" ] || echo "band,level,fps,pixclk,hts,vts,expLines,expMs,frameMs,maxExpMs,gain,yavg,bandLo,bandHi,aec,bytes,ratio,gsat,rsat,hdiff,vdiff" > "$CSV"
+AEC00_START=""
 
 restore() {
-  log "== restore: level -2, 50 Hz manual banding, field config =="
+  log "== restore: level -2, 50 Hz manual banding (0x3A00 back to ${AEC00_START:-0x78}), field config =="
+  curl -s -m 25 "$B/control?camReg=0x3A00,${AEC00_START:-0x78}" > /dev/null; sleep 0.5
   curl -s -m 25 "$B/control?camReg=0x3C00,0x04" > /dev/null; sleep 0.5
   curl -s -m 25 "$B/control?ae_level=-2" > /dev/null; sleep 0.5
   curl -s -m 25 "$B/control?framesize=$FIELD_SIZE" > /dev/null; sleep 8
@@ -68,10 +75,10 @@ PY
 )"
   tag="1280X960_${band}Hz_L${level}_${fps}"
   curl -s -m 30 -o "$OUT/$tag.jpg" "$B/control?still=1" || { log "ABORT: still fetch failed"; exit 7; }
-  stats=$(python "$HERE/still_color.py" "$OUT/$tag.jpg") || stats="0 0 0 0 0 0 0 0 0 999"
-  read -r w hh bytes mr mg mb ratio gsat rsat hdiff <<< "$stats"
-  log "   ${band}Hz level $level @$fps: exposure $expLines lines = ${expMs}ms of ${frameMs}ms frame (max ${maxExp}), gain ${gain}x, YAVG $yavg band $lo..$hi $st | still ${bytes}B ratio $ratio hdiff $hdiff"
-  echo "$band,$level,$fps,$pix,$((16#$h)),$((16#$v)),$expLines,$expMs,$frameMs,$maxExp,$gain,$yavg,$lo,$hi,$st,$bytes,$ratio,$gsat,$rsat,$hdiff" >> "$CSV"
+  stats=$(python "$HERE/still_color.py" "$OUT/$tag.jpg") || stats="0 0 0 0 0 0 0 0 0 999 999"
+  read -r w hh bytes mr mg mb ratio gsat rsat hdiff vdiff <<< "$stats"
+  log "   band $band level $level @$fps: exposure $expLines lines = ${expMs}ms of ${frameMs}ms frame (max ${maxExp}), gain ${gain}x, YAVG $yavg band $lo..$hi $st | still ${bytes}B ratio $ratio hdiff $hdiff vdiff $vdiff"
+  echo "$band,$level,$fps,$pix,$((16#$h)),$((16#$v)),$expLines,$expMs,$frameMs,$maxExp,$gain,$yavg,$lo,$hi,$st,$bytes,$ratio,$gsat,$rsat,$hdiff,$vdiff" >> "$CSV"
 }
 
 log "== exposure level probe: band ${BAND}Hz, levels $LEVELS, rates $RATES =="
@@ -80,10 +87,15 @@ preflight
 log "start: ae_level=$(status_field ae_level) 0x3C00=$(regrd 0x3C00) 0x3C01=$(regrd 0x3C01) 0x3C0C=$(regrd 0x3C0C)"
 set_size 25 10 42; sleep 4
 
-# the band first: bit 2 of 0x3C00 selects 50 Hz when set, with 0x3C01[7] manual
-if [ "$BAND" = "60" ]; then ctl "camReg=0x3C00,0x00" > /dev/null; else ctl "camReg=0x3C00,0x04" > /dev/null; fi
+# the band first: bit 2 of 0x3C00 selects 50 Hz when set, with 0x3C01[7] manual; "off"
+# clears the band function enable, 0x3A00[5], and remembers the byte for the restore
+AEC00_START=0x$(regrd 0x3A00)
+if [ "$BAND" = "off" ]; then
+  ctl "camReg=0x3A00,$(printf '0x%02X' $(( AEC00_START & ~0x20 )))" > /dev/null
+elif [ "$BAND" = "60" ]; then ctl "camReg=0x3C00,0x00" > /dev/null
+else ctl "camReg=0x3C00,0x04" > /dev/null; fi
 sleep 1
-log "band select: 0x3C00=$(regrd 0x3C00) 0x3C0C=$(regrd 0x3C0C)"
+log "band select: 0x3A00=$(regrd 0x3A00) (was $AEC00_START) 0x3C00=$(regrd 0x3C00) 0x3C0C=$(regrd 0x3C0C)"
 
 for level in $LEVELS; do
   ctl "ae_level=$level" > /dev/null; sleep 2

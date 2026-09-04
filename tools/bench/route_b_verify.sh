@@ -103,7 +103,7 @@ import sys
 rows = [r.split() for r in sys.argv[1:4]]
 base = float(rows[1][9])
 for tag, r in zip(("42", "30", "10"), rows):
-    w, h, by, mr, mg, mb, ratio, gs, rs, hd = r
+    w, h, by, mr, mg, mb, ratio, gs, rs, hd = r[:10]
     ok = 0.9 <= float(ratio) <= 1.2 and float(gs) < 3 and float(rs) < 3 and float(hd) <= max(3.0, 1.25 * base) and w == "1280"
     print("   %s still @%s: ratio %s gsat %s rsat %s hdiff %s bytes %s" % ("ok  " if ok else "FAIL", tag, ratio, gs, rs, hd, by))
 PY

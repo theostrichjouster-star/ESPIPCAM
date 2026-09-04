@@ -105,8 +105,8 @@ sample() {
   implied=$(printf '%s\n' "$line" | sed 's/.*implied PIXCLK \([0-9.]*\)MHz.*/\1/')
   implied=$(python -c "print('%.2f'%($implied * $rate / ${r1:-1}))" 2>/dev/null || echo "$implied")
   curl -s -m 30 -o "$OUT/${tag}.jpg" "$B/control?still=1" || { log "ABORT: still fetch failed"; exit 7; }
-  stats=$(python "$HERE/still_color.py" "$OUT/${tag}.jpg") || stats="0 0 0 0 0 0 0 0 0 999"
-  read -r w h bytes mr mg mb ratio gsat rsat hdiff <<< "$stats"
+  stats=$(python "$HERE/still_color.py" "$OUT/${tag}.jpg") || stats="0 0 0 0 0 0 0 0 0 999 999"
+  read -r w h bytes mr mg mb ratio gsat rsat hdiff vdiff <<< "$stats"
   [ -n "${BASE_HDIFF:-}" ] || BASE_HDIFF=$hdiff
   verdict=$(python - "$rate" "$pred" "$w" "$h" "$ratio" "$gsat" "$rsat" "$hdiff" "$BASE_HDIFF" "$tol" <<'PY'
 import sys
