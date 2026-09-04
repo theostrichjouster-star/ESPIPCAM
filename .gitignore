@@ -8,5 +8,12 @@ build-*/
 # deliberately kept out of this public repo rather than merely untracked - being
 # untracked from some commit onwards would still leave it readable in history.
 BOARD_TESTING.md
+# Vendor datasheets, kept locally as markdown so they can be searched during sensor work.
+# Third-party copyrighted documents: they must never be redistributed through this public
+# fork, so they are ignored here rather than merely left untracked. CLAUDE.md records what
+# they are and how to search them - if these files are missing, ask for them, never infer
+# datasheet content.
+OV5640_datasheet.md
+esp32_s3_datasheet_en-*.md
 __pycache__/
 *.pyc

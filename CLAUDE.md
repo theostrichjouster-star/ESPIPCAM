@@ -142,21 +142,38 @@ shows up only on the NEXT boot as a refused camera frame buffer.
 - `THERMAL_SOAK.md`, `FPS_RECAL.md` - local bench campaigns (untracked)
 - `OV5640_*_post.md` - writeups of the DVDD and overheating work (untracked)
 
-## Datasheets
+## Datasheets - READ THEM, they are in the repo
 
-**The OV5640 and ESP32-S3 datasheets are expected as gitignored markdown but are NOT
-present** - searched the whole repo and the parent `dev` tree, every extension, ignored
-files included (3 Sep 2026). The `OV5640_*_post.md` files are our own writeups, not the
-datasheet. **Ask the user for the path before answering any datasheet question, and record
-it here once known.** Never infer datasheet content: a wrong register meaning is expensive
-here (the SCLK/PIXCLK misnaming sent a whole investigation after an ISP clock ceiling that
-does not exist).
+**Both are here as searchable markdown, gitignored** (third-party copyright, never
+redistribute through this public fork):
 
-What IS on record, second-hand, is scattered through BOARD_TESTING.md and the code
-comments - always cited with a section number, e.g. table 2-1 scaling methods (§10 six-size
-sweep), table 4-2 subsample increments (§31), §3.2 auto vertical binning (§31), figure 4-3
+- `OV5640_datasheet.md` - 251KB, full conversion. Pipe tables survived the conversion, so
+  register tables and mode tables are greppable
+- `esp32_s3_datasheet_en-3367378.md` - 112KB, Espressif doc 3367378
+
+**Search them before answering any register, mode or timing question.** They are cheap to
+grep and answer things this project previously guessed at:
+
+```
+grep -n -i "table 2-1" OV5640_datasheet.md     # find a table, then sed -n around the hit
+grep -n "0x3814" OV5640_datasheet.md            # a register's row in the big table
+grep -n -i "binning\|subsampl" OV5640_datasheet.md
+```
+
+Register rows look like
+`|0x3814|TIMING X INC|0x11|RW|Bit[7:4]:...|Horizontal odd subsample increment...|`, so
+grepping the bare address lands on both the definition and every mention.
+
+**Never infer datasheet content.** Two costly precedents: the SCLK/PIXCLK misnaming sent a
+whole investigation after an ISP clock ceiling that does not exist, and I twice told the
+user a capability was missing that was already in the firmware. If a document is not to
+hand, ask - do not reconstruct it from memory.
+
+Second-hand readings are scattered through BOARD_TESTING.md and the code comments, always
+cited by section: table 2-1 scaling methods and per-mode pixel clocks (§10), table 4-2
+subsample increments (§31), §3.2 auto vertical binning (§31), figure 4-2/4-3 windowing and
 pre-scale arithmetic (`applyCropWindow`), table 8-5 pixel clock limits (`camClocks`).
-Treat those as our reading of it, not as the source.
+Those are our reading; the files above are the source. Prefer the source.
 
 ## Where log output actually goes
 
