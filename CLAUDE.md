@@ -239,6 +239,9 @@ Destructive or dangerous:
   is written
 - `route_b_verify.sh` - proves from registers, VSYNC and both still gates that a flashed image
   runs 1280X960 on route B at 42 and route A below, and that HD after it is back on 0x26
+- `analog_probe.sh`, `analog_stages.sh` - the binned analog register dead end (BOARD_TESTING
+  §37): 0x3709 moves nothing, 0x370C=0x03 scrambles colour. Reusable as an HTS A/B walk at
+  VGA with any register set in REFSET, and as a stills-per-register-stage rig
 - `ae_level_probe.sh` - Exposure Level x banding grid x fps: the settled exposure, gain and
   YAVG per point, all from the ring. Exposure Level -2 is the persisted default and the driver
   inits manual 50 Hz banding (0x3C00=0x04) - both decide how bright a still looks before the
