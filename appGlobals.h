@@ -265,7 +265,7 @@ const char* camLiveLine(); // settled exposure / gain / sensor quality / AWB gai
 // night (long exposure) mode - see applyTunedTiming's night branch
 extern int nightFrameMs;   // 0 = off, else the requested frame period in ms
 bool nightEnter(int fsIdx, int ms);
-void nightExit();
+void nightExit(bool restoreSize = true, bool restoreFps = true); // what the user did not choose goes back
 void nightStatus(char* buf, size_t len);
 uint32_t stillWaitMs();    // MAX_FRAME_WAIT, or twice the frame when a night session is on
 bool camAwbGains(int r, int g, int b); // manual AWB gains, 1024 = 1.0x per channel (0x3406 = 1)

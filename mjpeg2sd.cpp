@@ -839,6 +839,12 @@ static int nightPrevFS = -1, nightPrevFPS = -1, nightPrevIdle = -1, nightPrevMic
 // HTS from the driver's table on a size change, which is when this is recaptured
 static int nightHtsBase = 0;
 static int nightHtsFS = -1;
+// The size the session was entered for. The stretch must never leak onto another size: on
+// 5 Sep 2026 a session left on at QSXGA while the camera panel selected HD kept the sensor on a
+// 3.17s frame with the UI reporting HD 30, which starved the stream and walked the no-frame
+// rescue to quality 30. A live senLineFactor() read is not enough of a guard on its own - it
+// reads the PREVIOUS size mid-transition, visible in the tuner log as "FHDNARROW ... x1"
+static int nightFS = -1;
 
 int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
 volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
@@ -948,7 +954,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // because their line cost flips above HTS 2277, which is why 1280X960 is not offered.
   // The floor is also never crossed downwards: hts is the tuner's own line for this size, and at
   // full resolution there is almost no spare blanking (FHD is dead at HTS 2650, applyHtsFloor)
-  if (nightFrameMs > 0 && lf == 2) {
+  if (nightFrameMs > 0 && (int)fs == nightFS && lf == 2) {
     mul = 76; sysDiv = 5; // 10.13MHz, the same verified floor combo the low-fps regime uses
     clkMHz = NIGHT_PIXCLK_MHZ;
     vts = AEC_VTS_CEIL;
@@ -2064,6 +2070,15 @@ static void noFrameRescue() {
   // threshold rides out retime/PLL transients (~1s) and the frame gaps of low rates
   uint32_t thresh = FPS ? 4000u / FPS : 2000;
   if (thresh < 2000) thresh = 2000;
+  // A night session's frames are SECONDS apart BY DESIGN, and FPS sits at the frame timer's floor
+  // of 1 whatever the sensor is doing, so the stock 4s threshold fires between every frame and
+  // steps quality until the picture is ruined. Measured 5 Sep 2026: a 3.17s frame produced gaps of
+  // 4.6-5.1s and walked quality 12 -> 30 at QSXGA, with white frames from the long exposure on top.
+  // The watchdog needs the SENSOR's period, which only night mode knows
+  if (nightFrameMs > 0) {
+    uint32_t nightThresh = (uint32_t)nightFrameMs * 2 + 2000;
+    if (nightThresh > thresh) thresh = nightThresh;
+  }
   if (now - lastGoodFrameMs < thresh) return;
   sensor_t* s = esp_camera_sensor_get();
   if (s == NULL) return;
@@ -3247,6 +3262,7 @@ uint32_t stillWaitMs() {
 // capture task owns that, see settleSensor), so this sets the target and raises retimePending
 bool nightEnter(int fsIdx, int ms) {
   if (ms < 1) return false;
+  nightFS = fsIdx; // the stretch applies to THIS size and no other
   if (nightPrevFS < 0) { // first entry - remember what to put back
     nightPrevFS = fsizePtr;
     nightPrevFPS = captureFPS;
@@ -3262,20 +3278,26 @@ bool nightEnter(int fsIdx, int ms) {
   return true;
 }
 
-void nightExit() {
-  if (nightPrevFS < 0) return; // never entered
+void nightExit(bool restoreSize, bool restoreFps) {
+  // Always clear the target, even if the session was never entered: leaving nightFrameMs set with
+  // no session is how the stretch leaked onto another size on 5 Sep 2026
   nightFrameMs = 0;
-  fsizePtr = nightPrevFS;
-  FPS = captureFPS = (uint8_t)nightPrevFPS;
+  nightFS = -1;
+  nightHtsBase = 0;
+  nightHtsFS = -1;
+  if (nightPrevFS < 0) return; // nothing was saved, so nothing to put back
+  // Whatever the user did NOT choose goes back where the session found it. A size change restores
+  // the rate (they never asked for 1 fps - the session set that), a rate change restores the size,
+  // and the panel's own exit restores both. Getting this wrong left HD running at 1 fps
+  if (restoreSize) fsizePtr = nightPrevFS;
+  if (restoreFps) FPS = captureFPS = (uint8_t)nightPrevFPS;
   idleFps = nightPrevIdle;
   micGain = nightPrevMic;
   camFocusAuto();
   retimePending = true;
-  LOG_INF("Night mode off - back to %s at %ufps, idleFps %d, micGain %d",
+  LOG_INF("Night mode off - %s at %ufps, idleFps %d, micGain %d",
     frameData[fsizePtr].frameSizeStr, captureFPS, idleFps, micGain);
   nightPrevFS = nightPrevFPS = nightPrevIdle = nightPrevMic = -1;
-  nightHtsBase = 0;
-  nightHtsFS = -1;
 }
 
 // The achieved timing, read from the sensor rather than assumed, for the panel's readout and

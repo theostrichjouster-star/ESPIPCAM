@@ -290,6 +290,11 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
       LOG_INF("Frame size %s takes effect when the recording stops", frameData[intVal].frameSizeStr);
     }
     else {
+      // A long exposure session owns the sensor's timing. Picking a size here ends it, or the
+      // sensor stays on a multi-second frame while this panel reports the size just chosen -
+      // which starves the stream and walks the no-frame rescue (5 Sep 2026, BOARD_TESTING §38.12).
+      // restoreSize false: the user's choice below wins, not the size the session remembered
+      if (nightFrameMs > 0 && fromUser && intVal != fsizePtr) nightExit(false, true); // their size, the session's rate back
       fsizePtr = intVal;
       if (!videoSizeAllowed(fsizePtr) && fromUser) LOG_WRN("%s is above the %s video cap - stills only, no AVI recording",
         frameData[fsizePtr].frameSizeStr, frameData[maxVideoFS].frameSizeStr);
@@ -317,6 +322,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
       pendingFPS = intVal;
       LOG_INF("FPS %d takes effect when the recording stops", intVal);
     } else {
+      // same reasoning as the framesize handler: asking for a rate ends a long exposure session,
+      // whose whole point is that the sensor is NOT running at the requested rate
+      if (nightFrameMs > 0 && fromUser) nightExit(true, false); // their rate, the session's size back
       FPS = intVal;
       captureFPS = intVal; // the user's rate for the capture size, preserved across switches
       if (playbackHandle != NULL) setFPS(FPS);
