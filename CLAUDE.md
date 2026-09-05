@@ -207,6 +207,12 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   0x5183 = 0x94 on each). **Still owed: the same comparison in a dark room.**
 - The colour bar is not in the block `set_framesize` reloads, so **0x503D survives a size change**
   and, being persistable, can boot a board into test bars (5 Sep 2026, §38.5).
+- The web page's state tests must go through `isOn()`: `/status` sends every value as a STRING and
+  `"0"` is truthy in JavaScript, so `value ? a : b` takes the wrong branch on every load (it hid the
+  Manual Exposure slider whenever the AEC was manual). A control the page hides or disables must not
+  be sent either (`isInert()`) - a hidden select still reached the sensor. The repeating section
+  markers are CLASSES, not repeated ids: `hideBuiltOut` matches class or id, and breaking that makes
+  compiled-out sections silently reappear on the builds that need them hidden (5 Sep 2026, §38.11).
 - **In `data/MJPEG2SD.htm` the static markup is OV2640's - read the sensor branch, never the HTML.**
   On load the page re-ranges every slider for the detected model (`changeRange` in the
   `OV3660 || OV5640` branch) and relabels `aec2` to "Night Mode", `awb_gain` to "Manual AWB" and
@@ -253,10 +259,12 @@ shows up only on the NEXT boot as a refused camera frame buffer.
 ## Docs map
 
 - `BATTERY.md` - battery deployment guide (committed)
-- `UI_REVIEW.md` - the web UI's camera controls: what the 5 Sep regression found and the ranked
-  proposals, each citing its measurement (committed). A1-A4 and B3 are done and deployed, B1/B2 and
-  part of C3 are retracted in place, C and D are open and the user picks. After any UI change,
-  `DRY=1` on `ui_regress.sh` is the smoke test, the full run the gate
+- `UI_REVIEW.md` - the web UI's camera controls: what the 5 Sep regression found, and every
+  proposal with its measurement (committed). **All of A1-A4, B1-B3, C1-C5 and D1-D3 are done and
+  deployed**; B1/B2 and part of C3 are retracted in place (I had read the static markup - see the
+  sensor-branch rule above). After any UI change, `DRY=1` on `ui_regress.sh` is the smoke test and
+  the full run is the gate. Still owed: the dark-room AWB comparison, the `colorbar` firmware half
+  (never persist, clear at boot), the `wb_mode` firmware gate, and the open-file leak audit
 - `tools/core/README.md` - custom arduino-esp32 core: why, how to build, the four
   version pins, the sdkconfig gate, and candidate future config changes (committed)
 - `tools/bench/README.md` - how to run the sweep campaigns and the rules they enforce
