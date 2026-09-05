@@ -79,7 +79,7 @@ SPEC[agc]="0|3503|8|exp"
 SPEC[dcw]="0|5183|8|img"
 SPEC[wb_mode]="1 4|3406|8|img"
 SPEC[awb_gain]="0|3406|8|none"
-SPEC[awb]="0||8|none"
+SPEC[awb]="0|5001|8|none"    # 0x5001[0] is the AWB enable: a read-modify-write, the scaler bit 5 survives
 SPEC[colorbar]="1|503D|8|pattern"
 SPEC[enableMotion]="1||2|hd"
 SPEC[motionVal]="1 10||2|hd"
@@ -105,7 +105,9 @@ finding() {  # finding <size> <control> <value> <code> <detail>
   echo "$1 $2=$3 $4: $5" >> "$FINDINGS"
   log "   FINDING $1 $2=$3 $4: $5"
 }
-last_wrn() { ramlog | grep -a "not supported for camera type\|Unable to use\|Show Motion needs\|did not take\|did not read back" | tail -1; }
+# the RTC ring wraps, so an old line is clipped from the FRONT as it ages: compare only the tail,
+# or the same warning reads as a new one at every later point (the 4 Sep full run, 3 false WRNs)
+last_wrn() { ramlog | grep -a "not supported for camera type\|Unable to use\|Show Motion needs\|did not take\|did not read back" | tail -1 | tail -c 40; }
 last_rescue() { ramlog | grep -a "No frames for" | tail -1; }
 # regsnap <outfile> [extra regs "0x.... 0x...."] : the tuner set from dumpCam=1 (LOG_DIA, read
 # back from the SD log tail - the server flushes the log before serving it, webServer.cpp), plus
@@ -237,14 +239,25 @@ point() {
     [ "$missing" = "-" ] || { gates="$gates SNAP"; finding "$sz" "$key" "$val" SNAP "snapshot incomplete: $missing"; }
   fi
   want_rb=$val; [ "$key" = dbgMotion ] && [ "$val" = 1 ] && want_rb=0   # the handler pushes back (motion off)
-  [ "$rb" = "$want_rb" ] || { gates="$gates STATUS"; finding "$sz" "$key" "$val" STATUS "/status reads $rb"; }
+  # /status does not report every key the page can send (dbgMotion has no field at all, 4 Sep
+  # run): with nothing to read back the gate can never pass, so it is an audit note not a finding
+  if [ -z "$(sf0 "$key")" ] && [ -z "$rb" ]; then
+    log "      note: /status has no $key field - readback not gated"
+  else
+    [ "$rb" = "$want_rb" ] || { gates="$gates STATUS"; finding "$sz" "$key" "$val" STATUS "/status reads $rb"; }
+  fi
+  # the VSYNC counter's window holds ~60 edges or 10 s, whichever comes first: at 1 fps that is a
+  # dozen edges and the figure quantises to ~+-5% (measured 4-5 Sep, spread 1.065-1.170 at
+  # FHDNARROW 1 with no clustering by control). Gate on the instrument's resolution, not 0.5%
+  local rateTol=0.5; [ "$fps" -ge 10 ] || rateTol=6
   if [ -n "$vs" ] && [ -n "$v0" ]; then
-    [ "$(python -c "print(1 if $(pct_off "$v0" "$vs") > 0.5 else 0)")" = 0 ] || { gates="$gates RATE"; finding "$sz" "$key" "$val" RATE "VSYNC $vs vs baseline $v0"; }
+    [ "$(python -c "print(1 if $(pct_off "$v0" "$vs") > $rateTol else 0)")" = 0 ] || { gates="$gates RATE"; finding "$sz" "$key" "$val" RATE "VSYNC $vs vs baseline $v0"; }
   else gates="$gates NOVSYNC"; fi
   local wantQ; wantQ=$(printf '%02X' "$Q"); [ "$key" = quality ] && [ "$kind" != restore ] && wantQ=$(printf '%02X' "$val")
   [ "$r4407" = "$wantQ" ] || { gates="$gates QS"; finding "$sz" "$key" "$val" QS "sensor quality 0x$r4407, config 0x$wantQ"; }
   [ "$resc1" = "$resc0" ] || { gates="$gates RESCUE"; finding "$sz" "$key" "$val" RESCUE "$resc1"; }
-  [ "$wrn1" = "$wrn0" ] || { gates="$gates WRN"; finding "$sz" "$key" "$val" WRN "$wrn1"; }
+  # only a NEW warning is a finding: an old line ageing out of the ring leaves wrn1 empty
+  [ -z "$wrn1" ] || [ "$wrn1" = "$wrn0" ] || { gates="$gates WRN"; finding "$sz" "$key" "$val" WRN "$wrn1"; }
   if [ "$kind" = none ] || [ "$kind" = geom ] || [ "$kind" = hd ] || [ "$kind" = restore ]; then
     local ok; ok=$(python -c "r=float('$ST_RATIO' or 0); r0=float('${BASE_RATIO:-0}' or 0); hd=float('$ST_HDIFF' or 999); hd0=float('${BASE_HDIFF:-1}' or 1); b=int('$ST_BYTES' or 0)
 print(1 if b > 0 and r0 and abs(r-r0)/r0 <= 0.10 and hd <= 2*hd0 and float('$ST_GSAT') < 5 and float('$ST_RSAT') < 5 else 0)")
@@ -412,8 +425,10 @@ sc_flip() {  # mirror and flip on the cropped / binned custom sizes, singly and 
     ctl vflip=1 > /dev/null; sleep "$(settle_for 4 "$fps")"
     sc_row flip "$sz" C_both "$fps" "hmirror=1 vflip=1"
     log "      diff: $(python "$HERE/regsnap.py" diff "$S0" "$OUT/sc_flip_${sz}_C_both.txt" 3814,3815,3820,3821,4514,4520)"
-    ctl hmirror=0 > /dev/null; sleep 2; ctl vflip=0 > /dev/null; sleep "$(settle_for 4 "$fps")"
-    sc_row flip "$sz" D_restored "$fps" "both off: predict the baseline registers exactly"
+    # back to the board's OWN values, not to 0: COM4 carries a persisted hmirror 1, and restoring
+    # to 0 made the D step diff against the baseline every time (4 Sep run, a script finding)
+    ctl "hmirror=$(sf0 hmirror)" > /dev/null; sleep 2; ctl "vflip=$(sf0 vflip)" > /dev/null; sleep "$(settle_for 4 "$fps")"
+    sc_row flip "$sz" D_restored "$fps" "hmirror/vflip back to the persisted values: predict the baseline registers exactly"
     d=$(python "$HERE/regsnap.py" diff "$S0" "$OUT/sc_flip_${sz}_D_restored.txt") || finding "$sz" flip restore RESTORE "$d"
     log "      diff: $d"
   done

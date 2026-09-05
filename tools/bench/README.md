@@ -105,7 +105,13 @@ The web UI's controls (§38):
   `/control` keys are never sent (audit only). `DRY=1` is the HD-only smoke run; `SIZES=`,
   `CONTROLS=`, `SCENARIOS=` take subsets; `findings.txt` is written by the gates; the exit
   restore replays every camera key from the `/status` snapshot taken at the start and diffs
-  the registers at HD against that size's baseline. Never `save=1`
+  the registers at HD against that size's baseline. Never `save=1`. **Full run measured 3.5 h at
+  `MIN_HTTP_GAP=1`** (214 matrix points + 59 scenario rows, 4-5 Sep 2026, `ui_regress_full_20260905`):
+  no firmware regression, 88 findings of which 74 were this rig's own gates - the rate gate is now
+  rate-dependent (6% below 10 fps, the VSYNC window is a dozen edges at 1 fps), the WRN gate
+  compares a line's tail (the RTC ring clips ageing lines from the front), a key `/status` does not
+  report is an audit note, `SPEC[awb]` expects 0x5001, and the flip scenario restores the board's
+  persisted mirror/flip instead of 0. Findings and proposals: `UI_REVIEW.md`, BOARD_TESTING §38.5
 
 Dead ends kept as records (§31, §37) - do not re-walk without a new mechanism:
 - `hts_floor.sh` - the HTS floor walk whose gates passed corrupt frames (the reason for

@@ -24,7 +24,10 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGF"; }
 # /control requests followed by a size switch, and had to be reset. The timestamp lives in a
 # file, not a variable, because every helper below is called from a $(...) subshell. Every
 # helper here goes through http_gap; scripts that call curl directly must call it too
-MIN_HTTP_GAP=${MIN_HTTP_GAP:-5}
+# 1 s since 5 Sep 2026: the UI regression's full run put ~3500 requests through this gap at 1 s
+# over 3.5 h with no failure, no reboot and no peer reset, so the 5 s the wedge bought was too
+# cautious. What is NOT licensed is no gap at all - that is what the wedge followed
+MIN_HTTP_GAP=${MIN_HTTP_GAP:-1}
 http_gap() {
   local f="$OUT/.http_last" last now waitNs
   now=$(date +%s%N); last=$(cat "$f" 2>/dev/null || echo 0)

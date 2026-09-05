@@ -55,11 +55,14 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   `esptool --chip esp32s3 --port COMx --before default_reset --after no_reset
   read_mac` parks a board in download mode with the radio fully off;
   `--before no_reset --after hard_reset chip_id` brings it back.
-- **Minimum 5 s between HTTP requests to a board** (`bench_lib.sh` `http_gap`, run-wide through
-  a timestamp file; every helper and every direct curl goes through it). COM4 went off the
-  network on 4 Sep 2026 at 18:04:35, seconds after a burst of back-to-back `/status` and
-  `/control` requests followed by a size switch, and needed a finger on the button. A
-  register snapshot is therefore `dumpCam=1` plus a handful of `camRegRd`, never a hundred.
+- **Never fire HTTP requests at a board back to back** (`bench_lib.sh` `http_gap`, run-wide
+  through a timestamp file; every helper and every direct curl goes through it). COM4 went off
+  the network on 4 Sep 2026 at 18:04:35, seconds after a burst of back-to-back `/status` and
+  `/control` requests followed by a size switch, and needed a finger on the button. The gap that
+  bought was 5 s; **the measured floor is 1 s** (`MIN_HTTP_GAP`, the default since 5 Sep 2026):
+  the UI regression's full run put ~3500 requests through it at 1 s over 3.5 h with no failure,
+  no reboot and no peer reset. A register snapshot is still `dumpCam=1` plus a handful of
+  `camRegRd`, never a hundred.
 - **Peer reset**: COM3's D1 (GPIO 2) is wired to COM4's RESET pad; `/control?peerReset=1` on
   COM3 pulls it open-drain low for 5 s (`peerReset()`, mjpeg2sd.cpp), and `bench_lib.sh`
   `peer_reset` does that with `PEER=<COM3 address>` after a control call to COM4 fails twice
@@ -159,16 +162,29 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   the exposure written by register, 3932 lines gave 5x the AEC's best frame at the same gain
   and 5900+ saturated (4 Sep 2026, BOARD_TESTING §37). But manual mode has two unexplained
   quirks: after entering it the frame does not integrate its register value until a LARGE
-  exposure increase is written, and any exposure DEcrease (by register or by the driver's
-  `aec_value`) gives a persistent flat black frame. Gain through the driver's `agc_gain` is
-  safe both ways; the gain scale above 0x1FF is unproven except 0x3FF = 2 x 0x1FF. Leave
-  manual mode by 0x3503 = 0x00 (AEC auto), never by stepping down.
+  exposure increase is written, and any exposure DEcrease gives a persistent flat black frame.
+  **Both belong to FULL manual mode - 0x3503 = 0x03, AEC and AGC both off** (BOARD_TESTING §38.5,
+  5 Sep 2026): with AEC manual and AGC left auto (0x3503 = 0x01) the driver's `aec_value` halves
+  the exposure cleanly at 30 fps and at 1 fps alike, luma tracking the exposure, and `aec=1`
+  recovers in one settle. So the web UI's Manual Exposure slider is not the hazard; the register
+  route with both loops off is. Gain through the driver's `agc_gain` is safe both ways; the gain
+  scale above 0x1FF is unproven except 0x3FF = 2 x 0x1FF. Leave manual mode by 0x3503 = 0x00
+  (AEC auto), never by stepping down. `agc_gain` 0 and 1 are the SAME 1x gain, not a black frame.
 - The AWB works at every rate down to 0.35 fps (HTS 8191 at QSXGA) and under manual
   exposure: it is the ISP's frame-counted state machine, so it converges in a handful of
   frames whatever the rate, then holds within 0.5% (4 Sep 2026, `awb_eval.sh`). Its gains
   track the AEC's gain (the high-gain pedestal), not the rate. It hunts on a frame without
   signal (YAVG ~13): give it a lit frame before judging it. The chart box's R/G and B/G is the
-  witness; the whole-frame ratio is confounded by the pedestal at high gain.
+  witness; the whole-frame ratio is confounded by the pedestal at high gain. **`awb=0` is raw, not
+  frozen**: it clears 0x5001 bit 0 (a read-modify-write, the tuner's scaler bit 5 survives) so the
+  ISP stops APPLYING the gains, which keep their converged values in 0x3400-0x3405 - the chart
+  falls to 0.46 R/G and stays there (5 Sep 2026, §38.5). **Simple AWB (`dcw=0`, 0x5183[7]) measured
+  more neutral than advanced**: chart 0.965/0.918 against 0.882/0.882. Do not change the default on
+  that alone - it wants an eyeball and a dark-room check. A still needs a converged AWB: the
+  FHDNARROW baseline of that run was taken too early and read 1.746 where every later point read
+  1.10-1.19.
+- The colour bar is not in the block `set_framesize` reloads, so **0x503D survives a size change**
+  and, being persistable, can boot a board into test bars (5 Sep 2026, §38.5).
 - The gain ceiling is `gainceiling~1023` (63.9x, the datasheet's 64x) since 4 Sep 2026,
   persisted on both boards by `save=1`; 511 (31.94x) was a repair value from eb61cf1, not a
   limit. Gain-seconds figures measured before 15:52 that day were under the 511 ceiling.
@@ -207,6 +223,9 @@ shows up only on the NEXT boot as a refused camera frame buffer.
 ## Docs map
 
 - `BATTERY.md` - battery deployment guide (committed)
+- `UI_REVIEW.md` - the web UI's camera controls: what the 5 Sep regression found and the ranked
+  proposals, each citing its measurement (committed). **Nothing in it is implemented** - the user
+  picks. After any UI change, `DRY=1` on `ui_regress.sh` is the smoke test, the full run the gate
 - `tools/core/README.md` - custom arduino-esp32 core: why, how to build, the four
   version pins, the sdkconfig gate, and candidate future config changes (committed)
 - `tools/bench/README.md` - how to run the sweep campaigns and the rules they enforce
@@ -386,8 +405,11 @@ Destructive or dangerous:
   scenario-only run); `PEER=<COM3 address>` arms the peer reset; `RESTORE_ONLY=1 OUT=<run dir>`
   replays a run's restore after an abort; the exit restore replays the start-of-run `/status`
   snapshot and proves it by register before idleFps / detection / recording return. Never
-  `save=1`. Full matrix plus scenarios is ~10.5 h at one request per 5 s (HD 3.1 h, 1280X960
-  2.4 h, FHDNARROW 2.9 h, scenarios 1.9 h) - an overnight run with the lamp held
+  `save=1`. Full matrix plus scenarios measured **3.5 h at `MIN_HTTP_GAP=1`** (214 matrix points +
+  59 scenario rows, 4-5 Sep 2026; it was ~10.5 h at the old 5 s gap). Run it with the lamp held.
+  The rate gate is rate-dependent (6% below 10 fps: the VSYNC counter's window is a dozen edges at
+  1 fps), the WRN gate compares only a line's tail (the RTC ring clips ageing lines from the
+  front), and a key `/status` does not report is an audit note not a finding
 - Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
   `parse_motion.py`, `parse_zones.py` (the avgZones grid: mean / min / max / YAVG / band / AEC
   state), `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel ratio +
