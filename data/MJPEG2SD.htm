@@ -1071,8 +1071,14 @@
           margin: 0;
           padding: 0;
           border-radius: 0.75rem;
-          background: var(--buttonReady);
+          /* green, matching the desktop theme, where the camera tab is the active one and reads
+             --buttonActive. Dark glyph on it, the same pairing the active tiles use */
+          background: var(--buttonActive);
+          color: var(--buttonLabel);
           touch-action: manipulation;
+        }
+        #appHome:active {
+          background: var(--buttonHover);
         }
         #appHome .icon {
           width: 55%;
@@ -1083,9 +1089,11 @@
           min-width: 0;
         }
         #appTitle {
-          font-size: calc(var(--bodySize) * 1.35);
+          /* sized so a full ESP-CAM_MJPEG_<MAC> hostname, 26 characters, fits the space left by the
+             home button and the connection pill on a 375px phone. It was 1.35 and truncated */
+          font-size: calc(var(--bodySize) * 0.95);
           font-weight: 700;
-          line-height: 1.2;
+          line-height: 1.25;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -1101,10 +1109,6 @@
           align-items: center;
           gap: 0.35rem;
           font-size: calc(var(--bodySize) * 0.8);
-        }
-        #appLink .icon-inline {
-          color: var(--buttonReady);
-          margin-right: 0;
         }
         #appLinkDot {
           width: 0.55rem;
@@ -1686,8 +1690,10 @@
         <div id="appTitle">ESP32-S3 CAM</div>
         <div id="appSubtitle"><span id="appModel">Camera</span> &middot; WiFi Camera</div>
       </div>
+      <!-- the dot IS the indicator: it turns green while the status poll is answering. A wifi glyph
+           sat here and never changed with signal strength, so it was decoration pretending to be an
+           instrument - the real RSSI is on the viewfinder rail and in System Status -->
       <div id="appLink" class="offline" title="Connection to the camera">
-        <svg class="icon-inline" aria-hidden="true"><use href="#icon-wifi"></use></svg>
         <span id="appLinkDot" aria-hidden="true"></span>
         <span id="appLinkText">Connecting</span>
       </div>
