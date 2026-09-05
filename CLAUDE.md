@@ -84,6 +84,13 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - Board acts possessed? Check SD free space first (a full card wedges as a fake wifi
   failure), then audit the host PC for orphaned automation from earlier sessions.
   All host-side polling loops must be bounded.
+- **Close every orphaned task before any pause** (user's rule, 5 Sep 2026, after two crashes in
+  one campaign). Before a compaction, a handoff, a context pause or the end of a session, stop
+  what this session started and SAY so in the pause message: background tasks and monitors
+  (`TaskStop`), any `nohup`/background bench run, helper servers and stub processes (check the
+  ports, `taskkill /F /PID`), browser tabs opened for testing, and anything still polling a
+  board. A crash does not clean up after itself, and an orphaned loop firing at a board is the
+  failure mode this file already warns about above - the audit is cheaper than the diagnosis.
 - Serial diagnostics: 115200 baud. **Opening the port SOMETIMES reboots the board** -
   measured 3 Sep 2026 both ways within 20 minutes, same script, DtrEnable/RtsEnable
   set false before Open(): once `rst:0x15 (USB_UART_CHIP_RESET)` and a full reboot,
