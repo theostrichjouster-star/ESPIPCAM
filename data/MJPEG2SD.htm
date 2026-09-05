@@ -1182,6 +1182,28 @@
                            title="0 and 1 are both 1x on this sensor; the top of the range is washed out">
                     <div name="rangeMax">64x</div>
                   </div>
+                  <div class="input-group" id="nightAwb-group">
+                    <label for="nightAwb">Auto white balance</label>
+                    <div class="switch">
+                      <input id="nightAwb" class="local" type="checkbox" checked="checked"
+                             title="On lets the ISP compute the white balance gains. Off holds them where the sliders say - which is how a green cast gets pulled out, since the AWB's gains track the AEC's gain and a multi-second frame lands somewhere the eye disagrees with">
+                      <label class="slider" for="nightAwb"></label>
+                    </div>
+                  </div>
+                  <div class="input-group" id="nightAwbR-group">
+                    <label for="nightAwbR">Red gain</label>
+                    <div name="rangeMin">0.5x</div>
+                    <input type="range" id="nightAwbR" class="local" min="512" max="3072" step="8" value="1024"
+                           title="1024 is 1.0x. Raise this against green to warm the frame">
+                    <div name="rangeMax">3x</div>
+                  </div>
+                  <div class="input-group" id="nightAwbB-group">
+                    <label for="nightAwbB">Blue gain</label>
+                    <div name="rangeMin">0.5x</div>
+                    <input type="range" id="nightAwbB" class="local" min="512" max="3072" step="8" value="1024"
+                           title="1024 is 1.0x. Raise this and red together to pull green out of the frame">
+                    <div name="rangeMax">3x</div>
+                  </div>
 
                   <div class="input-group group-head"><label>Focus</label></div>
                   <div class="input-group" id="nightFocusAuto-group">
@@ -2613,9 +2635,14 @@
           if (!r.ok) return;
           nightInfo = await r.json();
           $('#nightOn').checked = !!nightInfo.night;
+          $('#nightAwb').checked = !nightInfo.awbManual;
           nightShow(); // render and gate FIRST - a throw below must not leave the panel blank
           const code = Number(nightInfo.vcm);
           if (code >= 0) $('#nightFocus').setAttribute('value', code);
+          // seed the gain sliders from what the ISP actually converged on, so going manual starts
+          // from the current picture rather than from 1.0x
+          if (nightInfo.awbR > 0) $('#nightAwbR').setAttribute('value', nightInfo.awbR);
+          if (nightInfo.awbB > 0) $('#nightAwbB').setAttribute('value', nightInfo.awbB);
         } catch (e) {} // older firmware without the key - leave the panel at its defaults
       }
 
@@ -2655,11 +2682,20 @@
       function nightGating() {
         nightRow('nightExpSecs', !$('#nightAec').checked);   // manual exposure, only under manual AEC
         nightRow('nightGain', !$('#nightAgc').checked);      // manual gain, only under manual AGC
+        const awbManual = !$('#nightAwb').checked;
+        nightRow('nightAwbR', awbManual);                     // the gains, only off auto white balance
+        nightRow('nightAwbB', awbManual);
         nightRow('nightFocus', !$('#nightFocusAuto').checked); // the lens, only off autofocus
         // manual exposure AND manual gain together is the combination with the black-frame quirk
         if (!$('#nightAec').checked && !$('#nightAgc').checked) $('#nightExpSecs').title =
           "Both loops manual: this is the mode where an exposure DEcrease has given a persistent "
           + "black frame. Leave gain automatic unless you need it.";
+      }
+
+      // green is the reference channel, so only R and B are exposed - moving all three together
+      // would only change brightness, which is the AEC's job
+      function nightAwbSend() {
+        sendControl('awbGains', $('#nightAwbR').value + ',1024,' + $('#nightAwbB').value);
       }
 
       function nightControl(key, value) {
@@ -2678,6 +2714,17 @@
           // engine's ceiling is 1964 whatever the line time is
           const maxLines = Number(nightInfo.maxLines || 1964);
           sendControl('aec_value', Math.max(1, Math.round(maxLines * Number(value) / 100)));
+        }
+        else if (key == "nightAwb") {
+          // NOT the awb key: that one stops the ISP applying gains at all and goes further green.
+          // This is 0x3406 - who computes the gains, the ISP or these sliders
+          value ? sendControl('awbGainsAuto', 1) : nightAwbSend();
+          nightGating();
+        }
+        else if (key == "nightAwbR" || key == "nightAwbB") {
+          if ($('#nightAwb').checked) $('#nightAwb').checked = false; // adjusting IS going manual
+          nightAwbSend();
+          nightGating();
         }
         else if (key == "nightFocusAuto") {
           // on = the sensor's own program, off = held where the slider says

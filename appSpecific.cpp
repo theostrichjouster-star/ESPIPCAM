@@ -183,6 +183,20 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   // exposure needs the lens placed by hand and held (BOARD_TESTING §37)
   else if (!strcmp(variable, "afManual")) camFocusManual(intVal);
   else if (!strcmp(variable, "afAuto")) camFocusAuto();
+  // manual white balance gains "<r>,<g>,<b>", 1024 = 1.0x. The night panel's answer to the green
+  // cast a long exposure leaves: raise R and B against G. NOT the same as awb, which stops the ISP
+  // applying any gains at all and goes further green
+  else if (!strcmp(variable, "awbGains")) {
+    int r = atoi(value), g = 1024, b = 1024;
+    const char* p1 = strchr(value, ',');
+    if (p1) {
+      g = atoi(p1 + 1);
+      const char* p2 = strchr(p1 + 1, ',');
+      if (p2) b = atoi(p2 + 1);
+    }
+    camAwbGains(r, g, b);
+  }
+  else if (!strcmp(variable, "awbGainsAuto")) camAwbAuto();
   // debug: exercise the supply sag path without a failing supply. Sets the same flag the
   // brownout ISR sets, so the whole Stage 1 sequence runs for real - close, park, re-arm
   else if (!strcmp(variable, "sagTest")) supplySagging = (bool)intVal;

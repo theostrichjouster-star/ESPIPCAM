@@ -268,6 +268,8 @@ bool nightEnter(int fsIdx, int ms);
 void nightExit();
 void nightStatus(char* buf, size_t len);
 uint32_t stillWaitMs();    // MAX_FRAME_WAIT, or twice the frame when a night session is on
+bool camAwbGains(int r, int g, int b); // manual AWB gains, 1024 = 1.0x per channel (0x3406 = 1)
+void camAwbAuto();         // hand the gains back to the ISP (0x3406 = 0)
 bool camFocusManual(int code); // hold the lens at a VCM DAC code (0-1023), AF program stopped
 void camFocusAuto();       // restart the AF program, continuous again
 int camFocusCode();        // the lens position now, -1 if unreadable

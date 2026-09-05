@@ -3203,6 +3203,33 @@ int camFocusCode() {
   return ((r3 & 0x3F) << 4) | ((r2 >> 4) & 0x0F);
 }
 
+// Manual white balance gains, for the green cast a long exposure leaves. The AWB's own gains track
+// the AEC's gain (the high-gain pedestal), and at a multi-second frame in a dark room it converges
+// somewhere the eye does not agree with - the chart reads R/G 0.88-0.96 even when it is behaving.
+// 0x3406 = 1 makes the ISP take the gains from 0x3400-0x3405 instead of computing them; 1024 is 1.0x
+// on each channel, so raising R and B against G is what pulls green out. NOTE this is not the same
+// as `awb` (0x5001 bit 0): turning THAT off stops the ISP applying any gains at all and the picture
+// goes further green (chart R/G 0.46, BOARD_TESTING §38.5) - which is why the panel's toggle drives
+// this, not that
+bool camAwbGains(int r, int g, int b) {
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return false;
+  r = constrain(r, 0, 4095); g = constrain(g, 0, 4095); b = constrain(b, 0, 4095);
+  s->set_reg(s, 0x3406, 0xFF, 0x01); // manual gains
+  bool ok = senWrite16(s, 0x3400, r) & senWrite16(s, 0x3402, g) & senWrite16(s, 0x3404, b);
+  if (!ok) LOG_WRN("AWB gains %d/%d/%d did not read back (0x3400 %d, 0x3402 %d, 0x3404 %d)",
+    r, g, b, senReg16(s, 0x3400), senReg16(s, 0x3402), senReg16(s, 0x3404));
+  else LOG_INF("AWB gains manual: R %d, G %d, B %d (1024 = 1.0x)", r, g, b);
+  return ok;
+}
+
+void camAwbAuto() {
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->set_reg == NULL) return;
+  s->set_reg(s, 0x3406, 0xFF, 0x00); // back to the ISP's own gains
+  LOG_INF("AWB gains automatic again (0x3406 = 0)");
+}
+
 // A still request only lands if a frame arrives inside the wait, so the stock 1.2s misses most
 // of them once the frame is seconds long (measured: at QSXGA 7000 six requests 2.45s apart all
 // missed a 2.56s frame). The bench walks the phase instead; here the wait simply follows the
@@ -3275,11 +3302,19 @@ void nightStatus(char* buf, size_t len) {
     minMs = usPerHts * base * AEC_VTS_CEIL / 1000.0f;
     maxMs = usPerHts * NIGHT_HTS_MAX * AEC_VTS_CEIL / 1000.0f;
   }
+  // the live AWB gains and whether they are manual, so the panel's sliders start from what the ISP
+  // actually converged on rather than from a guess
+  int awbR = (s != NULL) ? senReg16(s, 0x3400) : -1;
+  int awbG = (s != NULL) ? senReg16(s, 0x3402) : -1;
+  int awbB = (s != NULL) ? senReg16(s, 0x3404) : -1;
+  int awbMan = (s != NULL) ? camReg(s, 0x3406) : -1;
   snprintf(buf, len,
     "{\"night\":%d,\"size\":\"%s\",\"reqMs\":%d,\"gotMs\":%.0f,\"minMs\":%.0f,\"maxMs\":%.0f,"
-    "\"hts\":%d,\"vts\":%d,\"lineUs\":%.2f,\"maxLines\":%d,\"pixClkMHz\":%.2f,\"vcm\":%d}",
+    "\"hts\":%d,\"vts\":%d,\"lineUs\":%.2f,\"maxLines\":%d,\"pixClkMHz\":%.2f,\"vcm\":%d,"
+    "\"awbR\":%d,\"awbG\":%d,\"awbB\":%d,\"awbManual\":%d}",
     nightFrameMs > 0 ? 1 : 0, frameData[sensorFS].frameSizeStr, nightFrameMs, gotMs, minMs, maxMs,
-    hts, vts, lineUs, AEC_VTS_CEIL - 4, c.valid ? c.pixClk / 1e6f : 0, camFocusCode());
+    hts, vts, lineUs, AEC_VTS_CEIL - 4, c.valid ? c.pixClk / 1e6f : 0, camFocusCode(),
+    awbR & 0x0FFF, awbG & 0x0FFF, awbB & 0x0FFF, awbMan == 1 ? 1 : 0);
 }
 
 // UI_REVIEW C2: the one line the web UI needs to answer "why is it dark" - the exposure the AEC
