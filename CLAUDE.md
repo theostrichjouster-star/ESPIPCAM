@@ -223,6 +223,14 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   panel, and both panels' controls are synced through shared helpers because they write the same
   registers. Two switches that look alike mean different things: **Enable is 0x5001[0]** (does the ISP
   apply gains at all), **Auto WB Gains is 0x3406** (who computes them)
+- **A `<select>` sets the panel's minimum width**, not the other way round: it will not shrink below
+  its widest option, so the framesize row needed 366px inside a 320px panel and `.panel`'s
+  `overflow: hidden` clipped 46px of it in silence while the open list hung outside the panel.
+  `nav.menu.panel` now takes 25 buttonSize units (400px), measured - 24 still ran 8px over - with the
+  narrow-phone block resetting it to 20, where labels stack and the select gets the full width anyway.
+  Check a layout change by reading each row's right edge against the panel's content edge, at a
+  viewport you set deliberately: the Browser pane reports `innerWidth` 0 when it is hidden and the page
+  then renders in the phone layout, which reads as a pass (§38.18)
 - **The Focus section lives in both panels** since §38.17 (Autofocus plus Lens position, under
   Microphone Gain in the camera panel), sending `afAuto` / `afManual` through the same shared helpers,
   lens slider hidden while the AF program owns the lens. Copying it turned up a nesting bug in the

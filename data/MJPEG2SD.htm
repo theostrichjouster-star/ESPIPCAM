@@ -565,6 +565,14 @@
       nav.menu.panel {
         display: none;
         min-height: calc(var(--buttonSize) * 20);
+        /* Wider than the 20 the other menus use, because a <select> will not shrink below its
+           widest option: the resolution list is 176px of text, so the control's intrinsic minimum
+           is 230px, the row came to 366px against a 320px content box, and .panel's overflow:hidden
+           quietly clipped 46px of it - the open list then hung out past the panel edge. Measured,
+           not guessed: at 24 the row still ran 8px past the content box, 25 clears it with ~12px
+           to spare. The narrow-phone layout resets this below, where labels stack and the select
+           already gets the full width */
+        min-width: calc(var(--buttonSize) * 25);
       }
       nav.menu.panel.active {
         display: block;
@@ -915,6 +923,11 @@
 
       /*************** narrow phone layout (<30rem, ~480px) ***************/
       @media (max-width: 30rem) {
+        /* back to the narrow minimum: here the label is on its own line, so the select spans the
+           whole panel and the widest-option problem the wider rule solves cannot arise */
+        nav.menu.panel {
+          min-width: calc(var(--buttonSize) * 20);
+        }
         .input-group {
           flex-wrap: wrap;
         }
