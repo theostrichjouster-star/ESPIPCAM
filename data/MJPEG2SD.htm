@@ -166,11 +166,13 @@
         opacity: 0.85;
       }
 
-      .lowlight-head label {
+      /* section headings in the camera panel (UI_REVIEW D1) */
+      .group-head label {
         font-weight: 600;
         opacity: 0.75;
         border-top: 1px solid var(--itemInactive);
         padding-top: 6px;
+        margin-top: 4px;
         width: 100%;
       }
 
@@ -284,7 +286,7 @@
 
       /* action buttons sat inside a settings row need explicit sizing, as the
          base button rule leaves them shorter than the app's other buttons */
-      #ota-group button {
+      .ota-group button {
         min-height: calc(var(--buttonDbl) * 1.125);
         padding-left: var(--buttonSize);
         padding-right: var(--buttonSize);
@@ -767,7 +769,7 @@
         border-radius: var(--buttonQuart) 0 0 var(--buttonQuart);
         border: 1px solid var(--itemBorder);
       }
-      .menu-pinnded.menu-closed {
+      .menu-pinned.menu-closed {
         border-radius: var(--buttonQuart);
         border: 1px solid var(--itemBorder);
       }
@@ -932,7 +934,7 @@
           width: calc(var(--buttonSize) * 2.75);
           height: calc(var(--buttonSize) * 2.75);
         }
-        #ota-group button {
+        .ota-group button {
           min-height: calc(var(--buttonDbl) * 1.375); /* >=44px touch target at default 16px root */
           width: 100%;
         }
@@ -1110,12 +1112,6 @@
                 <label for="settings-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-sliders"></use></svg>Picture Settings</label>
                 <div class='addButtons'></div>
                 <div>
-                  <div class="input-group" id="xclk-group">
-                      <label for="xclkMhz">Clock MHz</label>
-                      <div class="text">
-                          <input id="xclkMhz" title="Set camera clock speed in MHz" type="number" minlength="1" maxlength="2" size="2" value="20">
-                      </div>
-                  </div>
                   <!-- UI_REVIEW C2: what the automatics actually chose. The exposure and gain answer every
                        "why is it dark", and the sensor quality diverges from the config after the no-frame
                        rescue steps it - until now nothing on the page showed that. Filled by the status poll
@@ -1124,6 +1120,7 @@
                     <label for="camLive">Camera now</label>
                     <div id="camLive" class="displayonly camlive">reading...</div>
                   </div>
+                  <div class="input-group group-head"><label>Picture</label></div>
                   <div class="input-group" id="brightness-group">
                     <label for="brightness">Brightness</label>
                     <input type="range" id="brightness" min="-2" max="2" value="0">
@@ -1136,7 +1133,6 @@
                     <label for="saturation">Saturation</label>
                     <input type="range" id="saturation" min="-2" max="2" value="0">
                   </div>
-                  <div class="OV3660 OV5640 hidden">
                     <div class="input-group" id="sharpness-group">
                       <label for="sharpness">Sharpness</label>
                       <input type="range" id="sharpness" min="-3" max="3" value="0">
@@ -1146,7 +1142,6 @@
                       <div name="rangeMin">Auto</div>
                       <input type="range" id="denoise" min="0" max="8" value="0">
                     </div>
-                  </div>
                   <div class="input-group" id="special_effect-group">
                     <label for="special_effect">Special Effect</label>
                     <select id="special_effect" class="selectField">
@@ -1159,92 +1154,11 @@
                       <option value="6">Sepia</option>
                     </select>
                   </div>
-                  <div class="input-group" id="wb_mode-group">
-                    <label for="wb_mode">AWB Mode</label>
-                    <select id="wb_mode" class="selectField">
-                      <option value="0" selected="selected">Auto</option>
-                      <option value="1">Sunny</option>
-                      <option value="2">Cloudy</option>
-                      <option value="3">Office</option>
-                      <option value="4">Home</option>
-                    </select>
-                  </div>
-                    <div class="input-group" id="dcw-group">
-                      <label for="dcw" id="dcw_lab">DCW (Downsize)</label>
-                      <div class="switch">
-                        <input id="dcw" type="checkbox" checked="checked">
-                        <label class="slider" for="dcw"></label>
-                      </div>
-                    </div>
-                  <div class="input-group" id="aec_value-group">
-                    <label for="aec_value"id="aec_value_lab">Manual Exposure</label>
-                    <input type="range" id="aec_value" min="0" max="1200" value="204">
-                  </div>
-                  <div class="input-group hidden" id="agc_gain-group">
-                    <label for="agc_gain" id="agc_gain_lab">Gain</label>
-                    <div name="rangeMin">1x</div>
-                    <input type="range" id="agc_gain" min="0" max="30" value="5">
-                    <div name="rangeMax">31x</div>
-                  </div>
-                  <div class="input-group" id="hmirror-group">
-                    <label for="hmirror">H-Mirror</label>
-                    <div class="switch">
-                      <input id="hmirror" type="checkbox" checked="checked">
-                      <label class="slider" for="hmirror"></label>
-                    </div>
-                  </div>
-                  <div class="input-group" id="vflip-group">
-                    <label for="vflip">V-Flip</label>
-                    <div class="switch">
-                      <input id="vflip" type="checkbox" checked="checked">
-                      <label class="slider" for="vflip"></label>
-                    </div>
-                  </div>
-                  <div class="ALLOV hidden">
-                    <div class="input-group" id="awb-group">
-                        <label for="awb">AWB Enable</label>
-                        <div class="switch">
-                            <input id="awb" type="checkbox" checked="checked">
-                            <label class="slider" for="awb"></label>
-                        </div>
-                    </div>
-                    <div class="input-group" id="awb_gain-group">
-                      <label for="awb_gain" id="awbg_lab">AWB Gain</label>
-                      <div class="switch">
-                        <input id="awb_gain" type="checkbox" checked="checked">
-                        <label class="slider" for="awb_gain"></label>
-                      </div>
-                    </div>
-                    <div class="input-group" id="aec-group">
-                      <label for="aec">AEC Enable</label>
-                      <div class="switch">
-                        <input id="aec" type="checkbox" checked="checked">
-                        <label class="slider" for="aec"></label>
-                      </div>
-                    </div>
-                    <div class="input-group" id="ae_level-group">
-                      <label for="ae_level">Exposure Level</label>
-                      <input type="range" id="ae_level" min="-2" max="2" value="0">
-                    </div>
-                    <div class="input-group" id="agc-group">
-                      <label for="agc">AGC Enable</label>
-                      <div class="switch">
-                        <input id="agc" type="checkbox" checked="checked">
-                        <label class="slider" for="agc"></label>
-                      </div>
-                    </div>
                     <div class="input-group" id="lenc-group">
                       <label for="lenc">Lens Correction</label>
                       <div class="switch">
                         <input id="lenc" type="checkbox" checked="checked">
                         <label class="slider" for="lenc"></label>
-                      </div>
-                    </div>
-                    <div class="input-group" id="colorbar-group">
-                      <label for="colorbar">Color Bar</label>
-                      <div class="switch">
-                        <input id="colorbar" type="checkbox">
-                        <label class="slider" for="colorbar"></label>
                       </div>
                     </div>
                     <div class="input-group" id="bpc-group">
@@ -1268,11 +1182,68 @@
                         <label class="slider" for="raw_gma"></label>
                       </div>
                     </div>
-                    <!-- UI_REVIEW C5: these three only act when the AEC is near its ceiling. Measured in a lit
-                         room at HD 30: gain ceiling 0, 511 and 1023 all gave luma 105.7 and gain 2.5x, and night
-                         switch 0, 10 and 100 did nothing at all - so they are grouped and labelled as low light
-                         rather than left among the picture controls, where they look broken by daylight. -->
-                    <div class="input-group lowlight-head"><label>Low light</label></div>
+                  <div class="input-group group-head"><label>Exposure</label></div>
+                    <div class="input-group" id="aec-group">
+                      <label for="aec">AEC Enable</label>
+                      <div class="switch">
+                        <input id="aec" type="checkbox" checked="checked">
+                        <label class="slider" for="aec"></label>
+                      </div>
+                    </div>
+                    <div class="input-group" id="ae_level-group">
+                      <label for="ae_level">Exposure Level</label>
+                      <input type="range" id="ae_level" min="-2" max="2" value="0">
+                    </div>
+                  <div class="input-group" id="aec_value-group">
+                    <label for="aec_value"id="aec_value_lab">Manual Exposure</label>
+                    <input type="range" id="aec_value" min="0" max="1200" value="204">
+                  </div>
+                    <div class="input-group" id="agc-group">
+                      <label for="agc">AGC Enable</label>
+                      <div class="switch">
+                        <input id="agc" type="checkbox" checked="checked">
+                        <label class="slider" for="agc"></label>
+                      </div>
+                    </div>
+                  <div class="input-group hidden" id="agc_gain-group">
+                    <label for="agc_gain" id="agc_gain_lab">Gain</label>
+                    <div name="rangeMin">1x</div>
+                    <input type="range" id="agc_gain" min="0" max="30" value="5">
+                    <div name="rangeMax">31x</div>
+                  </div>
+                  <div class="input-group group-head"><label>Colour</label></div>
+                    <div class="input-group" id="awb-group">
+                        <label for="awb">AWB Enable</label>
+                        <div class="switch">
+                            <input id="awb" type="checkbox" checked="checked">
+                            <label class="slider" for="awb"></label>
+                        </div>
+                    </div>
+                    <div class="input-group" id="awb_gain-group">
+                      <label for="awb_gain" id="awbg_lab">AWB Gain</label>
+                      <div class="switch">
+                        <input id="awb_gain" type="checkbox" checked="checked">
+                        <label class="slider" for="awb_gain"></label>
+                      </div>
+                    </div>
+                  <div class="input-group" id="wb_mode-group">
+                    <label for="wb_mode">AWB Mode</label>
+                    <select id="wb_mode" class="selectField">
+                      <option value="0" selected="selected">Auto</option>
+                      <option value="1">Sunny</option>
+                      <option value="2">Cloudy</option>
+                      <option value="3">Office</option>
+                      <option value="4">Home</option>
+                    </select>
+                  </div>
+                    <div class="input-group" id="dcw-group">
+                      <label for="dcw" id="dcw_lab">DCW (Downsize)</label>
+                      <div class="switch">
+                        <input id="dcw" type="checkbox" checked="checked">
+                        <label class="slider" for="dcw"></label>
+                      </div>
+                    </div>
+                  <div class="input-group group-head"><label>Low light</label></div>
                   <div class="input-group" id="aec2-group">
                     <label for="aec2" id="aec2_lab">AEC DSP</label>
                     <div class="switch">
@@ -1290,6 +1261,38 @@
                     <label for="lswitch">Night Switch</label>
                     <input title="Set night switch sensitivity" type="range" id="lswitch" min="0" max="100" value="10">
                   </div>
+                  <div class="input-group group-head"><label>Geometry</label></div>
+                  <div class="input-group" id="hmirror-group">
+                    <label for="hmirror">H-Mirror</label>
+                    <div class="switch">
+                      <input id="hmirror" type="checkbox" checked="checked">
+                      <label class="slider" for="hmirror"></label>
+                    </div>
+                  </div>
+                  <div class="input-group" id="vflip-group">
+                    <label for="vflip">V-Flip</label>
+                    <div class="switch">
+                      <input id="vflip" type="checkbox" checked="checked">
+                      <label class="slider" for="vflip"></label>
+                    </div>
+                  </div>
+                  <div class="input-group group-head"><label>Diagnostics</label></div>
+                    <div class="input-group" id="colorbar-group">
+                      <label for="colorbar">Color Bar</label>
+                      <div class="switch">
+                        <input id="colorbar" type="checkbox">
+                        <label class="slider" for="colorbar"></label>
+                      </div>
+                    </div>
+                  <div class="input-group" id="xclk-group">
+                      <label for="xclkMhz">Clock MHz</label>
+                      <div class="text">
+                          <input id="xclkMhz" title="Set camera clock speed in MHz" type="number" minlength="1" maxlength="2" size="2" value="20">
+                      </div>
+                  </div>
+                  <div class="OV3660 OV5640 hidden">
+                  </div>
+                  <div class="ALLOV hidden">
                   </div>
                 </div>
                 <br><br>
@@ -1366,7 +1369,7 @@
                     <button class="local" title="Delete selected file/folder from SD card" id="delete" style="float:right" value="1">Delete</button>
                   </section>
   <!--
-                  <div class="input-group" id="auth-group">
+                  <div class="input-group auth-group">
                     <label for="useFtps">Use FTPS</label>
                     <div class="switch">
                       <input id="useFtps" type="checkbox">
@@ -1398,15 +1401,15 @@
                 <div class='addButtons'></div>
                 <div>
                   <div class="subheader">Network settings</div>
-                  <div class="input-group" id="wifi-group" style="margin-top:0">
+                  <div class="input-group wifi-group" style="margin-top:0">
                     <label for="hostName">Host Name</label>
                     <input id="hostName" name="hostName" maxlength=32 placeholder="Host name">
                   </div>
-                  <div class="input-group wifi-only" id="wifi-group">
+                  <div class="input-group wifi-only wifi-group">
                     <label for="ST_SSID">SSID</label>
                     <input id="ST_SSID" name="ST_SSID" maxlength=32 placeholder="Router SSID">
                   </div>
-                  <div class="input-group wifi-only" id="wifi-group">
+                  <div class="input-group wifi-only wifi-group">
                     <label for="ST_Pass">Password</label>
                     <input id="ST_Pass" name="ST_Pass" maxlength=64 placeholder="Router password">
                   </div>
@@ -1416,17 +1419,17 @@
                   </div>
                   <br>
                   <div class="subheader">Clock settings</div>
-                  <div class="input-group" id="time-group">
+                  <div class="input-group time-group">
                     <label for="timezone">Time Zone</label>
                     <input id="timezone" name="timezone" maxlength=64 placeholder="Time zone string">
                   </div>
-                  <div class="input-group" id="time-group">
+                  <div class="input-group time-group">
                     <label for="regionSel">Select Region</label>
                     <select id="regionSel" name="regionSel" class="selectField local">
                       <option value="" selected>Loading...</option>
                     </select>
                   </div>
-                  <div class="input-group" id="time-group">
+                  <div class="input-group time-group">
                     <label for="timezoneSel">Select Location</label>
                     <select id="timezoneSel" name="timezoneSel" class="selectField">
                       <option value="" selected>Loading...</option>
@@ -1434,27 +1437,27 @@
                   </div>
                   <br>
                   <div class="subheader" id="ftp-subheader">FTP / HTTPS settings</div>
-                  <div class="input-group" id="ftp-group">
+                  <div class="input-group ftp-group">
                     <label for="fsServer">File Server</label>
                     <input id="fsServer" name="fsServer" maxlength=32 placeholder="File server name">
                   </div>
-                  <div class="input-group" id="ftp-group">
+                  <div class="input-group ftp-group">
                     <label for="fsPort">FS port</label>
                     <input id="fsPort" name="fsPport" maxlength=6 placeholder="File server port">
                   </div>
-                  <div class="input-group" id="ftp-group">
+                  <div class="input-group ftp-group">
                     <label for="ftpUser">FTP user name</label>
                     <input id="ftpUser" name="ftpUser" maxlength=32 placeholder="FTP user name">
                   </div>
-                  <div class="input-group" id="ftp-group">
+                  <div class="input-group ftp-group">
                     <label for="FS_Pass">FS password</label>
                     <input id="FS_Pass" name="FS_Pass" maxlength=32 placeholder="File server password">
                   </div>
-                  <div class="input-group" id="ftp-group">
+                  <div class="input-group ftp-group">
                     <label for="fsWd">FS root dir</label>
                     <input id="fsWd" name="fsWd" maxlength=64 placeholder="Working directory path">
                   </div>
-                  <div class="input-group" id="ftp-group">
+                  <div class="input-group ftp-group">
                     <label for="fsUse">Upload method:</label>FTP&nbsp;
                     <div class="switch">
                       <input id="fsUse" type="checkbox">
@@ -1463,44 +1466,44 @@
                   </div>
                   <br>
                   <div class="subheader" id="smtp-subheader">SMTP settings</div>
-                  <div class="input-group" id="smtp-group">
+                  <div class="input-group smtp-group">
                     <label for="smtp_server">SMTP server</label>
                     <input id="smtp_server" name="smtp_server" maxlength=32 placeholder="smtp server name">
                   </div>
-                  <div class="input-group" id="smtp-group">
+                  <div class="input-group smtp-group">
                     <label for="smtp_port">SMTP port</label>
                     <input id="smtp_port" name="smtp_port" maxlength=6 placeholder="smtp port">
                   </div>
-                  <div class="input-group" id="smtp-group">
+                  <div class="input-group smtp-group">
                     <label for="smtp_login">SMTP login</label>
                     <input id="smtp_login" name="smtp_login" maxlength=32 placeholder="smtp login email">
                   </div>
-                  <div class="input-group" id="smtp-group">
+                  <div class="input-group smtp-group">
                     <label for="SMTP_Pass">SMTP password</label>
                     <input id="SMTP_Pass" name="SMTP_Pass" maxlength=32 placeholder="smtp password">
                   </div>
-                  <div class="input-group" id="smtp-group">
+                  <div class="input-group smtp-group">
                     <label for="smtp_email">SMTP email</label>
                     <input id="smtp_email" name="smtp_email" maxlength=64 placeholder="smtp email to">
                   </div>
                   <br>
                   <div class="subheader">Authentication settings</div>
-                  <div class="input-group" id="auth-group">
+                  <div class="input-group auth-group">
                       <label for="Auth_Name">Web login</label>
                       <input id="Auth_Name" name="Auth_Name" maxlength=32 placeholder="Authentication user name">
                   </div>
-                  <div class="input-group" id="auth-group">
+                  <div class="input-group auth-group">
                       <label for="Auth_Pass">Web password</label>
                       <input id="Auth_Pass" name="Auth_Pass" maxlength=32 placeholder="Authentication password">
                   </div>
-                  <div class="input-group" id="auth-group">
+                  <div class="input-group auth-group">
                     <label for="useHttps">Use HTTPS</label>
                     <div class="switch">
                       <input id="useHttps" type="checkbox">
                       <label title="Use HTTPS to access app" class="slider" for="useHttps"></label>
                     </div>
                   </div>
-                  <div class="input-group" id="auth-group">
+                  <div class="input-group auth-group">
                     <label for="useSecure">Check Certs</label>
                     <div class="switch">
                       <input id="useSecure" type="checkbox">
@@ -1509,14 +1512,14 @@
                   </div>
                   <br>
                   <div class="subheader">Firmware update</div>
-                  <div class="input-group" id="ota-group">
+                  <div class="input-group ota-group">
                     <label for="otaStatus">Status</label>
                     <div id="otaStatus" class="info displayonly">&nbsp;</div>
                   </div>
-                  <div class="input-group" id="ota-group">
+                  <div class="input-group ota-group">
                     <button id="checkUpdate" class="local" value="1" title="Ask GitHub whether a newer release has been published">Check for Updates</button>
                   </div>
-                  <div class="input-group" id="ota-group">
+                  <div class="input-group ota-group">
                     <button id="doUpdate" class="local disabled" value="1" disabled title="Run a check first">Install Update &amp; Restart</button>
                   </div>
                 </div>
@@ -1610,20 +1613,20 @@
           </div>
           </fieldset>
         </div>
-        <div class="input-group" id="dbg-group" style="text-align: left">
+        <div class="input-group dbg-group" style="text-align: left">
           <label for="dbgVerbose" class="header" title="Set verbose logging">Verbose:</label>
         </div>
-        <div class="input-group" id="dbg-group" style="text-align: right">
+        <div class="input-group dbg-group" style="text-align: right">
           <div class="switch">
             <input id="dbgVerbose" type="checkbox">
             <label title="Outputs additional information to log" class="slider" for="dbgVerbose"></label>
           </div>
         </div>
         <br>
-        <div class="input-group" id="dbg-group" style="text-align: left">
+        <div class="input-group dbg-group" style="text-align: left">
           <label for="sdLog" class="header" title="Enable logging to sd card">Log to SD:</label>
         </div>
-        <div class="input-group" id="dbg-group" style="text-align: right">
+        <div class="input-group dbg-group" style="text-align: right">
           <div class="switch">
             <input id="sdLog" type="checkbox">
             <label title="Outputs log to SD card" class="slider" for="sdLog"></label>
@@ -1780,7 +1783,10 @@
           const hideIds = [];
           if (absent.includes('fs')) hideIds.push('ftp-subheader', 'ftp-group', 'autoUpload-group', 'deleteAfter-group');
           if (absent.includes('smtp')) hideIds.push('smtp-subheader', 'smtp-group');
-          hideIds.forEach(id => document.querySelectorAll('div[id="' + id + '"]')
+          // the repeating section markers are CLASSES since UI_REVIEW D2 - duplicate ids were what
+          // this querySelectorAll was working around. The -subheader ids are still unique, so match
+          // either form: miss this and the built-out sections silently reappear
+          hideIds.forEach(sel => document.querySelectorAll('.' + sel + ', div[id="' + sel + '"]')
             .forEach(el => { el.style.display = 'none'; }));
         } catch (e) {} // no builtOut info (older firmware, or setup mode) - show everything
       }
@@ -1932,6 +1938,12 @@
             // and the AWB switch itself is not a hold: off means the ISP stops applying the gains
             $('#awb').title = "Off is RAW colour, not a freeze: the gains keep their converged values "
               + "but the ISP stops applying them, and the picture goes green (chart R/G 0.46).";
+            // UI_REVIEW D3: the clock is not a picture control. It now sits under Diagnostics, and
+            // says what it is - the tuner's whole PLL tree is derived from this, so a wrong value
+            // here is not a brightness problem, it is every timing on the sensor
+            $('#xclkMhz').title = "Sensor input clock. The tuner derives the whole PLL tree, HTS/VTS "
+              + "and every exposure limit from it - change it only deliberately, and re-check the "
+              + "frame rate afterwards.";
             // change range slider parameters
             changeRange('brightness', "-3", "3", "0");
             changeRange('contrast', "-3", "3", "0");

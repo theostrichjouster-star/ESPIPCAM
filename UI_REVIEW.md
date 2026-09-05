@@ -16,8 +16,8 @@ Each item is a proposal with its evidence, for the user to pick from. Numbering 
 within each group. After any UI change, `DRY=1` on the regression is the smoke test and the full run
 is the gate.
 
-**Status, 5 Sep 2026: A1-A4, B1-B3 and C1-C5 are done and deployed to both boards; D is not started,
-on the user's instruction to pause before it.** Of the B items only **B3 was a real defect** - B1 and
+**Status, 5 Sep 2026: every item in this document is done and deployed to both boards - A1-A4,
+B1-B3, C1-C5 and D1-D3.** Of the B items only **B3 was a real defect** - B1 and
 B2 are retracted, because I had read the static markup, which carries the OV2640 ranges, where the
 page re-ranges every slider for the detected sensor on load. Part of C3 falls to the same error. Both
 retractions are written up in place rather than deleted, and the measurements behind them survive as
@@ -66,9 +66,9 @@ panels are not treated as inert, and normal controls still send.
 | C3 | DONE - moved beside AWB Mode, sense explained | layout | label was already right; the switch read as a feature |
 | C4 | DONE - gated, and now reported in /status | layout | firmware refused it; the state was unreadable |
 | C5 | DONE - one Low light group | layout | three controls do nothing by daylight |
-| D1 | Regroup the camera panel | layout | current order mixes picture, exposure and diagnostics |
-| D2 | Clean the duplicate ids and the class typo | hygiene | found by reading, cheap to fix |
-| D3 | Move `xclkMhz` out of the picture controls | safety | a clock control beside brightness |
+| D1 | DONE - six sections with headings | layout | the order mixed picture, exposure and diagnostics |
+| D2 | DONE - typo fixed, repeated markers are classes | hygiene | `save`/`reset` keep their ids by design |
+| D3 | DONE - under Diagnostics, with a warning | safety | it was sitting beside brightness |
 
 ---
 
@@ -350,3 +350,39 @@ at all - which is why that gate could never pass in the regression.
 **C5** - Night Mode, Gain Ceiling and Night Switch are one **Low light** group at the end of the
 camera panel, with a heading. Night Switch came across from the motion panel. All three measured
 inert in a lit room, which is what made them look broken.
+
+
+---
+
+## D1-D3 as built (5 Sep 2026)
+
+**D1** - the camera panel is six sections with headings, in the order a user reaches for them:
+Picture (brightness, contrast, saturation, sharpness, de-noise, special effect, lens correction,
+BPC, WPC, GMA), Exposure (AEC, exposure level, manual exposure, AGC, gain), Colour (AWB, manual
+AWB, AWB mode, algorithm), Low light (night mode, gain ceiling, night switch), Geometry (mirror,
+flip), Diagnostics (colour bar, clock). The live readout sits above them all. Every group was
+lifted whole and re-emitted, and the script asserted that all 27 survive exactly once.
+
+**D2** - the `.menu-pinnded` typo is fixed, and the seven repeating section markers (`ftp-group`,
+`smtp-group`, `auth-group`, `wifi-group`, `time-group`, `ota-group`, `dbg-group`) are **classes**
+now instead of ids repeated up to six times. That is what they always were in spirit:
+`hideBuiltOut` had to reach them with `querySelectorAll('div[id=...]')` precisely because
+`getElementById` returns one, and CSS `#id` rules matched every copy anyway.
+
+**`save` and `reset` keep their duplicate ids deliberately.** Each appears twice, once per settings
+panel, and on this page the id **is** the control name that gets sent - renaming either would
+break the button. Both copies carry the same classes, so the `$('#id')` lookup in the send path
+behaves identically whichever it finds. Worth knowing: the *running* page has more duplicates than
+the file does, because the config tables generate their own Save buttons; that is generated
+markup, not markup to clean.
+
+**D3** - the clock control moved from the top of the picture controls into Diagnostics, and its
+tooltip says what it actually drives: the tuner derives the whole PLL tree, the line and frame
+timing and every exposure limit from it.
+
+**One regression, caught before it shipped.** Turning those markers into classes broke
+`hideBuiltOut`, whose id-based selector then matched nothing, so sections for compiled-out modules
+silently reappeared. The stub caught it (the FTP and SMTP groups stayed visible with `builtOut`
+saying they were absent), the selector now matches either form, and it is verified on COM4, whose
+build has five modules compiled out: every FTP and SMTP group reads `display: none`, the auth
+groups stay visible.
