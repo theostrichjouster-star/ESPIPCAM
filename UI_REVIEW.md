@@ -453,5 +453,18 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
   because a closing tag was missing. It rendered acceptably, which is why three stub passes and a
   deployment missed it; the fix is verified by reading each row's parent id out of the DOM.
 
+- **The page has a phone layout** (§38.19, page only). Below 48rem it is a column of cards - app
+  header, Device Controls, a live viewfinder card, Camera Tools, System Status - and the settings
+  panels open as full-screen sheets that the phone's Back gesture closes. Same DOM, one media query:
+  `updateStatus()` matches a status key to the element whose id equals it, so a value can exist only
+  once and a second page would have meant maintaining every control twice. Everything is built to 48px
+  touch targets, and the sizes were scripted rather than eyeballed because the failures - a 16px slider
+  thumb, a 16px switch knob, 21.6px inputs, 14.4px text that makes iOS zoom on focus - all look fine in
+  a screenshot. Three faults it turned up that predate it: a page that overflows can report no overflow
+  at all (the browser widens the layout viewport to fit, so nothing's right edge is past `innerWidth`),
+  six of the seven tool icons could not be reached from a keyboard, and a disabled Start Playback lost
+  its guard as soon as it left the toolbar. The phone drops the OV5640 tab, Show Log, OTA Upload and
+  Start Playback by the user's choice; playback lives in the Gallery sheet.
+
 Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
 comparison from C3 is still outstanding.

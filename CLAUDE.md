@@ -231,6 +231,22 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   Check a layout change by reading each row's right edge against the panel's content edge, at a
   viewport you set deliberately: the Browser pane reports `innerWidth` 0 when it is hidden and the page
   then renders in the phone layout, which reads as a pass (§38.18)
+- **A page that overflows on a phone can report NO overflow**: the browser widens the layout viewport
+  to fit, so every right edge then sits inside `innerWidth` and an element scan comes back clean. The
+  test is `document.documentElement.scrollWidth == innerWidth` AND `innerWidth == the width you set`.
+  Two silent causes found this way (§38.19): `.cfgTitle`'s `grid-column: 1/5` creating three implicit
+  columns in a one-column grid (Edit Config laid out 524px on a 375px phone), and `section#footer`'s
+  desktop `min-width: 20 units` stretching its flex ancestors (332px on a 320px phone)
+- **The `max-width: 30rem` block sits AFTER the phone card block**, so a bare declaration there wins at
+  equal specificity: its old `.quick-nav { width: 44px }` made the tool tiles compute 44px inside 75px
+  grid columns. Same class of fault, same day: `.tabcontent button` also matches every tile on the main
+  page, because `#mainPage` carries that class
+- **Only `#camera-control` is inside `#menu-top`**; the other five panels are direct children of
+  `#menu-container`, so `#menu-top.menu-pinned nav.menu.panel` has only ever styled the camera one.
+  Anything meant for all six targets `nav.menu.panel` (the phone sheet is `nav.menu.panel.active`)
+- **`--smallThumbSize` / `--bigThumbSize` are read ONCE at load** by `common.js:58` through
+  `getComputedStyle(:root)`, so redefining them inside a media query does reach the JS that places the
+  range value bubble - but only at load, and they must stay plain lengths, never `calc`
 - **The Focus section lives in both panels** since §38.17 (Autofocus plus Lens position, under
   Microphone Gain in the camera panel), sending `afAuto` / `afManual` through the same shared helpers,
   lens slider hidden while the AF program owns the lens. Copying it turned up a nesting bug in the
@@ -353,6 +369,16 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   sensor-branch rule above). After any UI change, `DRY=1` on `ui_regress.sh` is the smoke test and
   the full run is the gate. Still owed: the dark-room AWB comparison, the `colorbar` firmware half
   (never persist, clear at boot), the `wb_mode` firmware gate, and the open-file leak audit
+- **Phone layout** (§38.19, 5 Sep 2026, page only): below `48rem` the page is a column of cards - app
+  header, Device Controls, a live "viewfinder" card, Camera Tools, System Status - driven from ONE
+  `@media (max-width: 48rem)` block on the same DOM, because `updateStatus()` matches a status key to
+  the element whose id equals it and a value can therefore exist only once. Settings panels become
+  full-screen sheets (`nav.menu.panel.active`, with `body.sheet-open` as the switch), the phone's Back
+  gesture closes them through a pushed history entry, and Start Playback is MOVED into the Gallery
+  sheet at runtime, never cloned. A phone does not get the OV5640 tab, Show Log, OTA Upload or Start
+  Playback (the user's choice), so the app header is the way home. Everything is built to 48px touch
+  targets - verify by scripting each element's box at 375px, not by looking. The desktop layout is
+  unchanged apart from the body font stack and real icons where `➤` / `▢` used to be
 - `tools/core/README.md` - custom arduino-esp32 core: why, how to build, the four
   version pins, the sdkconfig gate, and candidate future config changes (committed)
 - `tools/bench/README.md` - how to run the sweep campaigns and the rules they enforce

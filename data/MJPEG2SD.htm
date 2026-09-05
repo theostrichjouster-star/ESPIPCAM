@@ -7,7 +7,10 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <!-- viewport-fit=cover so env(safe-area-inset-*) returns real values on a notched phone: the
+         mobile settings sheet is position:fixed and would otherwise run under the status bar and
+         the gesture area. No effect on a desktop browser, where every inset is 0 -->
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
     <title>ESP32-CAM_MJPEG2SD</title>
     <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="%232E86A6"/><path d="M4 8.5h2.7L8.2 6h7.6l1.5 2.5H20a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z" fill="none" stroke="%23F4F6F8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.3" fill="none" stroke="%23F4F6F8" stroke-width="1.75"/></svg>'>
 
@@ -29,6 +32,21 @@
         --alertMsg: #E8A33D;
         --itemBorder: #333D47;
         --pageBackground: #12161C; /* cool charcoal-blue, near-black */
+
+        /* card surfaces, added for the mobile layout. One step up from the page ground so a card
+           reads as a surface without a shadow, and a border light enough to survive on a phone
+           screen outdoors. Measured against --pageText: 13.9:1, well past the 4.5:1 text rule */
+        --cardBackground: #1A1F27;
+        --cardBorder: #2A323C;
+        --focusRing: #5AA9E6;      /* never remove an outline, replace it - see .focusable below */
+
+        /* Two local stacks, no webfont link. The board sits on a LAN and is often offline, so a
+           fonts.googleapis.com <link> would stall first paint for a DNS timeout. --fontMono is for
+           MEASURED VALUES only (status card, viewfinder rail, log): tabular figures stop the
+           numbers dancing on every 5 s poll. Replaces "Helvetica !important", which no Android
+           device has and which therefore landed wherever the device chose */
+        --fontUI: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --fontMono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Roboto Mono", monospace;
 
         /* logcolors */
         --warnColor: #E8A33D;
@@ -75,10 +93,24 @@
       }
 
       body {
-        font-family: Helvetica  !important;
+        font-family: var(--fontUI);
         background: var(--pageBackground);
         color: var(--pageText);
         font-size: var(--bodySize);
+      }
+
+      /* every measured value on the page - status card, viewfinder rail, camera readouts */
+      .measure {
+        font-family: var(--fontMono);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* one focus treatment for the whole page. The browser default is removed by several rules
+         below (input[type=button]:focus, .buttonRect:focus), so this puts a visible one back */
+      a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+      [tabindex]:focus-visible, .quick-nav:focus-visible {
+        outline: 2px solid var(--focusRing);
+        outline-offset: 2px;
       }
 
       .hidden {
@@ -143,7 +175,11 @@
         background: var(--buttonHover);
       }
 
-      .tab button.disabled, input.disabled {
+      /* was scoped to .tab, which is where the toolbar lives - but Start Playback moves into the
+         Gallery sheet on a phone and took its "no file selected yet" guard with it, so a disabled
+         button outside the toolbar looked and behaved enabled. The class means the same thing
+         wherever the button sits */
+      button.disabled, input.disabled {
         cursor: default;
         pointer-events: none;
         background: var(--itemInactive)
@@ -921,6 +957,673 @@
         flex-shrink: 0;
       }
 
+      /* ============ pieces shared with the phone card layout ============
+         Everything here is inert on a desktop: .mobileOnly has no display until the card block
+         gives it one, tile icons are hidden, and tile labels are simply the buttons' own text. */
+      .mobileOnly {
+        display: none;
+      }
+
+      /* A tap that lands on a tile's icon or its label still has to reach the tile. The click
+         dispatch in common.js reads event.target and a SPAN matches none of its branches, so a
+         label would swallow the tap - the same reason svg.icon is already pointer-transparent. */
+      .tile-icon, .tile-label {
+        pointer-events: none;
+      }
+
+      .tile-icon {
+        display: none; /* desktop keeps text-only buttons */
+        width: calc(var(--buttonSize) * 1.5);
+        height: calc(var(--buttonSize) * 1.5);
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.75;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      /* the desktop sidebar is icon-only; the labels are for the phone's tool tiles */
+      .quick-nav .tile-label {
+        display: none;
+      }
+
+      /* The transport buttons used to carry ➤ and ▢ text characters as icons, which render
+         differently on every platform and are not icons. Their real icons take that place on the
+         desktop toolbar too, inline and text-sized, so nothing is lost there. */
+      nav#maintoolbar .tile-icon {
+        display: inline-block;
+        width: 1.1em;
+        height: 1.1em;
+        vertical-align: -0.2em;
+        margin-right: var(--buttonQuart);
+      }
+
+      /*************** phone card layout (<48rem, 768px) ***************
+         One scrolling column of cards. Every selector here matches or beats the specificity of the
+         desktop rule it replaces (several of those are id+class, e.g. #menu-top.menu-pinned), which
+         is why the menu rules below are written through #menu-container. A phone in landscape is
+         wider than 768px and keeps the desktop layout, which needs 415px and fits. */
+      @media (max-width: 48rem) {
+        :root {
+          /* common.js:58 reads these once at load through getComputedStyle on :root, and a media
+             query applies to :root too - so a phone picks up the touch sizes automatically and the
+             range value bubble stays aligned to the fatter thumb. They must stay plain lengths, not
+             calc. Crossing the breakpoint after load (rotating) leaves the bubble stale until a
+             reload, which is the price of reading them once. */
+          --smallThumbSize: 1.75rem;
+          --markerSize: 1.15rem;
+        }
+
+        body {
+          margin: 0;
+          padding: 0 0.75rem calc(1.5rem + env(safe-area-inset-bottom));
+          -webkit-tap-highlight-color: rgba(63, 182, 138, 0.25);
+        }
+
+        .mobileOnly {
+          display: block;
+        }
+
+        .noMobile {
+          display: none !important;
+        }
+
+        /* --- the card shell --- */
+        .tab, #liveCard, #menu-container, section#footer {
+          box-sizing: border-box;
+          width: 100%;
+          background: var(--cardBackground);
+          border: 1px solid var(--cardBorder);
+          border-radius: 0.75rem;
+          padding: 0.75rem;
+          margin: 0.75rem 0 0 0;
+        }
+
+        .card-head {
+          display: flex;
+          align-items: center;
+          gap: var(--buttonHalf);
+          margin: 0 0 0.75rem 0;
+          font-size: var(--bodySize);
+          font-weight: 600;
+          color: var(--pageText);
+        }
+        .card-head .icon-inline {
+          color: var(--buttonReady);
+          width: 1.25em;
+          height: 1.25em;
+        }
+
+        /* --- app header --- */
+        #appbar {
+          display: flex;
+          align-items: center;
+          gap: var(--buttonHalf);
+          padding: calc(env(safe-area-inset-top) + 0.75rem) 0 0.25rem 0;
+        }
+        #appHome {
+          flex: 0 0 auto;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 3rem;
+          height: 3rem;
+          margin: 0;
+          padding: 0;
+          border-radius: 0.75rem;
+          background: var(--buttonReady);
+          touch-action: manipulation;
+        }
+        #appHome .icon {
+          width: 55%;
+          height: 55%;
+        }
+        #appIdent {
+          flex: 1 1 auto;
+          min-width: 0;
+        }
+        #appTitle {
+          font-size: calc(var(--bodySize) * 1.35);
+          font-weight: 700;
+          line-height: 1.2;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        #appSubtitle {
+          font-size: calc(var(--bodySize) * 0.8);
+          color: var(--muted, #97A2AE);
+          line-height: 1.3;
+        }
+        #appLink {
+          flex: 0 0 auto;
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          font-size: calc(var(--bodySize) * 0.8);
+        }
+        #appLink .icon-inline {
+          color: var(--buttonReady);
+          margin-right: 0;
+        }
+        #appLinkDot {
+          width: 0.55rem;
+          height: 0.55rem;
+          border-radius: 50%;
+          background: var(--itemInactive);
+        }
+        #appLink.online #appLinkDot {
+          background: var(--buttonActive);
+        }
+
+        /* --- tiles: device controls and camera tools share one shape --- */
+        /* The four tiles come from two different lists - the tab row and the toolbar - so the grid
+           is declared on .tab and every wrapper between it and the buttons is display:contents.
+           That flattens ul / section#main / nav#maintoolbar / li out of the box tree and lets the
+           buttons themselves be the grid items, which is the only way to get one even row of four
+           without moving markup that the desktop layout depends on. */
+        .tab {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: var(--buttonHalf);
+          overflow: visible;
+        }
+        .tab > .card-head {
+          grid-column: 1 / -1;
+        }
+        .tab > .navtop, .tab > section#main, nav#maintoolbar, nav#maintoolbar > .navtop,
+        .tab .navtop > li {
+          display: contents;
+        }
+        /* the empty separators, and the recording indicator whose job the viewfinder LIVE dot
+           does on a phone. Distinct classes, not :has() - the playback button finds its desktop
+           home by li.noMobile and a shared class would make that lookup ambiguous */
+        .sep-item, .ind-item {
+          display: none !important;
+        }
+
+        .tab button, nav#maintoolbar button, .quick-nav {
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 0.3rem;
+          width: 100%;
+          min-height: 4.5rem;   /* 72px - past the 48dp Android / 44pt iOS floor with room for a label */
+          margin: 0;
+          padding: var(--buttonHalf) 0.25rem;
+          float: none;
+          border: none;
+          border-radius: 0.6rem;
+          background: var(--buttonReady);
+          color: var(--buttonText);
+          font-size: calc(var(--bodySize) * 0.75);
+          line-height: 1.15;
+          text-align: center;
+          cursor: pointer;
+          touch-action: manipulation;
+          transition: background 120ms ease;
+        }
+        .tab button:active, nav#maintoolbar button:active, .quick-nav:active {
+          background: var(--buttonHover);
+        }
+        .tab button.active, .quick-nav.active {
+          background: var(--buttonActive);
+          color: var(--buttonLabel);
+        }
+        .quick-nav.active {
+          box-shadow: none; /* the desktop ring would break the grid rhythm */
+        }
+        .tab button.disabled, nav#maintoolbar button.disabled, .quick-nav.disabled {
+          background: var(--itemInactive);
+        }
+        .tile-icon, .quick-nav .tile-label {
+          display: block;
+        }
+        nav#maintoolbar .tile-icon { /* beats the inline desktop sizing above */
+          display: block;
+          width: calc(var(--buttonSize) * 1.5);
+          height: calc(var(--buttonSize) * 1.5);
+          margin: 0;
+          vertical-align: baseline;
+        }
+        .quick-nav .icon {
+          width: calc(var(--buttonSize) * 1.5);
+          height: calc(var(--buttonSize) * 1.5);
+          flex: 0 0 auto;
+        }
+        .tile-label {
+          display: block;
+          /* wrap between words only. overflow-wrap:anywhere broke labels mid-word ("Camer a",
+             "Galler y") at the 75px a quarter of a 375px phone gives */
+          word-break: normal;
+          overflow-wrap: normal;
+          hyphens: none;
+        }
+
+        /* --- camera tools --- */
+        #menu-container, #menu-container.menu-pinned, #menu-container.menu-floating {
+          display: block;
+          position: relative;
+          min-width: 0;
+          min-height: 0;
+          left: 0;
+          top: 0;
+        }
+        #menu-container #menu-selector {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: var(--buttonHalf);
+          width: 100%;
+          position: static;
+          float: none;
+          height: auto;
+          border: none;
+          border-radius: 0;
+          background: transparent;
+        }
+        #foot-spacer {
+          display: none;
+        }
+
+        /* --- settings panels as full-screen sheets ---
+           The sheet is the PANEL, not its wrapper: only #camera-control actually sits inside
+           #menu-top, and the other five panels are direct children of #menu-container (measured -
+           the desktop rule #menu-top.menu-pinned nav.menu.panel has only ever styled the camera
+           one). Targeting the active panel covers all six wherever they sit, and #menu-top becomes
+           display:contents so its one child joins the same flow. Both selectors are listed so the
+           camera panel's higher-specificity desktop rule is beaten too. */
+        #menu-container #menu-top {
+          display: contents;
+        }
+        #menu-container nav.menu.panel.active,
+        #menu-container #menu-top nav.menu.panel.active {
+          position: fixed;
+          inset: 0;
+          left: 0;
+          top: 0;
+          z-index: 60;
+          display: block;
+          width: auto;
+          height: auto;
+          min-width: 0;
+          min-height: 0;
+          margin: 0;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          background: var(--pageBackground);
+          border: none;
+          border-radius: 0;
+          padding: calc(env(safe-area-inset-top) + 3.25rem) 0.75rem calc(env(safe-area-inset-bottom) + 2rem);
+        }
+        #menu-container .pin-menu {
+          display: none; /* pinning means nothing when the panel is the whole screen */
+        }
+        #sheetClose {
+          display: none;
+          align-items: center;
+          justify-content: center;
+          position: fixed;
+          top: calc(env(safe-area-inset-top) + 0.5rem);
+          right: 0.75rem;
+          width: 2.75rem;
+          height: 2.75rem;
+          margin: 0;
+          padding: 0;
+          z-index: 61;
+          border-radius: 50%;
+          background: var(--cardBackground);
+          border: 1px solid var(--cardBorder);
+          touch-action: manipulation;
+        }
+        #sheetClose .icon {
+          width: 50%;
+          height: 50%;
+        }
+        body.sheet-open #sheetClose {
+          display: flex;
+        }
+        body.sheet-open {
+          overflow: hidden;
+        }
+        .nav-toggle {
+          margin-left: 0;
+          font-size: calc(var(--bodySize) * 1.15);
+        }
+
+        /* --- live view: the viewfinder --- */
+        #content, #mainPageIcons, #sidebar {
+          display: block;
+          min-width: 0;
+        }
+        #content {
+          display: flex;
+          flex-direction: column;
+        }
+        #liveCard {
+          order: -1;
+          position: relative;
+          padding: 0;
+          overflow: hidden;
+        }
+        #streamPlaceholder {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: var(--buttonHalf);
+          min-height: 11rem;
+          color: var(--itemInactive);
+          font-size: calc(var(--bodySize) * 0.85);
+          text-align: center;
+        }
+        #streamPlaceholder .icon-inline {
+          width: 2rem;
+          height: 2rem;
+          margin: 0;
+        }
+        #liveCard.live-on #streamPlaceholder {
+          display: none;
+        }
+        #liveCard #stream-container {
+          width: 100% !important;   /* sizeView() writes a pixel width inline; on a phone the card is the size */
+          height: auto !important;
+          margin: 0;
+          border: none;
+          border-radius: 0;
+        }
+        #liveCard figure img, #liveCard #stream {
+          border-radius: 0;
+        }
+        /* the signature: viewfinder corner brackets over the frame */
+        #liveCard.live-on::before, #liveCard.live-on::after {
+          content: "";
+          position: absolute;
+          width: 1.25rem;
+          height: 1.25rem;
+          pointer-events: none;
+          z-index: 3;
+        }
+        #liveCard.live-on::before {
+          top: 0.6rem;
+          left: 0.6rem;
+          border-top: 2px solid var(--buttonActive);
+          border-left: 2px solid var(--buttonActive);
+        }
+        #liveCard.live-on::after {
+          bottom: 2.4rem; /* clear of the data rail, which is ~1.9rem tall */
+          right: 0.6rem;
+          border-bottom: 2px solid var(--buttonActive);
+          border-right: 2px solid var(--buttonActive);
+        }
+        #colorbar-banner {
+          border-radius: 0.75rem;
+          margin: 0.75rem 0 0 0;
+        }
+        .stream-badge {
+          position: absolute;
+          top: 0.6rem;
+          z-index: 4;
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          padding: 0.2rem 0.5rem;
+          border-radius: 1rem;
+          background: rgba(18, 22, 28, 0.72);
+          color: var(--pageText);
+          font-size: calc(var(--bodySize) * 0.72);
+          pointer-events: none;
+        }
+        #liveBadge {
+          left: 2.2rem;
+        }
+        #sizeBadge {
+          right: 0.6rem;
+        }
+        #liveDot {
+          width: 0.5rem;
+          height: 0.5rem;
+          border-radius: 50%;
+          background: var(--errColor);
+        }
+        #liveBadge.streaming #liveDot {
+          background: var(--buttonActive);
+        }
+        #streamRail {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          z-index: 4;
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          padding: 0.4rem 6rem 0.4rem 0.75rem;
+          background: rgba(18, 22, 28, 0.72);
+          color: var(--pageText);
+          font-size: calc(var(--bodySize) * 0.72);
+          white-space: nowrap;
+          overflow: hidden;
+        }
+        /* only two of the seven overlay controls make sense on a phone; the window is the size it
+           is, and Stop Stream is the way out. sizeView() also writes an inline right: for each -
+           it skips that on mobile so these two can sit in the rail */
+        #closeStream, #rotate, #actualSize, #maxFit, #fullSize {
+          display: none !important;
+        }
+        #fullAspect, #saveImage {
+          top: auto;
+          bottom: 0;
+          width: 2.75rem;
+          height: 2.75rem;
+          border-radius: 0;
+          background: transparent;
+          z-index: 5;
+          touch-action: manipulation;
+        }
+        #fullAspect {
+          right: 2.75rem;
+        }
+        #saveImage {
+          right: 0;
+        }
+
+        /* --- system status card --- */
+        section#footer {
+          position: static;
+          bottom: auto;
+          width: 100%;
+          /* the desktop strip carries min-width: 20 units = 320px. On a 320px phone that stretched
+             its flex ancestors and laid the page out 332px wide - a 12px sideways scroll that no
+             element reports as overflow, because the browser zooms the viewport out to match */
+          min-width: 0;
+          z-index: auto;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: var(--buttonHalf);
+          text-align: left;
+          font-size: calc(var(--bodySize) * 0.8);
+          border-radius: 0.75rem;
+        }
+        /* the heading lives INSIDE the card, so collapsing hides the readings and not itself */
+        #statusHead {
+          grid-column: 1 / -1;
+          margin: 0;
+        }
+        section#footer.collapsed {
+          gap: 0;
+        }
+        section#footer.collapsed .info-group {
+          display: none;
+        }
+        #statusHead #statusToggle {
+          margin-left: auto;
+          width: 2.75rem;
+          height: 2.75rem;
+          padding: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          transition: transform 160ms ease;
+          touch-action: manipulation;
+        }
+        #statusHead #statusToggle[aria-expanded="false"] {
+          transform: rotate(-90deg);
+        }
+        #footer .info-group {
+          margin: 0;
+          text-align: left;
+        }
+        #footer .info-group label {
+          display: block;
+          font-size: calc(var(--bodySize) * 0.7);
+          color: var(--itemInactive);
+        }
+
+        /* --- touch sizing for every control in a sheet --- */
+        .input-group {
+          line-height: 1.4;
+          margin-top: 0.75rem;
+        }
+        .input-group input, .input-group select, input[type="text"], input[type="number"],
+        input[type="password"], select {
+          min-height: 3rem;   /* 48px */
+          height: auto;
+          font-size: 1rem;    /* below 16px iOS Safari zooms the page on focus */
+        }
+        /* A slider row becomes: label with its value as a badge on the right, then min - track - max
+           on the line below. The value marker normally floats over the thumb, and its JS-computed
+           left is measured against the group, so once the label wraps onto its own line the marker
+           lands above the whole group - which is where it has always sat on a phone. Pinning it
+           top-right needs left:auto to beat the inline style rangeSlider() writes on every move. */
+        .input-group>input[type=range] {
+          flex: 1 1 auto;
+          width: auto;
+          min-width: 0;
+          min-height: 3rem;
+          margin: 0 var(--buttonHalf);
+        }
+        .input-group div[name="rangeVal"] {
+          top: 0;
+          right: 0;
+          left: auto !important;
+          margin-top: 0;
+          width: auto;
+          min-width: 2.4rem;
+          height: auto;
+          padding: 0.1rem 0.45rem;
+          line-height: 1.5;
+          border-radius: 0.4rem;
+          font-size: calc(var(--bodySize) * 0.78);
+        }
+        .input-group div[name="rangeMin"], .input-group div[name="rangeMax"] {
+          flex: 0 0 auto;
+          padding: 0;
+          font-size: calc(var(--bodySize) * 0.75);
+          color: var(--itemInactive);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+          height: 6px;
+          border-radius: 3px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+          margin-top: calc(-0.5 * var(--smallThumbSize) + 3px);
+        }
+        /* Every button inside a sheet or a settings tab, including the Save Settings / Reboot pair
+           addButtons() injects, which measured 28px tall. NOT ".tabcontent button": #mainPage
+           carries that class, so it also matched the Listen tile and squashed it to 48px against
+           its neighbours' 72 - measured, and invisible in a screenshot until the row is compared. */
+        nav.menu.panel button, #EditConfig button, #ShowLog button, section#buttons button {
+          min-height: 3rem;
+          padding-left: var(--buttonHalf);
+          padding-right: var(--buttonHalf);
+        }
+        .switch .slider {
+          width: 3.5rem;
+          height: 2rem;
+          border-radius: 2rem;
+        }
+        /* the pill stays 56x32 because a 44px-tall switch looks wrong, but the label is the thing
+           being tapped, so its hit area is grown to 72x48 with a transparent overlay. ::before is
+           already the knob; verified with elementFromPoint at the corners of the grown box */
+        .switch .slider::after {
+          content: "";
+          position: absolute;
+          top: -0.5rem;
+          bottom: -0.5rem;
+          left: -0.5rem;
+          right: -0.5rem;
+        }
+        .switch .slider::before {
+          width: 1.75rem;
+          height: 1.75rem;
+          top: 0.125rem;
+          left: 0.125rem;
+        }
+        .switch input[type="checkbox"]:checked + .slider::before {
+          transform: translateX(1.5rem);
+        }
+        .switch {
+          display: flex;
+          align-items: center;
+          min-height: 3rem;
+        }
+        /* a switch belongs beside its label, not under it - the narrow-phone rule that gives every
+           label its own line is right for a select and wasteful for a 56px pill. Where :has() is
+           missing the row simply stays stacked, which is the layout without this rule */
+        .input-group:has(> .switch) {
+          flex-wrap: nowrap;
+          align-items: center;
+        }
+        .input-group:has(> .switch) > label {
+          min-width: 0;
+          flex: 1 1 auto;
+          padding-bottom: 0;
+        }
+        .input-group > .switch {
+          margin-left: auto;
+        }
+        button, .iconSize {
+          touch-action: manipulation;
+        }
+
+        /* --- Edit Config, made to fit ---
+           One column, and the settings heading spans it. Without that span fix the heading's
+           grid-column: 1/5 creates three IMPLICIT columns in a one-column grid and the page lays
+           out 524px wide on a 375px phone - which reads as no overflow, because the browser has
+           already zoomed the viewport out to match. */
+        .grid-cols3, .grid-cols4 {
+          grid-template-columns: 1fr;
+          gap: var(--buttonHalf);
+        }
+        .cfgTitle {
+          grid-column: 1 / -1;
+        }
+        .grid-cols3 svg, .grid-cols4 svg {
+          width: 100%;
+          height: 3rem;
+        }
+        .tabcontent section#buttons, .tabcontent .addButtons {
+          flex-wrap: wrap;
+        }
+        .config-group table, table {
+          width: 100%;
+          table-layout: fixed;
+        }
+        .config-group td, .config-group th {
+          word-break: break-word;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .tab button, nav#maintoolbar button, .quick-nav, #statusHead #statusToggle,
+          .switch .slider::before {
+            transition: none;
+          }
+        }
+      }
+
       /*************** narrow phone layout (<30rem, ~480px) ***************/
       @media (max-width: 30rem) {
         /* back to the narrow minimum: here the label is on its own line, so the select spans the
@@ -936,17 +1639,15 @@
           padding-right: 0;
           padding-bottom: var(--buttonQuart);
         }
-        .input-group>input, .input-group>select {
+        /* ranges are excluded: below 48rem they share their line with the min and max labels, and a
+           100% width would push those onto lines of their own */
+        .input-group>input:not([type=range]), .input-group>select {
           width: 100%;
         }
-        .quick-nav {
-          width: calc(var(--buttonDbl) * 1.375); /* >=44px touch target at default 16px root */
-          height: calc(var(--buttonDbl) * 1.375);
-        }
-        .pin-menu {
-          width: calc(var(--buttonSize) * 2.75);
-          height: calc(var(--buttonSize) * 2.75);
-        }
+        /* the 44px .quick-nav and .pin-menu sizes that used to sit here are gone: below 48rem the
+           tools are 75px tiles in a grid and the pin control is hidden, and because this block is
+           later in the stylesheet a bare width here silently won that fight (measured: the tiles
+           computed 44px inside a 75px grid column) */
         .ota-group button {
           min-height: calc(var(--buttonDbl) * 1.375); /* >=44px touch target at default 16px root */
           width: 100%;
@@ -965,23 +1666,46 @@
   </head>
 
   <body>
+    <!-- Mobile app header. Hidden above the card breakpoint, where the tab row is the identity.
+         It is also the way HOME on a phone: the camera tab button is hidden there (the user's
+         choice), and openTab() hides #main for every other tab, so without this a phone that
+         opened Edit Config would have no way back. Everything in it is mirrored from the status
+         poll - no new ids, because updateStatus() matches a status key to the element whose id
+         equals it and a duplicate would only ever fill the first one -->
+    <header id="appbar" class="mobileOnly">
+      <button id="appHome" type="button" title="Back to the camera page">
+        <svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg>
+      </button>
+      <div id="appIdent">
+        <div id="appTitle">ESP32-S3 CAM</div>
+        <div id="appSubtitle"><span id="appModel">Camera</span> &middot; WiFi Camera</div>
+      </div>
+      <div id="appLink" class="offline" title="Connection to the camera">
+        <svg class="icon-inline" aria-hidden="true"><use href="#icon-wifi"></use></svg>
+        <span id="appLinkDot" aria-hidden="true"></span>
+        <span id="appLinkText">Connecting</span>
+      </div>
+    </header>
+
     <div class="tab">
+      <!-- .card-head rows are for the mobile card layout only, hidden above the breakpoint -->
+      <h2 class="card-head mobileOnly"><svg class="icon-inline" aria-hidden="true"><use href="#icon-gear"></use></svg>Device Controls</h2>
       <ul class="navtop">
-        <button class="tablinks camTab active" name="mainPage">Camera</button>
-        <button class="tablinks" name="ShowLog">Show Log</button>
-        <button class="tablinks" name="EditConfig">Edit Config</button>
-        <button class="tablinks" onclick="window.location.href='/web?OTA.htm'">OTA Upload</button>
+        <button class="tablinks camTab noMobile active" name="mainPage"><svg class="tile-icon" aria-hidden="true"><use href="#icon-camera"></use></svg><span class="tile-label">Camera</span></button>
+        <button class="tablinks noMobile" name="ShowLog"><svg class="tile-icon" aria-hidden="true"><use href="#icon-doc"></use></svg><span class="tile-label">Show Log</span></button>
+        <button class="tablinks" name="EditConfig"><svg class="tile-icon" aria-hidden="true"><use href="#icon-edit"></use></svg><span class="tile-label">Edit Config</span></button>
+        <button class="tablinks noMobile" onclick="window.location.href='/web?OTA.htm'"><svg class="tile-icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span class="tile-label">OTA Upload</span></button>
       </ul>
       <section id="main">
         <nav id="maintoolbar">
           <ul class="navtop">
-            <li><span id="recording-indicator" class="hidden" style="float: right; display: none;"></span></li>
-            <li><button id="forceRecord" style="float:right;">➤&nbsp;Start Recording</button></li>
-            <li><div class="sep"></div></li>
-            <li><button id="forceStream" class="local" style="float:right;">➤&nbsp;Start Stream</button></li>
-            <li><button id="get-still" class="local" style="float:right;">Get Still</button></li>
-            <li><div class="sep"></div></li>
-            <li><button id="forcePlayback" class="local disabled" style="float:right;" title="Select a video in 'Playback & File Transfers' to activate playback.">➤&nbsp;Start Playback</button></li>
+            <li class="ind-item"><span id="recording-indicator" class="hidden" style="float: right; display: none;"></span></li>
+            <li><button id="forceRecord" style="float:right;"><svg class="tile-icon" aria-hidden="true"><use href="#icon-record"></use></svg><span class="tile-label">Start Recording</span></button></li>
+            <li class="sep-item"><div class="sep"></div></li>
+            <li><button id="forceStream" class="local" style="float:right;"><svg class="tile-icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg><span class="tile-label">Start Stream</span></button></li>
+            <li><button id="get-still" class="local" style="float:right;"><svg class="tile-icon" aria-hidden="true"><use href="#icon-image"></use></svg><span class="tile-label">Get Still</span></button></li>
+            <li class="sep-item"><div class="sep"></div></li>
+            <li class="noMobile"><button id="forcePlayback" class="local disabled" style="float:right;" title="Select a video in 'Playback &amp; File Transfers' to activate playback."><svg class="tile-icon" aria-hidden="true"><use href="#icon-play"></use></svg><span class="tile-label">Start Playback</span></button></li>
           </ul>
         </nav>
       </section>
@@ -1000,18 +1724,29 @@
         <div id="mainPageIcons">
           <div id="sidebar">
             <div id="menu-container" class="menu-pinned">
+              <!-- On a phone this is the "Camera Tools" card: the same seven controls as tiles with
+                   their labels shown. The six <nav>s carry role/tabindex because a <nav> takes no
+                   focus and fires no key events, so until now six of the seven tools could not be
+                   reached from a keyboard at all. They cannot simply become <button>s: common.js
+                   dispatches BUTTON by id and NAV by class, and the class route is what reaches
+                   navigation(). setListeners() forwards Enter and Space for them instead -->
+              <h2 class="card-head mobileOnly"><svg class="icon-inline" aria-hidden="true"><use href="#icon-grid"></use></svg>Camera Tools</h2>
               <nav id="menu-selector" class="menu-pinned menu-closed">
-                <nav class="quick-nav" id="camControl" name="camera-control"><svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg></nav>
-                <nav class="quick-nav" id="nightControl" name="night-control" title="Long exposure - stills and video below 1 fps"><svg class="icon" aria-hidden="true"><use href="#icon-moon"></use></svg></nav>
-                <nav class="quick-nav" id="motionRec" name="motion-record"><svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg></nav>
-                <nav class="quick-nav" id="fileControl" name="playback-transfers"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg></nav>
-                <nav class="quick-nav" id="picSettings" name="picture-settings"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg></nav>
-                <nav class="quick-nav" id="accSettings" name="access-settings"><svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg></nav>
+                <nav class="quick-nav" id="camControl" name="camera-control" role="button" tabindex="0" aria-expanded="false" title="Camera Control - resolution, rate, quality"><svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg><span class="tile-label">Camera</span></nav>
+                <nav class="quick-nav" id="nightControl" name="night-control" role="button" tabindex="0" aria-expanded="false" title="Long exposure - stills and video below 1 fps"><svg class="icon" aria-hidden="true"><use href="#icon-moon"></use></svg><span class="tile-label">Night Mode</span></nav>
+                <nav class="quick-nav" id="motionRec" name="motion-record" role="button" tabindex="0" aria-expanded="false" title="Motion detection and recording"><svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg><span class="tile-label">Motion</span></nav>
+                <nav class="quick-nav" id="fileControl" name="playback-transfers" role="button" tabindex="0" aria-expanded="false" title="Gallery - recordings, playback and file transfers"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg><span class="tile-label">Gallery</span></nav>
+                <nav class="quick-nav" id="picSettings" name="picture-settings" role="button" tabindex="0" aria-expanded="false" title="Image settings - exposure, colour, geometry"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg><span class="tile-label">Image Settings</span></nav>
+                <nav class="quick-nav" id="accSettings" name="access-settings" role="button" tabindex="0" aria-expanded="false" title="System - access, storage and maintenance"><svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg><span class="tile-label">System</span></nav>
                 <!-- must stay a <button>: common.js dispatches BUTTON by id (giving key
                      spkrRem) but NAV by class, which routes into navigation() instead -->
-                <button class="quick-nav" id="spkrRem" title="Listen - hear the camera's microphone"><svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg></button>
+                <button class="quick-nav" id="spkrRem" aria-pressed="false" title="Listen - hear the camera's microphone"><svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg><span class="tile-label">Listen</span></button>
               </nav>
               <div id="menu-top" class="menu-pinned">
+                <!-- one close control for all six sheets, rather than one per panel. Shown only in
+                     the mobile sheet, where the tile that opened the panel is behind the overlay
+                     and cannot be tapped again to close it -->
+                <button id="sheetClose" class="local mobileOnly" type="button" title="Close"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
                 <nav class="menu panel" id="camera-control">
                   <input type="checkbox" id="control-cb" class="menu-action local" checked="checked">
                   <div class="pin-menu" title="Pin / unpin menu"><svg class="icon" aria-hidden="true"><use href="#icon-pin"></use></svg></div>
@@ -1745,7 +2480,13 @@
               <div id="foot-spacer"></div>
             </div>
           </div>
-          <section id="footer">
+          <!-- On a phone this is the "System Status" card: the same thirteen fields, laid out as a
+               grid and collapsible. On desktop it stays the fixed strip along the bottom -->
+          <section id="footer" class="measure">
+            <h2 class="card-head mobileOnly" id="statusHead">
+              <svg class="icon-inline" aria-hidden="true"><use href="#icon-chart"></use></svg>System Status
+              <button id="statusToggle" class="local" type="button" aria-expanded="true" title="Collapse system status"><svg class="icon" aria-hidden="true"><use href="#icon-chevron"></use></svg></button>
+            </h2>
             <div class="info-group center">
                 <label for="fw_version">Version</label>
                 <div id="fw_version" class="info displayonly">&nbsp;</div>
@@ -1800,8 +2541,19 @@
             </div>
           </section>
         </div>
-        <figure>
+        <!-- The live view. On a phone this is the one card with any personality: corner brackets, a
+             LIVE dot, the frame size, and a data rail carrying what the SENSOR is doing (exposure,
+             gain, quality from camLive) rather than only what the page asked for. Everything in it
+             is mirrored from the status poll, so it costs no extra request. The five sizing icons
+             are hidden on a phone, where the window is the size it is; Stop Stream is the way out -->
+        <figure id="liveCard">
+          <div id="streamPlaceholder" class="mobileOnly">
+            <svg class="icon-inline" aria-hidden="true"><use href="#icon-broadcast"></use></svg>
+            <span>Press Start Stream to see the camera</span>
+          </div>
           <div id="stream-container" class="image-container hidden">
+            <div id="liveBadge" class="stream-badge mobileOnly"><span id="liveDot" aria-hidden="true"></span><span id="liveState">LIVE</span></div>
+            <div id="sizeBadge" class="stream-badge measure mobileOnly">&nbsp;</div>
             <div class="iconSize" id="closeStream" title="Close screen"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></div>
             <div class="iconSize" id="rotate" title="Rotate screen"><svg class="icon" aria-hidden="true"><use href="#icon-rotate"></use></svg></div>
             <div class="iconSize" id="actualSize" title="Actual size"><svg class="icon" aria-hidden="true"><use href="#icon-frame"></use></svg></div>
@@ -1810,6 +2562,11 @@
             <div class="iconSize" id="fullSize" title="Full screen"><svg class="icon" aria-hidden="true"><use href="#icon-fullscreen"></use></svg></div>
             <div class="iconSize" id="saveImage" title="Download screenshot"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></div>
             <img id="stream" src="" crossorigin>
+            <div id="streamRail" class="measure mobileOnly">
+              <span id="railRate">&nbsp;</span>
+              <span id="railSignal">&nbsp;</span>
+              <span id="railSensor">&nbsp;</span>
+            </div>
           </div>
         </figure>
       </div>
@@ -1988,7 +2745,132 @@
         sustainId = +appClock + Math.ceil(refreshInterval / 1000);
         fetchTimeZones();
         hideBuiltOut();
+        mobileInit(); // the phone card layout - see the block below
         nightInit(); // sync the long exposure panel with whatever the board is actually doing
+      }
+
+      /************** phone card layout ****************/
+      /* The phone view is the same DOM restyled, not a second page: updateStatus() matches a status
+         key to the element whose id equals it, so every value can exist exactly once and a duplicate
+         would only ever fill the first. These functions cover the parts CSS cannot do - mirroring
+         values into the header and the viewfinder rail, opening a panel as a sheet with a working
+         Back gesture, and giving Start Playback its second home inside the Gallery sheet. */
+
+      const mobileMQ = window.matchMedia('(max-width: 48rem)');
+      function isMobile() { return mobileMQ.matches; }
+
+      let sheetOpener = null;  // the tile to hand focus back to when a sheet closes
+      let sheetPushed = false; // whether the open sheet owns a history entry
+      let sheetClosing = false; // set while a history pop is driving the close, so we do not pop twice
+      let onlineTimer = null;
+
+      function mobileInit() {
+        placePlaybackButton();
+        mobileMQ.addEventListener('change', () => { placePlaybackButton(); sheetApply(false); });
+        // the phone's Back gesture must close the sheet, not leave the page. Without this, backing
+        // out of a settings sheet is the quickest way for a user to lose the whole page
+        window.addEventListener('popstate', () => {
+          const tile = $('nav.quick-nav.active');
+          if (!tile || !isMobile()) return;
+          sheetClosing = true;
+          navigation(tile.id); // toggles tile and panel off, and calls sheetApply(false)
+          sheetClosing = false;
+        });
+        setLiveCard('off');
+      }
+
+      function placePlaybackButton() {
+        /* One element, two homes. On a phone the Device Controls card does not carry Start Playback
+           (the user's choice - playback is reached through Gallery), so it moves next to the file
+           list inside that sheet. It must be MOVED, never cloned: playbackAction holds this exact
+           element and deactivatePlaybackButton enables it by reference. Event handling is
+           document-level delegation, so the move costs nothing. */
+        const btn = $('#forcePlayback');
+        const sheetHome = document.querySelector('#playback-transfers section#buttons');
+        const deskHome = document.querySelector('#maintoolbar li.noMobile');
+        if (!btn || !sheetHome || !deskHome) return;
+        if (isMobile()) { if (btn.parentElement !== sheetHome) sheetHome.insertBefore(btn, sheetHome.firstChild); }
+        else if (btn.parentElement !== deskHome) deskHome.appendChild(btn);
+      }
+
+      function sheetApply(open, opener) {
+        // body.sheet-open is the whole switch: the stylesheet makes the ACTIVE PANEL the sheet
+        // (only #camera-control lives inside #menu-top; the other five are its siblings), and this
+        // class stops the page behind it scrolling and reveals the shared close button
+        if (!isMobile()) {
+          document.body.classList.remove('sheet-open');
+          sheetPushed = false;
+          return;
+        }
+        document.body.classList.toggle('sheet-open', open);
+        if (open) {
+          sheetOpener = opener || null;
+          const panel = $('nav.menu.panel.active');
+          if (panel) panel.scrollTop = 0;
+          if (!sheetPushed) {
+            history.pushState({sheet: opener ? opener.id : 1}, '', '#' + (opener ? opener.id : 'panel'));
+            sheetPushed = true;
+          }
+          const close = $('#sheetClose');
+          if (close) close.focus();
+        } else {
+          const hadEntry = sheetPushed;
+          sheetPushed = false;
+          if (hadEntry && !sheetClosing) history.back(); // drop our entry so Back does not reopen it
+          if (sheetOpener) { sheetOpener.focus(); sheetOpener = null; }
+        }
+      }
+
+      function setActionLabel(btn, icon, text, on) {
+        /* The transport buttons used to have their whole innerHTML rewritten to change label, which
+           would delete the tile icon the phone layout puts inside them. Label and icon are set
+           separately now, and the arrow / square characters they used to carry are real icons. */
+        if (!btn) return;
+        const lab = btn.querySelector('.tile-label');
+        if (!lab) { btn.innerHTML = text; return; }
+        lab.textContent = text;
+        if (icon) {
+          const use = btn.querySelector('.tile-icon use');
+          if (use) use.setAttribute('href', '#icon-' + icon);
+        }
+        if (on !== undefined) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+
+      function setLiveCard(mode) {
+        // 'off' shows the placeholder, 'live' the viewfinder with a green dot, 'still' a held frame
+        const card = $('#liveCard');
+        if (!card) return;
+        card.classList.toggle('live-on', mode !== 'off');
+        const badge = $('#liveBadge'), state = $('#liveState');
+        if (badge) badge.classList.toggle('streaming', mode === 'live');
+        if (state) state.textContent = mode === 'live' ? 'LIVE' : 'STILL';
+      }
+
+      function railFromCamLive(v) {
+        // camLive is a sentence built for the settings panel; the rail wants the three figures only
+        const ms = String(v).match(/\(([\d.]+) ms\)/);
+        const g = String(v).match(/gain ([\d.]+)x/);
+        const q = String(v).match(/\bq(\d+)/);
+        const bits = [];
+        if (ms) bits.push(ms[1] + 'ms');
+        if (g) bits.push(g[1] + 'x');
+        if (q) bits.push('q' + q[1]);
+        return bits.join(' · ');
+      }
+
+      function setText(sel, text) { const el = $(sel); if (el) el.textContent = text; }
+
+      function markOnline() {
+        // the poll answering IS the connection test; no extra request for a connection indicator
+        const link = $('#appLink');
+        if (!link) return;
+        link.classList.add('online');
+        setText('#appLinkText', 'Online');
+        clearTimeout(onlineTimer);
+        onlineTimer = setTimeout(() => {
+          link.classList.remove('online');
+          setText('#appLinkText', 'Offline');
+        }, refreshInterval * 3);
       }
 
       async function hideBuiltOut() {
@@ -2012,12 +2894,31 @@
       async function processStatus(dest, key, value, fromUser = true) {
         // process change to status value
         if (dest == ID) {
+          // a value arriving from the poll rather than the user IS the connection test - the phone
+          // header's Online pill costs no request of its own
+          if (!fromUser) markOnline();
           // operation based on ID
           if (key == "fps" || key == "quality") updateBudget(); // advisory badge tracks both
+          if (key == "fps") setText('#railRate', value + 'fps');
+          if (key == "wifi_rssi") setText('#railSignal', String(value).replace(/\s+/g, ''));
           if (key == "wifi") getConfig("0");
           else if (key == "hostName") {
             document.title = value;
+            setText('#appTitle', value);
             if (fromUser) sendControl(key, value);
+          }
+          // phone-only chrome. Each is 'local' in the markup, so none of them reaches the board
+          else if (key == "appHome") { openTab($('.camTab')); return; }
+          else if (key == "sheetClose") { const t = $('nav.quick-nav.active'); if (t) navigation(t.id); return; }
+          else if (key == "statusToggle") {
+            const f = $('#footer'), b = $('#statusToggle');
+            if (f && b) {
+              const open = b.getAttribute('aria-expanded') != 'false';
+              f.classList.toggle('collapsed', open);
+              b.setAttribute('aria-expanded', open ? 'false' : 'true');
+              b.title = open ? 'Show system status' : 'Collapse system status';
+            }
+            return;
           }
           else if (key == "clearLog") clearLog();
           else if (key == "refreshLog") getLog();
@@ -2083,7 +2984,10 @@
           // the camera panel's white balance gains are "local" the same way, and send awbGains
           else if (key.substring(0, 6) == "camAwb") { camAwbControl(key, value); return; }
           else if (key.substring(0, 8) == "camFocus") { camFocusControl(key, value); return; }
-          else if (key == "camLive") { const nl = $('#nightLive'); if (nl) nl.innerHTML = value; }
+          else if (key == "camLive") {
+            const nl = $('#nightLive'); if (nl) nl.innerHTML = value;
+            setText('#railSensor', railFromCamLive(value)); // the viewfinder rail, phone layout
+          }
           else if (key == "colorbar") setColorbarBanner(value);
           else if (key == "colorbar-off") {
             const cb = $('#colorbar');
@@ -2126,7 +3030,8 @@
         // update camera button text
         if (firstCall) {
           cameraModel = value;
-          $('.camTab').innerHTML = cameraModel;
+          setActionLabel($('.camTab'), null, cameraModel);
+          setText('#appModel', cameraModel); // the phone header's subtitle
           // customise camera parameters according to camera model
           if (cameraModel == "OV2640") {
             // change button labels
@@ -2248,12 +3153,16 @@
 
         // toggle selected icon as active, others inactive
         i.classList.toggle('active');
-        $$('nav.quick-nav:not(#'+i.id+')').forEach(el => {el.classList.remove('active')});
+        $$('nav.quick-nav:not(#'+i.id+')').forEach(el => {
+          el.classList.remove('active');
+          el.setAttribute('aria-expanded', 'false');
+        });
 
         // toggle menu attached to icon as active, others inactive
         m.classList.toggle('active');
         $$('nav.panel:not(#'+m.id+')').forEach(el => {el.classList.remove('active')});
         m.querySelector('.menu-action').checked = isActive(i); // open if icon toggled active, close if not
+        i.setAttribute('aria-expanded', isActive(i) ? 'true' : 'false');
 
         if (isActive(i)) {
           $('#menu-selector').classList.remove('menu-closed');
@@ -2262,6 +3171,7 @@
           $('#menu-selector').classList.add('menu-closed');
           $('#menu-selector').classList.remove('menu-open');
         }
+        sheetApply(isActive(i), i); // on a phone the panel is a full-screen sheet; inert on desktop
       }
 
       function pinMenu() {
@@ -2336,7 +3246,7 @@
             sendAll("stopPlaying", 1);
             stopAll("activatePlaybackButton");
             playbackButton.classList.add("active");
-            playbackButton.innerHTML = "▢&nbsp;Stop Playback";
+            setActionLabel(playbackButton, 'stop', "Stop Playback", true);
             playbackButton.classList.add("blinking");
             if (await checkTask('/sustain?playback=0')) {
               view.src = webServer + '/sustain?playback=0';
@@ -2349,7 +3259,7 @@
 
       function deactivatePlaybackButton(sendStop = true) {
         playbackButton.classList.remove("active");
-        playbackButton.innerHTML = "➤&nbsp;Start Playback";
+        setActionLabel(playbackButton, 'play', "Start Playback", false);
         playbackButton.classList.remove("blinking");
         disable(playbackButton);
         stopAll("deactivatePlaybackButton");
@@ -2359,7 +3269,7 @@
       function activateRecordButton() {
         if (!recordButton.classList.contains("active")) {
           recordButton.classList.add("active");
-          recordButton.innerHTML = "▢&nbsp;Stop Recording";
+          setActionLabel(recordButton, 'stop', "Stop Recording", true);
         }
         if (isHidden(recordingIndicator)) {
           show(recordingIndicator);
@@ -2369,7 +3279,7 @@
 
       function deactivateRecordButton() {
         recordButton.classList.remove("active");
-        recordButton.innerHTML = "➤&nbsp;Start Recording";
+        setActionLabel(recordButton, 'record', "Start Recording", false);
         recordingIndicator.classList.remove("blinking");
         hide(recordingIndicator);
       }
@@ -2384,7 +3294,7 @@
       async function activateStreamButton() {
         stopAll("activateStreamButton");
         streamButton.classList.add("active");
-        streamButton.innerHTML = "▢&nbsp;Stop Stream";
+        setActionLabel(streamButton, 'stop', "Stop Stream", true);
         streamButton.classList.add('blinking');
         if (await checkTask('/sustain?stream=0')) {
           view.src = webServer + '/sustain?stream=0';
@@ -2394,7 +3304,7 @@
 
       function deactivateStreamButton(sendStop = true) {
         streamButton.classList.remove("active");
-        streamButton.innerHTML ="➤&nbsp;Start Stream";
+        setActionLabel(streamButton, 'broadcast', "Start Stream", false);
         streamButton.classList.remove('blinking');
         stopAll("deactivateStreamButton");
         if (sendStop) sendAll("stopStream", "0");
@@ -2410,16 +3320,19 @@
         if (isActive(playbackButton)) deactivatePlaybackButton(sendStop);
         if (isActive(streamButton)) deactivateStreamButton(sendStop);
         hide(viewContainer);
+        setLiveCard('off'); // the phone card falls back to its placeholder
       }
 
       function activateButton(thisButton) {
         thisButton.classList.add("active");
         thisButton.classList.add('blinking');
+        if (thisButton.hasAttribute('aria-pressed')) thisButton.setAttribute('aria-pressed', 'true');
       }
 
       function deactivateButton(thisButton) {
         thisButton.classList.remove("active");
         thisButton.classList.remove('blinking');
+        if (thisButton.hasAttribute('aria-pressed')) thisButton.setAttribute('aria-pressed', 'false');
       }
 
       function micOrSpkrState(key) {
@@ -2449,6 +3362,7 @@
         const fwidth = sizeData[1];
         const fheight = sizeData[2];
         imgSize = {width: fwidth, height: fheight};
+        setText('#sizeBadge', fwidth + ' × ' + fheight); // the phone viewfinder's size badge
         sizeView('maxFit'); // initial view size
       }
 
@@ -2472,10 +3386,17 @@
         }
         else {
           if (selectedSize == 'maxFit') {
-            fitSize = calculateAspectRatioFit(imgSize.width, imgSize.height,
-            window.screen.availWidth - $('#menu-container').offsetWidth - 25,
-            window.innerHeight - $('.tab').offsetHeight - $('#footer').offsetHeight - 25);
-            viewContainer.style.cssText = 'width:'+fitSize.width+'px; height:'+fitSize.height+'px';
+            if (isMobile()) {
+              // a phone's window IS the fit, and the desktop arithmetic subtracts a sidebar that is
+              // not there. An inline pixel size would also beat the card's own width rule, which is
+              // why the mobile stylesheet marks that one !important
+              viewContainer.style.cssText = 'width:100%; height:auto';
+            } else {
+              fitSize = calculateAspectRatioFit(imgSize.width, imgSize.height,
+              window.screen.availWidth - $('#menu-container').offsetWidth - 25,
+              window.innerHeight - $('.tab').offsetHeight - $('#footer').offsetHeight - 25);
+              viewContainer.style.cssText = 'width:'+fitSize.width+'px; height:'+fitSize.height+'px';
+            }
           }
           else if (selectedSize == 'actualSize') {
             viewContainer.style.cssText = 'width:'+imgSize.width+'px; height:'+imgSize.height+'px';
@@ -2505,14 +3426,19 @@
 
           // locate size buttons on screen
           let buttonPos = baseFontSize / 4;
+          const phone = isMobile();
           $$('.iconSize').forEach(el => {
             if (el.id != selectedSize || el.id == "rotate") {
-              el.style.right = buttonPos + 'px';
+              // on a phone the stylesheet places the two surviving controls in the viewfinder rail,
+              // and an inline right: here would fight it. show() only clears the inline display, so
+              // the stylesheet still hides the five that make no sense on a phone
+              if (!phone) el.style.right = buttonPos + 'px';
               buttonPos += baseFontSize * 1.25;
               show(el);
             } else hide(el);
           });
           show(viewContainer);
+          setLiveCard(isActive(streamButton) || isActive(playbackButton) ? 'live' : 'still');
         }
       }
 
