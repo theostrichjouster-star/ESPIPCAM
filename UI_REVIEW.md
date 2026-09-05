@@ -392,3 +392,27 @@ silently reappeared. The stub caught it (the FTP and SMTP groups stayed visible 
 saying they were absent), the selector now matches either form, and it is verified on COM4, whose
 build has five modules compiled out: every FTP and SMTP group reads `display: none`, the auth
 groups stay visible.
+
+
+---
+
+## Beyond the review: the Long Exposure panel (5 Sep 2026)
+
+Not one of the items above - a feature the user asked for after them, built on the HTS-stretch
+campaign (BOARD_TESTING §37). A moon button under the camera button opens a panel that programs a
+multi-second frame, holds the lens by hand, and hands the sensor back on the way out.
+
+- **Sizes are QSXGA and FHDNARROW only.** A binned size's line cost flips above HTS 2277, capping
+  1280X960 near 0.45 s. Measured ceilings: FHDNARROW 3.18 s, QSXGA 3.18 s at the clock floor.
+- **Capture stays on the top bar** - Get Still, Start Recording (which also stops it), Start Stream.
+- **This panel hides a control its automatic owns**, where the camera panel disables it in place
+  (C1). Deliberate, and the user's call: the camera panel is a reference sheet, this is a working set.
+- **Manual white balance** (`awbGains`) is the answer to a green cast, not the AWB switch - that one
+  stops the ISP applying gains at all and goes further green. Green is the reference channel and is
+  not exposed.
+- **A session is bound to the size it was entered for**, and any size or rate chosen in the camera
+  panel ends it, returning whatever the user did not choose. Without that the stretch outlived its
+  size and left the sensor on a 3.17 s frame while the UI reported HD 30 (§38.13).
+
+Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
+comparison from C3 is still outstanding.

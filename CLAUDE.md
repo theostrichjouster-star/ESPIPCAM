@@ -266,7 +266,23 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   cost flips above HTS 2277). Measured: FHDNARROW 3.00 s at HTS 7724, QSXGA 3.18 s at HTS 8191, both
   agreeing with §37. `stillWaitMs()` scales the still wait to the frame (at 3 s the stock 1200 ms
   lands 4 requests in 10). `afManual=<0..1023>` / `afAuto=1` hold and release the lens. Entering
-  forces idleFps and micGain to 0 and restores them on exit; nothing is persisted (§38.12)
+  forces idleFps and micGain to 0 and restores them on exit; nothing is persisted (§38.12).
+  **A session is bound to `nightFS`, the size it was entered for, and any size or rate chosen in the
+  camera panel ends it** - returning whatever the user did NOT choose (a size change gives the rate
+  back, a rate change the size, the panel's toggle both). Without that binding the stretch outlived
+  its size and left the sensor on a 3.17 s frame while `/status` reported HD 30: white frames and a
+  starved stream. **`lf == 2` alone is not a sufficient guard** - `senLineFactor()` reads the PREVIOUS
+  size mid-transition. The no-frame watchdog also has to know the sensor's period, not `FPS` (pinned
+  at the timer's floor of 1), or it fires between every night frame and walks quality 12 -> 30 (§38.13)
+- **Manual white balance**: `awbGains=<r>,<g>,<b>` (1024 = 1.0x) writes 0x3406 = 1 and 0x3400-0x3405
+  with a read-back; `awbGainsAuto=1` hands the gains back. This is the control for a green cast, NOT
+  `awb`: that one clears 0x5001 bit 0 so the ISP applies no gains at all and the picture goes further
+  green. Measured on a lit bench frame: green sits 13% above the other channels on auto and 15% below
+  at R 1600 / B 1400, so neutral is reachable between them (§38.12)
+- **Dark QSXGA steps its own quality and that is correct**: 5MP frames in the dark overrun the 983 KB
+  buffer, the driver delivers nothing, and the rescue steps the sensor's quality until they fit -
+  settling at q24, the same figure §37 measured. Do not suppress it; it is the reason dark 5MP works
+  at all. `/status` still reports the CONFIG quality, `camLive` the sensor's
 - `UI_REVIEW.md` - the web UI's camera controls: what the 5 Sep regression found, and every
   proposal with its measurement (committed). **All of A1-A4, B1-B3, C1-C5 and D1-D3 are done and
   deployed**; B1/B2 and part of C3 are retracted in place (I had read the static markup - see the
