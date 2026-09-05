@@ -1344,14 +1344,58 @@
                             <label class="slider" for="awb"></label>
                         </div>
                     </div>
-                    <div class="input-group" id="awb_gain-group">
+                    <!-- Manual white balance: the same three channels the long exposure panel carries,
+                         and the same rows, hidden while their automatic owns them. They write
+                         awbGains / awbGainsAuto - 0x3406 plus 0x3400-0x3405 - which is what actually
+                         moves a colour cast. The switch above is a RAW switch, not a hold: with AWB
+                         off the ISP applies no gains at all and no slider here can reach the picture,
+                         so all four rows are gated on it. Auto WB Gains also writes 0x3406 = 0, which
+                         is the way out of any preset a bench call may have left in force. -->
+                    <div class="input-group" id="camAwbAuto-group">
+                        <label for="camAwbAuto">Auto WB Gains</label>
+                        <div class="switch">
+                            <input id="camAwbAuto" class="local" type="checkbox" checked="checked"
+                                   title="On lets the ISP compute the white balance gains. Off holds them where the three sliders say - 1024 is 1.0x per channel">
+                            <label class="slider" for="camAwbAuto"></label>
+                        </div>
+                    </div>
+                    <div class="input-group" id="camAwbR-group">
+                      <label for="camAwbR">Red gain</label>
+                      <div name="rangeMin">0.5x</div>
+                      <input type="range" id="camAwbR" class="local" min="512" max="3072" step="8" value="1024"
+                             title="1024 is 1.0x. Raise this against green to warm the frame">
+                      <div name="rangeMax">3x</div>
+                    </div>
+                    <div class="input-group" id="camAwbG-group">
+                      <label for="camAwbG">Green gain</label>
+                      <div name="rangeMin">0.5x</div>
+                      <input type="range" id="camAwbG" class="local" min="512" max="3072" step="8" value="1024"
+                             title="1024 is 1.0x. Lowering this is the direct cure for a green cast, and it darkens the frame - the AEC will put the brightness back">
+                      <div name="rangeMax">3x</div>
+                    </div>
+                    <div class="input-group" id="camAwbB-group">
+                      <label for="camAwbB">Blue gain</label>
+                      <div name="rangeMin">0.5x</div>
+                      <input type="range" id="camAwbB" class="local" min="512" max="3072" step="8" value="1024"
+                             title="1024 is 1.0x. Raise this and red together to pull green out of the frame">
+                      <div name="rangeMax">3x</div>
+                    </div>
+                    <!-- Manual AWB and AWB Mode are hidden, in the PAGE only: /control?awb_gain= and
+                         ?wb_mode= still reach the board for bench work, and hidden means isInert()
+                         stops the page itself ever sending them. Manual AWB has no registers of its
+                         own - the driver implements it as "re-apply the preset",
+                         set_wb_mode(enable ? wb_mode : 0) - and every preset measured FURTHER from
+                         neutral than auto on the star chart (§38.5, chart R/G: auto 0.915, Sunny
+                         0.758, Cloudy 0.836, Office 0.627, Home 0.472). The three sliders above do
+                         that job properly, by naming the channel they move. -->
+                    <div class="input-group hidden" id="awb_gain-group" style="display:none">
                       <label for="awb_gain" id="awbg_lab">AWB Gain</label>
                       <div class="switch">
                         <input id="awb_gain" type="checkbox" checked="checked">
                         <label class="slider" for="awb_gain"></label>
                       </div>
                     </div>
-                  <div class="input-group" id="wb_mode-group">
+                  <div class="input-group hidden" id="wb_mode-group" style="display:none">
                     <label for="wb_mode">AWB Mode</label>
                     <select id="wb_mode" class="selectField">
                       <option value="0" selected="selected">Auto</option>
@@ -1361,10 +1405,17 @@
                       <option value="4">Home</option>
                     </select>
                   </div>
+                    <!-- 0x5183[7]: bit SET = AWB simple, bit CLEAR = AWB advance. Nothing to do with
+                         downsizing, whatever the driver's name for it says; the label is rewritten for
+                         the sensor at load. Checked = advance, unchecked = simple, and simple is the
+                         default both here and in appConfig (dcw~0) - measured the more neutral of the
+                         two, chart R/G 0.965 / B/G 0.918 against advance's 0.882 / 0.882 (§38.5). It
+                         picks WHICH algorithm computes the gains, so it does nothing at all unless the
+                         ISP is computing them: gated on AWB on and Auto WB Gains on. -->
                     <div class="input-group" id="dcw-group">
                       <label for="dcw" id="dcw_lab">DCW (Downsize)</label>
                       <div class="switch">
-                        <input id="dcw" type="checkbox" checked="checked">
+                        <input id="dcw" type="checkbox">
                         <label class="slider" for="dcw"></label>
                       </div>
                     </div>
@@ -1994,6 +2045,8 @@
           else if (key == "spkrRem") { value = micOrSpkrState(key); value ? runSpkr(wsInd) : closeSpkr(wsInd); }
           // the long exposure panel sends the real control keys itself (its own are "local")
           else if (key.substring(0, 5) == "night" && key != "night-cb") { nightControl(key, value); return; }
+          // the camera panel's white balance gains are "local" the same way, and send awbGains
+          else if (key.substring(0, 6) == "camAwb") { camAwbControl(key, value); return; }
           else if (key == "camLive") { const nl = $('#nightLive'); if (nl) nl.innerHTML = value; }
           else if (key == "colorbar") setColorbarBanner(value);
           else if (key == "colorbar-off") {
@@ -2607,10 +2660,20 @@
         setGate('agc_gain', !on('agc'), "Gain needs AGC off - with the AGC on it is inert");
         setGate('gainceiling', on('agc'), "Gain Ceiling bounds the AEC's gain, so it does nothing while gain is manual");
         // With AWB off the ISP stops APPLYING the gains (0x5001 bit 0) - measured, the chart falls
-        // to 0.46 R/G and stays there - so neither the manual gains nor a preset can reach the
-        // picture. AWB Mode additionally needs the manual AWB gate on (A3).
-        setGate('awb_gain', on('awb'), "Manual AWB needs AWB on - with AWB off the ISP applies no gains at all");
-        setGate('wb_mode', on('awb') && on('awb_gain'), "AWB Mode needs AWB on and Manual AWB on");
+        // to 0.46 R/G and stays there - so nothing downstream of it can reach the picture. Manual AWB
+        // and AWB Mode are hidden now (see the markup), which makes them inert; the three gain
+        // sliders replace them and are gated the same way.
+        setGate('camAwbAuto', on('awb'), "Auto WB Gains needs AWB on - with AWB off the ISP applies no gains at all");
+        // Advanced AWB only picks which algorithm COMPUTES the gains, so it does nothing while the
+        // gains are manual or AWB is off
+        setGate('dcw', on('awb') && on('camAwbAuto'),
+          "Advanced AWB picks the algorithm that computes the gains - nothing to do while they are manual or AWB is off");
+        // the gains themselves: hidden while their automatic owns them, the long exposure panel's
+        // idiom, because a manual gain row with nothing to do is noise rather than reference
+        const awbManual = on('awb') && !on('camAwbAuto');
+        rowShown('camAwbR', awbManual);
+        rowShown('camAwbG', awbManual);
+        rowShown('camAwbB', awbManual);
         // UI_REVIEW C4: the firmware refuses Show Motion without a detector and pushes the state
         // back, so the checkbox used to flick off by itself. Gate it instead of letting the user
         // send something the board will reject
@@ -2647,10 +2710,11 @@
           const code = Number(nightInfo.vcm);
           if (code >= 0) $('#nightFocus').setAttribute('value', code);
           // seed the gain sliders from what the ISP actually converged on, so going manual starts
-          // from the current picture rather than from 1.0x
-          if (nightInfo.awbR > 0) $('#nightAwbR').setAttribute('value', nightInfo.awbR);
-          if (nightInfo.awbG > 0) $('#nightAwbG').setAttribute('value', nightInfo.awbG);
-          if (nightInfo.awbB > 0) $('#nightAwbB').setAttribute('value', nightInfo.awbB);
+          // from the current picture rather than from 1.0x. Both panels' sliders, off this one fetch
+          if (nightInfo.awbR > 0) $('#nightAwbR').value = nightInfo.awbR;
+          if (nightInfo.awbG > 0) $('#nightAwbG').value = nightInfo.awbG;
+          if (nightInfo.awbB > 0) $('#nightAwbB').value = nightInfo.awbB;
+          awbSync('night'); // copies the three values and the auto state into the camera panel
         } catch (e) {} // older firmware without the key - leave the panel at its defaults
       }
 
@@ -2681,31 +2745,73 @@
       // This panel HIDES a control its automatic owns, where the camera panel disables it in place
       // (UI_REVIEW C1). Deliberate, and the user's call: the camera panel is a reference sheet where
       // seeing every control matters, while this one is a short working set for a single task.
-      // Hidden also means isInert() will not send it, which is the behaviour wanted either way
-      function nightRow(id, shown) {
+      // Hidden also means isInert() will not send it, which is the behaviour wanted either way.
+      // The camera panel's white balance gains use this too - the user asked for the same rows there
+      function rowShown(id, shown) {
         const grp = $('#' + id + '-group');
         if (grp) shown ? show(grp) : hide(grp);
       }
 
+      /************ manual white balance, in both panels ************/
+      // The two panels drive the SAME registers - 0x3406 for who computes the gains, 0x3400-0x3405
+      // for the gains themselves - so a change made in one must not leave the other showing a state
+      // the sensor is not in. Every send goes through here, and the values are read off the elements
+      // rather than the range bubbles (a synthetic change event leaves the bubble stale, which cost a
+      // round of testing when the long exposure sliders were built)
+      const AWB_UI = { cam: ['camAwbR', 'camAwbG', 'camAwbB', 'camAwbAuto'],
+                       night: ['nightAwbR', 'nightAwbG', 'nightAwbB', 'nightAwb'] };
+
+      function awbSync(from) {
+        const src = AWB_UI[from], dst = AWB_UI[from == 'cam' ? 'night' : 'cam'];
+        for (let i = 0; i < 3; i++) {
+          const s = $('#' + src[i]), d = $('#' + dst[i]);
+          if (!s || !d) continue;
+          d.value = s.value;
+          // both bubbles, not just the copy: the source may have been seeded from the board rather
+          // than dragged, and the bubble is what the generic dispatcher would read
+          try { rangeSlider(s); rangeSlider(d); } catch (e) {}
+        }
+        const s = $('#' + src[3]), d = $('#' + dst[3]);
+        if (s && d) d.checked = s.checked;
+        applyCamGating();
+        nightGating();
+      }
+
+      // "<r>,<g>,<b>", 1024 = 1.0x each. Green is exposed like the other two on purpose: it is the
+      // ratio's reference channel, which is no help to someone looking at a green frame - lowering
+      // green is the direct cure, and the only one that does not also brighten the picture
+      function awbGainsSend(which) {
+        const ids = AWB_UI[which];
+        sendControl('awbGains', $('#' + ids[0]).value + ',' + $('#' + ids[1]).value + ',' + $('#' + ids[2]).value);
+        awbSync(which);
+      }
+
+      // NOT the awb key: that one stops the ISP applying gains at all and goes further green
+      function awbAutoSet(which, auto) {
+        auto ? sendControl('awbGainsAuto', 1) : awbGainsSend(which);
+        awbSync(which);
+      }
+
+      function camAwbControl(key, value) {
+        if (key == "camAwbAuto") awbAutoSet('cam', value);
+        else {
+          if ($('#camAwbAuto').checked) $('#camAwbAuto').checked = false; // adjusting IS going manual
+          awbGainsSend('cam');
+        }
+      }
+
       function nightGating() {
-        nightRow('nightExpSecs', !$('#nightAec').checked);   // manual exposure, only under manual AEC
-        nightRow('nightGain', !$('#nightAgc').checked);      // manual gain, only under manual AGC
+        rowShown('nightExpSecs', !$('#nightAec').checked);   // manual exposure, only under manual AEC
+        rowShown('nightGain', !$('#nightAgc').checked);      // manual gain, only under manual AGC
         const awbManual = !$('#nightAwb').checked;
-        nightRow('nightAwbR', awbManual);                     // the gains, only off auto white balance
-        nightRow('nightAwbG', awbManual);
-        nightRow('nightAwbB', awbManual);
-        nightRow('nightFocus', !$('#nightFocusAuto').checked); // the lens, only off autofocus
+        rowShown('nightAwbR', awbManual);                     // the gains, only off auto white balance
+        rowShown('nightAwbG', awbManual);
+        rowShown('nightAwbB', awbManual);
+        rowShown('nightFocus', !$('#nightFocusAuto').checked); // the lens, only off autofocus
         // manual exposure AND manual gain together is the combination with the black-frame quirk
         if (!$('#nightAec').checked && !$('#nightAgc').checked) $('#nightExpSecs').title =
           "Both loops manual: this is the mode where an exposure DEcrease has given a persistent "
           + "black frame. Leave gain automatic unless you need it.";
-      }
-
-      // All three channels, green included: the ISP applies the gains it is given, so lowering green
-      // is the direct cure for a green cast where raising the other two is the indirect one. Moving
-      // all three the same way only changes brightness, which the AEC then undoes
-      function nightAwbSend() {
-        sendControl('awbGains', $('#nightAwbR').value + ',' + $('#nightAwbG').value + ',' + $('#nightAwbB').value);
       }
 
       function nightControl(key, value) {
@@ -2725,16 +2831,12 @@
           const maxLines = Number(nightInfo.maxLines || 1964);
           sendControl('aec_value', Math.max(1, Math.round(maxLines * Number(value) / 100)));
         }
-        else if (key == "nightAwb") {
-          // NOT the awb key: that one stops the ISP applying gains at all and goes further green.
-          // This is 0x3406 - who computes the gains, the ISP or these sliders
-          value ? sendControl('awbGainsAuto', 1) : nightAwbSend();
-          nightGating();
-        }
+        // both AWB branches go through the shared helpers above, so the camera panel's three
+        // sliders and this panel's never disagree about what the sensor is doing
+        else if (key == "nightAwb") awbAutoSet('night', value);
         else if (key == "nightAwbR" || key == "nightAwbG" || key == "nightAwbB") {
           if ($('#nightAwb').checked) $('#nightAwb').checked = false; // adjusting IS going manual
-          nightAwbSend();
-          nightGating();
+          awbGainsSend('night');
         }
         else if (key == "nightFocusAuto") {
           // on = the sensor's own program, off = held where the slider says

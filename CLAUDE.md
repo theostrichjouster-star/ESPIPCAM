@@ -209,7 +209,20 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   **simple** AWB and bit 7 SET. **Simple is the default since 5 Sep 2026** on the user's decision -
   it measured the more neutral of the two on the star chart, R/G 0.965 and B/G 0.918 against
   advanced's 0.882 / 0.882 - changed in `appConfig` and persisted on both boards (`/status` dcw 0,
-  0x5183 = 0x94 on each). **Still owed: the same comparison in a dark room.**
+  0x5183 = 0x94 on each). **Still owed: the same comparison in a dark room.** The register write is a
+  clean read-modify-write of bit 7, checked either side of the toggle on 5 Sep 2026 (0x94 simple,
+  0x14 advance, every other bit intact), and as an "Advanced AWB" switch the toggle reads the right way
+  round: checked = advance. Only the config NAME is inverted. It is now gated on AWB being on AND the
+  gains being automatic, because choosing the algorithm that computes the gains does nothing when
+  nothing is computing them (§38.16)
+- **The camera panel's white balance is AWB Enable, Auto WB Gains, R/G/B, Advanced AWB** since §38.16.
+  **Manual AWB and AWB Mode are hidden in the page** (still reachable by `/control` for the bench):
+  Manual AWB has no registers of its own - the driver implements it as `set_wb_mode(enable ? wb_mode :
+  0)`, a re-apply button for the preset - and every preset measured FURTHER from neutral than auto
+  (§38.5). The three gain sliders drive `awbGains` / `awbGainsAuto`, the same as the long exposure
+  panel, and both panels' controls are synced through shared helpers because they write the same
+  registers. Two switches that look alike mean different things: **Enable is 0x5001[0]** (does the ISP
+  apply gains at all), **Auto WB Gains is 0x3406** (who computes them)
 - The colour bar is not in the block `set_framesize` reloads, so **0x503D survives a size change**
   and, being persistable, can boot a board into test bars (5 Sep 2026, §38.5).
 - The web page's state tests must go through `isOn()`: `/status` sends every value as a STRING and

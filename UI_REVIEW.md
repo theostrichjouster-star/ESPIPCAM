@@ -248,13 +248,22 @@ Proposal: rename to "AWB algorithm: simple / advanced", move it into the AWB gro
 **The default is now simple** (user's decision, 5 Sep 2026): `appConfig` carries `dcw~0` and both
 boards were set live and saved, register-verified at 0x5183 = 0x94 (bit 7 set, which the datasheet
 defines as simple; the driver's flag is inverted, so `dcw=0` means simple). **The dark-room
-comparison is still owed.** That makes the rename more urgent, not less: the page now shows a
-control labelled "DCW (Downsize)" sitting off, which reads as a downsizing feature being disabled
-rather than as simple white balance being chosen. The rename itself is still C3, not done here.
+comparison is still owed.**
+
+~~That makes the rename more urgent, not less: the page now shows a control labelled "DCW
+(Downsize)" sitting off.~~ **Wrong, and it is the static-markup error again**: on this sensor the
+runtime label is "Advanced AWB", checked off, which reads correctly. Verified on the board.
 
 While there: the AWB checkbox is not a hold. With `awb=0` the gain registers keep their converged
 values yet the chart collapses to 0.46 R/G, because clearing 0x5001 bit 0 stops the ISP applying
 them. Label it "AWB (off = raw colour)" or similar, because "off" today reads as "freeze".
+
+**Settled 5 Sep 2026** (§38.16, at the user's direction): Manual AWB and AWB Mode are hidden in the
+page, since Manual AWB has no registers of its own and every preset measured further from neutral
+than auto. Advanced AWB stays, with the static `checked` removed so the page's own default is simple,
+and gated on AWB being on and the gains being automatic. Its write was checked either side of the
+toggle rather than assumed: 0x5183 reads 0x94 simple and 0x14 advance, so the driver moves bit 7
+alone. In their place the camera panel gained the three gain sliders described below.
 
 ### C4. Show Motion is offered while motion detection is off
 
@@ -428,6 +437,14 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
   meantime. Entering now seeds q28, the top of the range that walk settles at, whenever the gain the
   AEC held at entry says the scene is dark, and the configured quality comes back on exit. Measured:
   first frame clean, luma 91-132, one further rescue step in 45 s of streaming.
+
+- **The camera panel got the same three gain sliders** (§38.16, page only). Red, green and blue under
+  the AWB Enable switch, gated by an **Auto WB Gains** toggle that hides them while the ISP owns the
+  gains, driving the same `awbGains` and `awbGainsAuto`. The toggle is named that way rather than the
+  night panel's "Auto white balance" because it sits under a switch called AWB Enable and the two are
+  different registers: Enable is 0x5001[0], whether gains are applied at all, this one is 0x3406, who
+  computes them. Both panels now share the send helpers, so neither can show a state the sensor is not
+  in, and both seed from the one status fetch on load.
 
 Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
 comparison from C3 is still outstanding.
