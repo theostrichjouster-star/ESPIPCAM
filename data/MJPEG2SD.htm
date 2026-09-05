@@ -1895,8 +1895,26 @@
             changeRange('saturation', "-4", "4", "0");
             changeRange('sharpness', "-3", "3", "0");
             changeRange('ae_level', "-5", "5", "0");
-            changeRange('gainceiling', "0", "511", "0");
+            // UI_REVIEW B1: the range is already the driver's, so the gap was the meaning. Measured
+            // 5 Sep 2026 at HD 30 (BOARD_TESTING §38.5): -5 gave luma 15.5 with the colour collapsing,
+            // +5 gave luma 187 with the AEC paying in 14x gain. It biases the AEC's target, it is not
+            // a brightness control, and the persisted default here is -2
+            $('#ae_level').title = "Biases the AEC's target, not the picture directly. Measured on this "
+              + "sensor: -5 is effectively unusable (very dark, colour collapses), +5 is blown and paid "
+              + "for in gain. -2 is this board's default.";
+            // UI_REVIEW B3: the ceiling is a raw 10-bit register, and 511 (32x) was HALF the range -
+            // both boards persist 1023, the datasheet's 64x, so the slider could not show the board's
+            // own value and reported 511 for a board at 1023. The multiplier is (value + 1) / 16,
+            // which is not changeRange's isX formula, so the end labels are set explicitly
+            changeRange('gainceiling', "0", cameraModel == "OV5640" ? "1023" : "511", "0");
+            $('#gainceiling').parentElement.children.rangeMin.innerHTML = '1x';
+            $('#gainceiling').parentElement.children.rangeMax.innerHTML = (cameraModel == "OV5640") ? '64x' : '32x';
+            $('#gainceiling').title = "Ceiling the AEC may raise gain to: (value + 1) / 16 x, so 1023 is "
+              + "64x. It only acts in low light - measured identical frames at 0, 511 and 1023 in a lit "
+              + "room, because the AEC never approaches the ceiling at a short frame.";
             changeRange('agc_gain', "0", "63", "5", true);
+            $('#agc_gain').title = "Manual gain, roughly this many times. 0 and 1 are both 1x on this "
+              + "sensor; the top of the range is washed out.";
             // show additional options
             $$('div.OV3660, div.OV5640, div.ALLOV').forEach(el => {show(el)});
             $$('#framesize option').forEach(el => {

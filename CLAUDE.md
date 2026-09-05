@@ -190,6 +190,14 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   0x5183 = 0x94 on each). **Still owed: the same comparison in a dark room.**
 - The colour bar is not in the block `set_framesize` reloads, so **0x503D survives a size change**
   and, being persistable, can boot a board into test bars (5 Sep 2026, §38.5).
+- **In `data/MJPEG2SD.htm` the static markup is OV2640's - read the sensor branch, never the HTML.**
+  On load the page re-ranges every slider for the detected model (`changeRange` in the
+  `OV3660 || OV5640` branch) and relabels `aec2` to "Night Mode", `awb_gain` to "Manual AWB" and
+  `dcw` to "Advanced AWB". Reading the markup alone produced two wrong findings and a wrong
+  mislabel claim (5 Sep 2026, §38.7). Live for the OV5640: `ae_level` -5..5, `agc_gain` 0..63 with
+  1x/64x ends, `aec_value` 0..the live `aecMax`, `gainceiling` 0..1023 since that day (it was 511,
+  half the range, so a board at 1023 displayed as 511). A page claim is only true if read off a
+  board.
 - The gain ceiling is `gainceiling~1023` (63.9x, the datasheet's 64x) since 4 Sep 2026,
   persisted on both boards by `save=1`; 511 (31.94x) was a repair value from eb61cf1, not a
   limit. Gain-seconds figures measured before 15:52 that day were under the 511 ceiling.
@@ -229,8 +237,9 @@ shows up only on the NEXT boot as a refused camera frame buffer.
 
 - `BATTERY.md` - battery deployment guide (committed)
 - `UI_REVIEW.md` - the web UI's camera controls: what the 5 Sep regression found and the ranked
-  proposals, each citing its measurement (committed). **Nothing in it is implemented** - the user
-  picks. After any UI change, `DRY=1` on `ui_regress.sh` is the smoke test, the full run the gate
+  proposals, each citing its measurement (committed). A1-A4 and B3 are done and deployed, B1/B2 and
+  part of C3 are retracted in place, C and D are open and the user picks. After any UI change,
+  `DRY=1` on `ui_regress.sh` is the smoke test, the full run the gate
 - `tools/core/README.md` - custom arduino-esp32 core: why, how to build, the four
   version pins, the sdkconfig gate, and candidate future config changes (committed)
 - `tools/bench/README.md` - how to run the sweep campaigns and the rules they enforce

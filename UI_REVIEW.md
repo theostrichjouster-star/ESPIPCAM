@@ -16,14 +16,21 @@ Each item is a proposal with its evidence, for the user to pick from. Numbering 
 within each group. After any UI change, `DRY=1` on the regression is the smoke test and the full run
 is the gate.
 
-**Status, 5 Sep 2026: A1-A4 are implemented and verified in a browser; B and C are not started, on
-the user's instruction to pause before B1.** The AWB algorithm decision is also taken: **simple**
-(`dcw=0`), changed in `appConfig` and persisted on both boards, register-verified (0x5183 = 0x94,
-bit 7 set = simple per the datasheet). The dark-room comparison is still owed. Two pieces of A4
-remain, both firmware rather than page: never persisting `colorbar` and clearing it at boot.
+**Status, 5 Sep 2026: A1-A4 and B1-B3 are done and deployed to both boards; C and D are not started,
+on the user's instruction to pause before C1.** Of the B items only **B3 was a real defect** - B1 and
+B2 are retracted, because I had read the static markup, which carries the OV2640 ranges, where the
+page re-ranges every slider for the detected sensor on load. Part of C3 falls to the same error. Both
+retractions are written up in place rather than deleted, and the measurements behind them survive as
+tooltips on the controls.
 
-The page files are **committed but not deployed** - `data/MJPEG2SD.htm` and `data/common.js` reach a
-board through the `startOTA` gate, which needs the user's go.
+The AWB algorithm decision is taken: **simple** (`dcw=0`), changed in `appConfig` and persisted on
+both boards, register-verified (0x5183 = 0x94, bit 7 set = simple per the datasheet). The dark-room
+comparison is still owed. Two pieces of A4 remain, both firmware rather than page: never persisting
+`colorbar` and clearing it at boot.
+
+The page files are deployed to both boards through the `startOTA` gate and served byte-exact.
+Firmware is **not** flashed: the `appConfig` default change reaches a board only on the next flash,
+which is why both boards were also set live and saved.
 
 How A1-A4 were verified: the page was served from a local stub whose `/status` returned the state
 that makes each defect visible (AEC manual, AGC manual, AWB gain off, colour bar on), every value a
@@ -50,13 +57,13 @@ panels are not treated as inert, and normal controls still send.
 | A1 | Fix the string-truthiness state tests | bug | the page shows the wrong controls after every load |
 | A2 | Confirm before Clear NVS | bug | one click wipes wifi credentials and a calibration |
 | A3 | Stop hidden controls from writing | bug | a hidden select still moved the AWB gains |
-| A4 | Do not persist the colour bar, clear it on load | bug | a board can boot showing test bars |
-| B1 | `ae_level` -5..+5 | range | slider floor is the persisted default; driver takes -5..+5 |
-| B2 | `agc_gain` 0..63, labelled in x | range | slider covers less than half the driver's range |
-| B3 | `gainceiling` in the firmware's units | range | a board value of 1023 cannot be shown at all |
+| A4 | Banner while the colour bar is on | bug | a board can boot showing test bars |
+| B1 | ~~`ae_level` -5..+5~~ RETRACTED, tooltip added | range | already -5..+5 at runtime; I read the OV2640 markup |
+| B2 | ~~`agc_gain` 0..63~~ RETRACTED, tooltip added | range | already 0..63 with 1x-64x labels at runtime |
+| B3 | `gainceiling` to the firmware's 1023 | range | **a board at 1023 rendered as 511** - wrong by 2x |
 | C1 | Disable manual controls under the automatics | layout | all three measured inert under auto |
 | C2 | Show what the automatics are doing | layout | exposure, gain and live quality are invisible |
-| C3 | Rename and re-home the AWB algorithm toggle | layout | mislabelled, and it is the better-looking setting |
+| C3 | Re-home the AWB algorithm toggle | layout | label is already right; the switch reads as a feature, not a choice |
 | C4 | Gate Show Motion on motion detection | layout | firmware refuses it and warns |
 | C5 | Group the low-light-only controls | layout | two controls do nothing by daylight |
 | D1 | Regroup the camera panel | layout | current order mixes picture, exposure and diagnostics |
@@ -135,10 +142,15 @@ which are firmware changes needing a build and a flash. The page deliberately do
 
 ## B. Ranges the page cannot express
 
-### B1. `ae_level` is -2..2 in the page, -5..+5 in the driver
+### B1. RETRACTED as a range bug - `ae_level` is already -5..+5 on this sensor
 
-The persisted default is -2, which is the **slider's minimum**, so the board's normal setting
-renders as "turned all the way down". The driver accepts -5..+5, and both extremes work:
+**I got this wrong, and B2 and part of C3 with it.** The claim came from the static HTML, which
+carries the OV2640 values; on load the page re-ranges every slider for the detected sensor
+(`cameraModel == "OV3660" || cameraModel == "OV5640"` branch). Verified on the board 5 Sep 2026: the
+Exposure Level slider is **-5..+5 showing -2**, so the range and the round-trip were never broken.
+
+What was actually missing is the meaning, and that is now in the control's tooltip: it biases the
+AEC's target rather than the picture, and its extremes are unusable. Measured at HD 30:
 
 | value | exposure | gain | luma | note |
 |---|---|---|---|---|
@@ -147,28 +159,39 @@ renders as "turned all the way down". The driver accepts -5..+5, and both extrem
 
 This is the strongest exposure lever the page exposes and the least explained.
 
-Proposal: widen to -5..+5 with the units in the label (it biases the AEC's target), or keep -2..+2
-deliberately and say so in the title text. Either way the default must not sit on an endpoint.
+**Done 5 Sep 2026**: a tooltip stating what it biases and what its extremes cost. No range change,
+because none was needed.
 
-### B2. `agc_gain` is 0..30 in the page, 0..63 in the driver
+### B2. RETRACTED - `agc_gain` is already 0..63 with 1x..64x labels
 
-Measured at HD 30 with AGC off: 0 gives register 0 and luma 59.0; **1 gives 15 and luma 59.3**, so
-0 and 1 are the same 1x gain; 30 gives 479 and luma 212.6; 63 gives 1007 and luma 230.0, washed
-out. The earlier worry that 0 means a black frame is wrong - the floor is 1x.
+Same mistake as B1: the 0..30 in the markup is the OV2640 branch. On the board the slider is
+**0..63** and `changeRange`'s `isX` flag already prints `1x` and `64x` at its ends.
 
-Proposal: 0..63 with the label showing the multiplier (1x..64x) and the slider's own value in
-`n+1` terms, since the register is `n*16-1`.
+The measurement stands and is worth knowing, so it is now in the control's tooltip: at HD 30 with
+AGC off, 0 gives register 0 and luma 59.0 while **1 gives 15 and luma 59.3** - the same 1x gain - 30
+gives 479 and luma 212.6, and 63 gives 1007 and luma 230.0, washed out. The earlier worry that 0
+means a black frame is wrong; the floor is 1x.
 
-### B3. `gainceiling` cannot show the value the boards carry
+**Done 5 Sep 2026**: tooltip only.
 
-The page's slider is an index 0..6. Both boards persist `gainceiling` 1023 (the datasheet's 64x,
-set 4 Sep 2026), which that slider cannot represent, so the control lies about the board's state.
+### B3. `gainceiling` could not show the value the boards carry - CONFIRMED and fixed
 
-Also measured: 0, 511 and 1023 all produced luma 105.7 and gain 40/16 at HD 30, because the AEC
-never approaches the ceiling at a 32 ms frame. The control is inert by daylight (see C5).
+The one real item of the three. The runtime range for this sensor was **0..511**, i.e. 32x, while
+both boards persist 1023 (the datasheet's 64x, set 4 Sep 2026). A board at 1023 therefore rendered as
+**511** on the slider: not merely unrepresentable, actively wrong by a factor of two, and any drag of
+that slider would have halved the board's ceiling.
 
-Proposal: make it the firmware's own units (raw 0..1023, or a labelled multiplier list whose
-values are the raw numbers), so `/status` round-trips.
+Also measured: 0, 511 and 1023 all produced luma 105.7 and gain 40/16 at HD 30, because the AEC never
+approaches the ceiling at a 32 ms frame. The control is inert by daylight (see C5).
+
+**Done 5 Sep 2026**: the range is 0..1023 for the OV5640 (OV3660 keeps 511, whose ceiling this bench
+has not measured), the end labels read `1x` and `64x`, and a tooltip gives the conversion,
+`(value + 1) / 16` x, and says it only acts in low light. Verified against the board: the slider spans
+0..1023, shows 1023, and round-trips `/status`.
+
+**The lesson for the rest of this document**: read the sensor branch, not the markup. Static HTML in
+this page is OV2640's and is overwritten on load for anything the OV5640 branch touches - ranges and
+the `aec2`, `awb_gain` and `dcw` labels among them.
 
 ---
 
@@ -198,10 +221,17 @@ question, and they are already in `/status` and `updateFPS`.
 Proposal: a read-only line under the exposure group - exposure in lines and ms, gain as a
 multiplier, the sensor's live quality when it differs from the config, and the AWB gains.
 
-### C3. The AWB algorithm toggle is mislabelled, and it is the better-looking setting
+### C3. The AWB algorithm toggle reads "Advanced AWB" - correct, but its sense is easy to misread
 
-`dcw` is labelled "DCW (Downsize)" but it writes 0x5183[7], which selects simple against advanced
-AWB. Measured on the star chart at QSXGA:
+**Correction, 5 Sep 2026**: the "DCW (Downsize)" label I reported is the OV2640 branch. On this
+sensor the page already relabels it **"Advanced AWB"** (and `aec2` to "Night Mode", `awb_gain` to
+"Manual AWB"), which is accurate. The rename is therefore mostly unnecessary; what remains is that
+the control is a two-way choice presented as a switch, so "off" reads as a feature disabled rather
+than as simple white balance selected - and simple is now the default, so the page shows the chosen
+algorithm as an unchecked box.
+
+`dcw` writes 0x5183[7], which selects simple against advanced AWB. Measured on the star chart at
+QSXGA:
 
 | state | chart R/G | chart B/G |
 |---|---|---|
