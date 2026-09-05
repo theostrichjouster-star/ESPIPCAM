@@ -126,7 +126,13 @@ static bool prepSD_MMC() {
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
 #endif
   
-  res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
+  // maxOpenFiles 15, not the core's default of 5. Five is the whole board's budget: the SD log
+  // holds one permanently, a recording holds its AVI plus the ancillary CSV and SRT, and an
+  // aborted browser transfer leaves another behind. COM4 crossed it twice on 5 Sep 2026 and
+  // every open in /data then failed - reads and writes, any file - until a remount, while the
+  // next boot's listing showed the files present and intact (BOARD_TESTING §38.8). This raises
+  // the ceiling; it does not fix a leak, and the leak audit is still owed
+  res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq, 15);
   if (res) {
     STORAGE.mkdir(DATA_DIR);
     infoSD();

@@ -923,7 +923,7 @@ brightness~0~98~~na
 colorbar~0~98~~na
 contrast~0~98~~na
 dcw~0~98~~na
-enableMotion~1~98~~na
+enableMotion~0~98~~na
 fps~20~98~~na
 framesize~10~98~~na
 gainceiling~1023~98~~na
@@ -934,7 +934,7 @@ micGain~5~98~~na
 motionVal~8~98~~na
 quality~12~98~~na
 raw_gma~1~98~~na
-record~1~98~~na
+record~0~98~~na
 saturation~0~98~~na
 sharpness~0~98~~na
 denoise~0~98~~na
