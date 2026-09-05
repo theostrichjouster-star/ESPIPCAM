@@ -223,6 +223,13 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   panel, and both panels' controls are synced through shared helpers because they write the same
   registers. Two switches that look alike mean different things: **Enable is 0x5001[0]** (does the ISP
   apply gains at all), **Auto WB Gains is 0x3406** (who computes them)
+- **The Focus section lives in both panels** since §38.17 (Autofocus plus Lens position, under
+  Microphone Gain in the camera panel), sending `afAuto` / `afManual` through the same shared helpers,
+  lens slider hidden while the AF program owns the lens. Copying it turned up a nesting bug in the
+  night panel - the lens row was inside the autofocus row's `input-group`, the parent's `</div>`
+  missing - which rendered acceptably and so survived three stub passes and a deployment. **When a row
+  is added next to another, read the new row's parent id back out of the DOM**; a nested group is
+  invisible until something hides the parent and takes its child with it
 - The colour bar is not in the block `set_framesize` reloads, so **0x503D survives a size change**
   and, being persistable, can boot a board into test bars (5 Sep 2026, §38.5).
 - The web page's state tests must go through `isOn()`: `/status` sends every value as a STRING and

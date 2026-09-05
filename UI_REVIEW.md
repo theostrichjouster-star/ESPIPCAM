@@ -446,5 +446,12 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
   computes them. Both panels now share the send helpers, so neither can show a state the sensor is not
   in, and both seed from the one status fetch on load.
 
+- **The Focus section is in both panels** (§38.17, page only): Autofocus and Lens position under
+  Microphone Gain in the camera panel, the slider hidden while the AF program owns the lens, both
+  panels sharing the send helpers so neither shows a position the lens is not holding. Copying it
+  exposed a nesting bug in the night panel, where the lens row sat inside the autofocus row's group
+  because a closing tag was missing. It rendered acceptably, which is why three stub passes and a
+  deployment missed it; the fix is verified by reading each row's parent id out of the DOM.
+
 Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
 comparison from C3 is still outstanding.

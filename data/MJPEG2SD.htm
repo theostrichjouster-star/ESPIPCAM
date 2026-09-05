@@ -1105,6 +1105,28 @@
                     <label for="micGain">Microphone Gain</label>
                     <input title="Set microphone gain (3 is unity, 0 turns audio off)" type="range" id="micGain" min="0" max="10" value="5">
                   </div>
+                  <!-- The long exposure panel's Focus section, here too at the user's request. Same
+                       two controls, same rows: the lens slider is hidden while the sensor's own AF
+                       program owns the lens, because placing it by hand IS taking it off autofocus.
+                       They send afAuto / afManual, which stop the AF MCU (0x3000 bit 5) and write the
+                       VCM DAC through 0x3603 / 0x3602 with a read-back. Both panels share the send
+                       helpers, so neither can show a lens position the sensor is not holding -->
+                  <div class="input-group group-head"><label>Focus</label></div>
+                  <div class="input-group" id="camFocusAuto-group">
+                    <label for="camFocusAuto">Autofocus</label>
+                    <div class="switch">
+                      <input id="camFocusAuto" class="local" type="checkbox" checked="checked"
+                             title="On leaves focus to the sensor's own program - which cannot focus in the dark, and parks the lens wherever it gives up. Off holds the lens where the slider says">
+                      <label class="slider" for="camFocusAuto"></label>
+                    </div>
+                  </div>
+                  <div class="input-group" id="camFocus-group">
+                    <label for="camFocus">Lens position</label>
+                    <div name="rangeMin">near</div>
+                    <input type="range" id="camFocus" class="local" min="0" max="1023" step="1" value="171"
+                           title="Sets the VCM lens position directly and holds it there until autofocus is switched back on">
+                    <div name="rangeMax">far</div>
+                  </div>
                 </div>
               </nav>
               <!-- Long exposure (UI_REVIEW part 2). The frame is stretched by the LINE, not by VTS:
@@ -1220,13 +1242,13 @@
                              title="On leaves focus to the sensor's own program - which cannot focus in the dark, and parks the lens wherever it gives up. Off holds the lens at the position above">
                       <label class="slider" for="nightFocusAuto"></label>
                     </div>
+                  </div>
                   <div class="input-group" id="nightFocus-group">
                     <label for="nightFocus">Lens position</label>
                     <div name="rangeMin">near</div>
                     <input type="range" id="nightFocus" class="local" min="0" max="1023" step="1" value="171"
                            title="Sets the VCM lens position directly and holds it. The autofocus cannot focus in the dark - it parks wherever it gives up - so a long exposure needs the lens placed by hand">
                     <div name="rangeMax">far</div>
-                  </div>
                   </div>
 
                 </div>
@@ -2047,6 +2069,7 @@
           else if (key.substring(0, 5) == "night" && key != "night-cb") { nightControl(key, value); return; }
           // the camera panel's white balance gains are "local" the same way, and send awbGains
           else if (key.substring(0, 6) == "camAwb") { camAwbControl(key, value); return; }
+          else if (key.substring(0, 8) == "camFocus") { camFocusControl(key, value); return; }
           else if (key == "camLive") { const nl = $('#nightLive'); if (nl) nl.innerHTML = value; }
           else if (key == "colorbar") setColorbarBanner(value);
           else if (key == "colorbar-off") {
@@ -2668,6 +2691,8 @@
         // gains are manual or AWB is off
         setGate('dcw', on('awb') && on('camAwbAuto'),
           "Advanced AWB picks the algorithm that computes the gains - nothing to do while they are manual or AWB is off");
+        // the lens: same rule, hidden while the sensor's AF program owns it
+        rowShown('camFocus', !on('camFocusAuto'));
         // the gains themselves: hidden while their automatic owns them, the long exposure panel's
         // idiom, because a manual gain row with nothing to do is noise rather than reference
         const awbManual = on('awb') && !on('camAwbAuto');
@@ -2708,7 +2733,7 @@
           $('#nightAwb').checked = !nightInfo.awbManual;
           nightShow(); // render and gate FIRST - a throw below must not leave the panel blank
           const code = Number(nightInfo.vcm);
-          if (code >= 0) $('#nightFocus').setAttribute('value', code);
+          if (code >= 0) { $('#nightFocus').value = code; focusSync('night'); } // both panels
           // seed the gain sliders from what the ISP actually converged on, so going manual starts
           // from the current picture rather than from 1.0x. Both panels' sliders, off this one fetch
           if (nightInfo.awbR > 0) $('#nightAwbR').value = nightInfo.awbR;
@@ -2738,7 +2763,7 @@
           $('#nightSecs').parentElement.children.rangeMin.innerHTML = (i.minMs / 1000).toFixed(2) + 's';
           $('#nightSecs').parentElement.children.rangeMax.innerHTML = (i.maxMs / 1000).toFixed(2) + 's';
         }
-        if (i.vcm >= 0) { $('#nightFocus').value = i.vcm; try { rangeSlider($('#nightFocus')); } catch (e) {} }
+        if (i.vcm >= 0) { $('#nightFocus').value = i.vcm; focusSync('night'); }
         nightGating();
       }
 
@@ -2800,6 +2825,38 @@
         }
       }
 
+      /************ focus, in both panels ************/
+      // One lens, two panels. afManual stops the sensor's AF program and writes the VCM DAC; afAuto
+      // restarts it. Same shape as the white balance helpers above and for the same reason: whichever
+      // panel the user is looking at has to show the position the lens is actually holding
+      const FOCUS_UI = { cam: ['camFocus', 'camFocusAuto'], night: ['nightFocus', 'nightFocusAuto'] };
+
+      function focusSync(from) {
+        const src = FOCUS_UI[from], dst = FOCUS_UI[from == 'cam' ? 'night' : 'cam'];
+        const s = $('#' + src[0]), d = $('#' + dst[0]);
+        if (s && d) { d.value = s.value; try { rangeSlider(s); rangeSlider(d); } catch (e) {} }
+        const sa = $('#' + src[1]), da = $('#' + dst[1]);
+        if (sa && da) da.checked = sa.checked;
+        applyCamGating();
+        nightGating();
+      }
+
+      // on = the sensor's own program, off = held where the slider says
+      function focusSet(which, auto) {
+        const ids = FOCUS_UI[which];
+        auto ? sendControl('afAuto', 1) : sendControl('afManual', $('#' + ids[0]).value);
+        focusSync(which);
+      }
+
+      function camFocusControl(key, value) {
+        if (key == "camFocusAuto") focusSet('cam', value);
+        else {
+          // placing the lens IS taking it off autofocus - the program would move it straight back
+          if ($('#camFocusAuto').checked) $('#camFocusAuto').checked = false;
+          focusSet('cam', false);
+        }
+      }
+
       function nightGating() {
         rowShown('nightExpSecs', !$('#nightAec').checked);   // manual exposure, only under manual AEC
         rowShown('nightGain', !$('#nightAgc').checked);      // manual gain, only under manual AGC
@@ -2838,16 +2895,13 @@
           if ($('#nightAwb').checked) $('#nightAwb').checked = false; // adjusting IS going manual
           awbGainsSend('night');
         }
-        else if (key == "nightFocusAuto") {
-          // on = the sensor's own program, off = held where the slider says
-          value ? sendControl('afAuto', 1) : sendControl('afManual', $('#nightFocus').value);
-          nightGating();
-        }
+        // both focus branches go through the shared helpers, so the camera panel's copy of this
+        // section and this one never disagree about where the lens is
+        else if (key == "nightFocusAuto") focusSet('night', value);
         else if (key == "nightFocus") {
           // placing the lens IS taking it off autofocus - the program would move it straight back
           if ($('#nightFocusAuto').checked) $('#nightFocusAuto').checked = false;
-          sendControl('afManual', value);
-          nightGating();
+          focusSet('night', false);
         }
       }
 
