@@ -1138,14 +1138,14 @@
                     </select>
                   </div>
                   <div class="input-group" id="nightSecs-group">
-                    <label for="nightSecs">Seconds per frame</label>
+                    <label for="nightSecs">Exposure time</label>
                     <div name="rangeMin">-</div>
                     <input type="range" id="nightSecs" class="local" min="850" max="3180" step="10" value="1000"
                            title="The frame period. The exposure ceiling follows it, because VTS is held at the AEC engine's cap">
                     <div name="rangeMax">-</div>
                   </div>
                   <div class="input-group" id="nightOn-group">
-                    <label for="nightOn">Long exposure</label>
+                    <label for="nightOn">Enable long exposure</label>
                     <div class="switch">
                       <input id="nightOn" class="local" type="checkbox"
                              title="On programs the frame above and holds the sensor there. Off hands the sensor back - size, rate, idle throttle, microphone and the lens all return to where they were">
@@ -1184,13 +1184,6 @@
                   </div>
 
                   <div class="input-group group-head"><label>Focus</label></div>
-                  <div class="input-group" id="nightFocus-group">
-                    <label for="nightFocus">Lens position</label>
-                    <div name="rangeMin">near</div>
-                    <input type="range" id="nightFocus" class="local" min="0" max="1023" step="1" value="171"
-                           title="Sets the VCM lens position directly and holds it. The autofocus cannot focus in the dark - it parks wherever it gives up - so a long exposure needs the lens placed by hand">
-                    <div name="rangeMax">far</div>
-                  </div>
                   <div class="input-group" id="nightFocusAuto-group">
                     <label for="nightFocusAuto">Autofocus</label>
                     <div class="switch">
@@ -1198,6 +1191,13 @@
                              title="On leaves focus to the sensor's own program - which cannot focus in the dark, and parks the lens wherever it gives up. Off holds the lens at the position above">
                       <label class="slider" for="nightFocusAuto"></label>
                     </div>
+                  <div class="input-group" id="nightFocus-group">
+                    <label for="nightFocus">Lens position</label>
+                    <div name="rangeMin">near</div>
+                    <input type="range" id="nightFocus" class="local" min="0" max="1023" step="1" value="171"
+                           title="Sets the VCM lens position directly and holds it. The autofocus cannot focus in the dark - it parks wherever it gives up - so a long exposure needs the lens placed by hand">
+                    <div name="rangeMax">far</div>
+                  </div>
                   </div>
 
                 </div>
@@ -2622,7 +2622,7 @@
       function nightShow() {
         const i = nightInfo;
         if (!$('#nightOn').checked) {
-          $('#nightState').innerHTML = 'off - set a size and a time, then switch Long exposure on';
+          $('#nightState').innerHTML = 'off - set a size and an exposure time, then enable long exposure';
           nightGating();
           return;
         }
@@ -2643,14 +2643,19 @@
         nightGating();
       }
 
+      // This panel HIDES a control its automatic owns, where the camera panel disables it in place
+      // (UI_REVIEW C1). Deliberate, and the user's call: the camera panel is a reference sheet where
+      // seeing every control matters, while this one is a short working set for a single task.
+      // Hidden also means isInert() will not send it, which is the behaviour wanted either way
+      function nightRow(id, shown) {
+        const grp = $('#' + id + '-group');
+        if (grp) shown ? show(grp) : hide(grp);
+      }
+
       function nightGating() {
-        // same rule as the camera panel: a control its automatic owns is shown inert, with why
-        setGate('nightExpSecs', !$('#nightAec').checked,
-          "Manual exposure needs auto exposure off - with the AEC on it is inert");
-        setGate('nightGain', !$('#nightAgc').checked,
-          "Manual gain needs auto gain off - with the AGC on it is inert");
-        setGate('nightFocus', !$('#nightFocusAuto').checked,
-          "Lens position needs Autofocus off - the AF program moves the lens straight back");
+        nightRow('nightExpSecs', !$('#nightAec').checked);   // manual exposure, only under manual AEC
+        nightRow('nightGain', !$('#nightAgc').checked);      // manual gain, only under manual AGC
+        nightRow('nightFocus', !$('#nightFocusAuto').checked); // the lens, only off autofocus
         // manual exposure AND manual gain together is the combination with the black-frame quirk
         if (!$('#nightAec').checked && !$('#nightAgc').checked) $('#nightExpSecs').title =
           "Both loops manual: this is the mode where an exposure DEcrease has given a persistent "
