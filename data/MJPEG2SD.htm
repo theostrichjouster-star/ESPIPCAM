@@ -1141,6 +1141,12 @@
         .sep-item, .ind-item {
           display: none !important;
         }
+        /* Edit Config is the only other page a phone can reach, and openTab() has already hidden
+           the toolbar there - so the card would carry one button that re-opens the page you are on.
+           Set by openTab() in common.js; the app header is the way back to the camera */
+        body.away-from-camera .tab {
+          display: none;
+        }
 
         .tab button, nav#maintoolbar button, .quick-nav {
           box-sizing: border-box;

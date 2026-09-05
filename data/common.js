@@ -253,6 +253,11 @@
             if (e.name == 'mainPage') show($('#main'));
             else hide($('#main'));
           } catch {}
+          // On a phone the tab row is the "Device Controls" card. Away from the camera page the
+          // toolbar is hidden above, so the card would be left holding a single button that
+          // re-opens the page you are already on. The phone stylesheet hides it on this class;
+          // the app header is the way back. No effect on desktop or on the other pages.
+          document.body.classList.toggle('away-from-camera', e.name != 'mainPage');
         }
 
         function accordian(accId) {
