@@ -380,6 +380,12 @@ markup, not markup to clean.
 tooltip says what it actually drives: the tuner derives the whole PLL tree, the line and frame
 timing and every exposure limit from it.
 
+**Superseded 5 Sep 2026, user's decision: the clock control is hidden entirely.** It is not a user
+setting - XCLK stays at 20 MHz on these boards - so the group carries `hidden` and `display:none`.
+Hidden in the PAGE only: `/control?xclkMhz=` still reaches the board, which is what the bench's clock
+work uses. A side effect worth having: being hidden, `isInert()` (A3) stops the page itself from ever
+sending it, verified in the stub and on the board.
+
 **One regression, caught before it shipped.** Turning those markers into classes broke
 `hideBuiltOut`, whose id-based selector then matched nothing, so sections for compiled-out modules
 silently reappeared. The stub caught it (the FTP and SMTP groups stayed visible with `builtOut`

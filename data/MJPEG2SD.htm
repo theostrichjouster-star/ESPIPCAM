@@ -1284,7 +1284,13 @@
                         <label class="slider" for="colorbar"></label>
                       </div>
                     </div>
-                  <div class="input-group" id="xclk-group">
+                  <!-- The sensor clock is not a user setting: it stays at 20 MHz on these boards, and
+                       the tuner derives the whole PLL tree, HTS/VTS and every exposure limit from it, so
+                       a wrong value here is not a picture problem - it is every timing on the sensor.
+                       Hidden rather than removed, and hidden in the PAGE only: /control?xclkMhz= still
+                       reaches the board, which is what the bench's clock work uses. Being hidden also
+                       means isInert() stops the page itself from ever sending it. -->
+                  <div class="input-group hidden" id="xclk-group" style="display:none">
                       <label for="xclkMhz">Clock MHz</label>
                       <div class="text">
                           <input id="xclkMhz" title="Set camera clock speed in MHz" type="number" minlength="1" maxlength="2" size="2" value="20">
