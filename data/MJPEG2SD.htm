@@ -1144,10 +1144,13 @@
                            title="The frame period. The exposure ceiling follows it, because VTS is held at the AEC engine's cap">
                     <div name="rangeMax">-</div>
                   </div>
-                  <div class="input-group" id="nightStart-group">
-                    <label for="nightStart">Mode</label>
-                    <button id="nightStart" class="local" type="button">Start</button>
-                    <button id="nightStop" class="local" type="button">Stop</button>
+                  <div class="input-group" id="nightOn-group">
+                    <label for="nightOn">Long exposure</label>
+                    <div class="switch">
+                      <input id="nightOn" class="local" type="checkbox"
+                             title="On programs the frame above and holds the sensor there. Off hands the sensor back - size, rate, idle throttle, microphone and the lens all return to where they were">
+                      <label class="slider" for="nightOn"></label>
+                    </div>
                   </div>
 
                   <div class="input-group group-head"><label>Exposure and gain</label></div>
@@ -1190,18 +1193,13 @@
                   </div>
                   <div class="input-group" id="nightFocusAuto-group">
                     <label for="nightFocusAuto">Autofocus</label>
-                    <button id="nightFocusAuto" class="local" type="button">Give the lens back</button>
+                    <div class="switch">
+                      <input id="nightFocusAuto" class="local" type="checkbox" checked="checked"
+                             title="On leaves focus to the sensor's own program - which cannot focus in the dark, and parks the lens wherever it gives up. Off holds the lens at the position above">
+                      <label class="slider" for="nightFocusAuto"></label>
+                    </div>
                   </div>
 
-                  <div class="input-group group-head"><label>Capture</label></div>
-                  <div class="input-group" id="nightStill-group">
-                    <label for="nightStill">Still</label>
-                    <button id="nightStill" class="local" type="button">Take a still</button>
-                  </div>
-                  <div class="input-group" id="nightRecord-group">
-                    <label for="nightRecord">Video</label>
-                    <button id="nightRecord" class="local" type="button">Start recording</button>
-                  </div>
                 </div>
               </nav>
               <nav class="menu panel" id="picture-settings">
@@ -1875,6 +1873,7 @@
         sustainId = +appClock + Math.ceil(refreshInterval / 1000);
         fetchTimeZones();
         hideBuiltOut();
+        nightInit(); // sync the long exposure panel with whatever the board is actually doing
       }
 
       async function hideBuiltOut() {
@@ -2606,8 +2605,27 @@
         nightShow();
       }
 
+      // the board is the truth about whether a session is running: a page reload must not show
+      // "off" while the sensor is still sitting on a 3 s frame
+      async function nightInit() {
+        try {
+          const r = await fetch('/control?nightStatus=1');
+          if (!r.ok) return;
+          nightInfo = await r.json();
+          $('#nightOn').checked = !!nightInfo.night;
+          nightShow(); // render and gate FIRST - a throw below must not leave the panel blank
+          const code = Number(nightInfo.vcm);
+          if (code >= 0) $('#nightFocus').setAttribute('value', code);
+        } catch (e) {} // older firmware without the key - leave the panel at its defaults
+      }
+
       function nightShow() {
         const i = nightInfo;
+        if (!$('#nightOn').checked) {
+          $('#nightState').innerHTML = 'off - set a size and a time, then switch Long exposure on';
+          nightGating();
+          return;
+        }
         if (!i || !i.gotMs) { $('#nightState').innerHTML = 'off - pick a size and a time'; return; }
         const secs = (i.gotMs / 1000).toFixed(2);
         const fps = i.gotMs > 0 ? (1000 / i.gotMs).toFixed(2) : '-';
@@ -2621,7 +2639,7 @@
           $('#nightSecs').parentElement.children.rangeMin.innerHTML = (i.minMs / 1000).toFixed(2) + 's';
           $('#nightSecs').parentElement.children.rangeMax.innerHTML = (i.maxMs / 1000).toFixed(2) + 's';
         }
-        if (i.vcm >= 0) { $('#nightFocus').value = i.vcm; rangeSlider($('#nightFocus')); }
+        if (i.vcm >= 0) { $('#nightFocus').value = i.vcm; try { rangeSlider($('#nightFocus')); } catch (e) {} }
         nightGating();
       }
 
@@ -2631,6 +2649,8 @@
           "Manual exposure needs auto exposure off - with the AEC on it is inert");
         setGate('nightGain', !$('#nightAgc').checked,
           "Manual gain needs auto gain off - with the AGC on it is inert");
+        setGate('nightFocus', !$('#nightFocusAuto').checked,
+          "Lens position needs Autofocus off - the AF program moves the lens straight back");
         // manual exposure AND manual gain together is the combination with the black-frame quirk
         if (!$('#nightAec').checked && !$('#nightAgc').checked) $('#nightExpSecs').title =
           "Both loops manual: this is the mode where an exposure DEcrease has given a persistent "
@@ -2638,9 +2658,13 @@
       }
 
       function nightControl(key, value) {
-        if (key == "nightSize" || key == "nightStart") nightApply($('#nightSecs').value);
-        else if (key == "nightSecs") nightApply(value);
-        else if (key == "nightStop") { nightApply(0); nightInfo = {}; $('#nightState').innerHTML = 'off'; }
+        // The panel sets up the frame; capture itself stays on the top bar's Get Still, Start
+        // Recording and Start Stream, which already own it
+        if (key == "nightOn") value ? nightApply($('#nightSecs').value) : nightApply(0);
+        // a size or time change only means anything while the mode is on
+        else if (key == "nightSize" || key == "nightSecs") {
+          if ($('#nightOn').checked) nightApply(key == "nightSecs" ? value : $('#nightSecs').value);
+        }
         else if (key == "nightAec") { sendControl('aec', value ? 1 : 0); nightGating(); }
         else if (key == "nightAgc") { sendControl('agc', value ? 1 : 0); nightGating(); }
         else if (key == "nightGain") sendControl('agc_gain', value);
@@ -2650,13 +2674,16 @@
           const maxLines = Number(nightInfo.maxLines || 1964);
           sendControl('aec_value', Math.max(1, Math.round(maxLines * Number(value) / 100)));
         }
-        else if (key == "nightFocus") sendControl('afManual', value);
-        else if (key == "nightFocusAuto") sendControl('afAuto', 1);
-        else if (key == "nightStill") getStill();
-        else if (key == "nightRecord") {
-          const on = $('#nightRecord').innerHTML.indexOf('Start') == 0;
-          sendControl('forceRecord', on ? 1 : 0);
-          $('#nightRecord').innerHTML = on ? 'Stop recording' : 'Start recording';
+        else if (key == "nightFocusAuto") {
+          // on = the sensor's own program, off = held where the slider says
+          value ? sendControl('afAuto', 1) : sendControl('afManual', $('#nightFocus').value);
+          nightGating();
+        }
+        else if (key == "nightFocus") {
+          // placing the lens IS taking it off autofocus - the program would move it straight back
+          if ($('#nightFocusAuto').checked) $('#nightFocusAuto').checked = false;
+          sendControl('afManual', value);
+          nightGating();
         }
       }
 
