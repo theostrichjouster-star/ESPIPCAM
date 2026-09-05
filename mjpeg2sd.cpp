@@ -155,6 +155,12 @@ static uint16_t govLastFrameCnt;
 // no-frame watchdog state (see noFrameRescue above processFrame)
 static uint32_t lastGoodFrameMs = 0;
 static uint16_t rescueClipCnt = 0; // rescues during the open recording, for closeAvi
+static uint8_t rescueStreak = 0;   // consecutive rescue steps with no good frame between them
+// The sensor's OWN frame period, as last programmed by the tuner - not 1000/FPS, which is the
+// frame timer's rate and sits at its floor of 1 whatever the sensor is doing. The no-frame
+// watchdog needs this one: at a multi-second frame the driver hands over a frame only every
+// second or third sensor period, and a threshold derived from FPS fires between them
+static uint32_t sensorFrameMs = 0;
 
 // Supply sag state. On battery the rail decays gradually, and the brownout comparator
 // armed at its warning level (utilsLog.cpp) is the only sensor this board has. Once it
@@ -845,6 +851,12 @@ static int nightHtsFS = -1;
 // rescue to quality 30. A live senLineFactor() read is not enough of a guard on its own - it
 // reads the PREVIOUS size mid-transition, visible in the tuner log as "FHDNARROW ... x1"
 static int nightFS = -1;
+// Gain (x) to hand the AEC once the retime has landed, 0 = nothing pending. A night transition
+// changes the exposure TIME by up to 15x without touching the exposure register - the line grows,
+// not the line count - so the gain the AEC was holding is suddenly 15x wrong and the loop has to
+// discover that one step at a time. See nightEnter
+static float nightSeedGain = 0;
+static float nightPrevGain = 0; // what it was holding before the session, for the way back
 
 int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
 volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
@@ -913,12 +925,28 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // overdrive (the VTS floor caps them) and deliver ~1% low, by design
   uint8_t fps = desiredFPS(fs);
   if (fps < 1) fps = 1;
-  int hts = senReg16(s, 0x380C);
+  int htsReg = senReg16(s, 0x380C); // what the register holds now - the write below compares to it
+  int hts = htsReg;                 // what the timing is computed from, which the night exit can move
   int vtsNow = senReg16(s, 0x380E);
   int lf = senLineFactor(s);
   if (hts < 1 || vtsNow < 8) {
     LOG_WRN("Tuned timing: HTS %d / VTS %d readback implausible - not retimed", hts, vtsNow);
     return;
+  }
+  // Leaving a night session ON THE SAME SIZE: put that size's own line back before anything is
+  // computed from it. Nothing else rewrites HTS at a full-resolution size - set_framesize does,
+  // but only when the size actually CHANGES - so the stretch outlived the session and the tuner
+  // simply re-derived the clock around a 7724-clock line. Measured 5 Sep 2026: QSXGA came back
+  // from a night session with a 2.63fps ceiling ("5fps is beyond the QSXGA ceiling 2.6") and a
+  // 379ms exposure, which is the starved stream and the blown frames the user reported.
+  // One-shot: consumed by the first retime after the exit, so a bench HTS write still stands
+  if (nightFrameMs == 0 && nightHtsBase > 0 && nightHtsFS == (int)fs) {
+    if (htsReg != nightHtsBase) {
+      LOG_INF("Night mode off: %s line back to HTS %d from %d", frameData[fs].frameSizeStr, nightHtsBase, htsReg);
+      hts = nightHtsBase;
+    }
+    nightHtsBase = 0;
+    nightHtsFS = -1;
   }
   // The VTS floor cannot be "whatever VTS is there now" - a previous tuned choice may have
   // raised it, and clamping against it would make rates monotonically decreasing (found on
@@ -1039,13 +1067,13 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     return;
   }
   float pixClkMHz = mul * 2.0f / 3 / sysDiv * ((r3108 == 0x11) ? 2.0f : 1.0f);
-  if (htsWant != hts) {
+  if (htsWant != htsReg) {
     // HIGH byte first when raising, low byte first when lowering, so every transient value sits
     // between the two endpoints and no frame is ever read with an invalid line. Written plainly,
     // NOT as a group write: the group mechanism does not land at these rates because the launch
     // poll misses the frame (hts_stretch.sh). A mid-frame HTS write once latched a magenta cast
     // that a whole campaign then blamed on the line length (BOARD_TESTING §37)
-    if (htsWant > hts) {
+    if (htsWant > htsReg) {
       s->set_reg(s, 0x380C, 0xFF, (htsWant >> 8) & 0x1F);
       s->set_reg(s, 0x380D, 0xFF, htsWant & 0xFF);
     } else {
@@ -1060,8 +1088,10 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   else {
     int expLines = vts - 4;
     if (expLines > 1964) expLines = 1964; // the AEC engine cap, applyAecLimits
+    float senFps = pixClkMHz * 1e6f / ((float)hts * lf * vts);
+    sensorFrameMs = (senFps > 0.0f) ? (uint32_t)(1000.0f / senFps + 0.5f) : 0; // the no-frame watchdog's yardstick
     LOG_INF("Tuned timing %s: PIXCLK %.2fMHz, HTS %d x%d, VTS %d -> sensor %.2ffps for request %u, max exposure %.0fms",
-      frameData[fs].frameSizeStr, pixClkMHz, hts, lf, vts, pixClkMHz * 1e6f / ((float)hts * lf * vts), fps,
+      frameData[fs].frameSizeStr, pixClkMHz, hts, lf, vts, senFps, fps,
       (float)expLines * hts * lf * 1000.0f / (pixClkMHz * 1e6f));
   }
 }
@@ -1140,9 +1170,10 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
     return;
   }
   float pixClkMHz = mul * 2.0f / 3 / sysDiv;
+  float senFps = pixClkMHz * 1e6f / ((float)hts * lf * vts);
+  sensorFrameMs = (senFps > 0.0f) ? (uint32_t)(1000.0f / senFps + 0.5f) : 0; // the no-frame watchdog's yardstick
   LOG_INF("Scaler clock %s: PIXCLK %.2fMHz (mul %d sys_div %d), HTS %d x%d, VTS %d -> sensor %.2ffps for request %u",
-    frameData[fs].frameSizeStr, pixClkMHz, mul, sysDiv, hts, lf, vts,
-    pixClkMHz * 1e6f / ((float)hts * lf * vts), fps);
+    frameData[fs].frameSizeStr, pixClkMHz, mul, sysDiv, hts, lf, vts, senFps, fps);
 }
 
 static void applySensorTuning(sensor_t* s, framesize_t fs) {
@@ -1172,6 +1203,10 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   }
   // last, because it reads back the HTS, VTS and clock the steps above have settled
   applyAecLimits(s);
+  // Re-arm the no-frame watchdog: the retime itself costs a frame or two, and leaving a session
+  // that ran on a multi-second frame drops the threshold the instant nightFrameMs clears while the
+  // sensor is still slow. That window fired a rescue every time (measured 5 Sep 2026)
+  lastGoodFrameMs = millis();
 }
 
 static framesize_t hwFrameSize(framesize_t fs) {
@@ -2063,21 +2098,38 @@ static void supervisors() {
   wifiSupervise();
 }
 
-static void noFrameRescue() {
+static void noFrameRescue(bool oversize) {
   uint32_t now = millis();
   if (supplyParked) return; // parked: no frames expected, nothing to rescue
   if (!lastGoodFrameMs) { lastGoodFrameMs = now; return; } // arm on first miss after boot
   // threshold rides out retime/PLL transients (~1s) and the frame gaps of low rates
   uint32_t thresh = FPS ? 4000u / FPS : 2000;
   if (thresh < 2000) thresh = 2000;
-  // A night session's frames are SECONDS apart BY DESIGN, and FPS sits at the frame timer's floor
-  // of 1 whatever the sensor is doing, so the stock 4s threshold fires between every frame and
-  // steps quality until the picture is ruined. Measured 5 Sep 2026: a 3.17s frame produced gaps of
-  // 4.6-5.1s and walked quality 12 -> 30 at QSXGA, with white frames from the long exposure on top.
-  // The watchdog needs the SENSOR's period, which only night mode knows
-  if (nightFrameMs > 0) {
-    uint32_t nightThresh = (uint32_t)nightFrameMs * 2 + 2000;
-    if (nightThresh > thresh) thresh = nightThresh;
+  if (oversize) {
+    // A frame that ARRIVED and measured too big is proof, not a suspicion: there is nothing to
+    // wait for, so pace one quality step per frame and no slower. The absent-frame threshold below
+    // would be four frame periods, which at a 3s frame turned a six-step walk into 100s of dark
+    // 5MP frames that never fit the buffer (measured 5 Sep 2026)
+    thresh = (sensorFrameMs > 0) ? sensorFrameMs + 500 : 2000;
+    if (thresh < 1000) thresh = 1000;
+  }
+  // Long frames are seconds apart BY DESIGN and FPS sits at the frame timer's floor of 1 whatever
+  // the sensor is doing, so a threshold derived from FPS alone steps quality until the picture is
+  // ruined - measured 5 Sep 2026, quality walked 12 -> 30 at QSXGA in one night session with no
+  // frame ever too big. The yardstick is the SENSOR's own period, and the multiplier is measured,
+  // not chosen: with nothing consuming frames the driver hands one over only every second or third
+  // period, so a 3.0-3.2s frame produced gaps of 9.2-9.6s. FOUR periods plus 2s leaves ~40% margin
+  else if (sensorFrameMs > 0) {
+    uint32_t senThresh = sensorFrameMs * 4 + 2000;
+    if (senThresh > thresh) thresh = senThresh;
+  }
+  // Once a step has fired with no good frame since, the condition is proven persistent - waiting
+  // the full discrimination window again only prolongs it. The first step is the diagnosis, the
+  // rest is the treatment: dark 5MP at q10 never fits the buffer at all, and an eight-step walk
+  // at four periods each left a night session with no frames for two minutes (5 Sep 2026)
+  if (rescueStreak && sensorFrameMs > 0) {
+    uint32_t fast = sensorFrameMs * 3 / 2 + 500;
+    if (fast < thresh) thresh = fast;
   }
   if (now - lastGoodFrameMs < thresh) return;
   sensor_t* s = esp_camera_sensor_get();
@@ -2088,8 +2140,9 @@ static void noFrameRescue() {
   s->set_quality(s, q);
   govRebaseQuality(q); // sticky: the rescue is the governor's new base, closeAvi keeps it
   if (isCapturing) rescueClipCnt++;
-  LOG_WRN("No frames for %lums - quality %d rescue%s", now - lastGoodFrameMs, q,
-    isCapturing ? " (mid-recording)" : "");
+  if (rescueStreak < 255) rescueStreak++;
+  LOG_WRN("%s for %lums - quality %d rescue%s", oversize ? "Frames too big" : "No frames",
+    now - lastGoodFrameMs, q, isCapturing ? " (mid-recording)" : "");
   lastGoodFrameMs = now; // pace one step per threshold
 }
 
@@ -2104,13 +2157,14 @@ static boolean processFrame() {
 
   camera_fb_t* fb = esp_camera_fb_get();
   if (fb == NULL) {
-    noFrameRescue();
+    noFrameRescue(false);
     return false;
   }
   if (!fb->len || fb->len > maxFrameBuffSize) {
     // counts as a miss for the watchdog too: a stream of oversized frames starves a
-    // recording exactly like absent ones, and the same rescue (smaller frames) fixes both
-    noFrameRescue();
+    // recording exactly like absent ones, and the same rescue (smaller frames) fixes both.
+    // Flagged as oversize: the frame is in hand and measurably too big, which needs no waiting
+    noFrameRescue(true);
     // Must hand the buffer back even when rejecting the frame. There are only FB_CNT of
     // them and the driver never reclaims one that is still checked out, so a handful of
     // bad frames leaves esp_camera_fb_get() with nothing to return and the capture task
@@ -2122,6 +2176,7 @@ static boolean processFrame() {
     return false;
   }
   lastGoodFrameMs = millis(); // feeds the no-frame watchdog; stale-size flushes below
+  rescueStreak = 0;           // a frame got through, so the next rescue starts from the slow gate
   // still count - the sensor-to-driver path is provably moving
 
   // Drop frames left over from before a sensor switch. Tested against the geometry we
@@ -3063,6 +3118,92 @@ void setBanding(int hz) {
   applyBanding(esp_camera_sensor_get(), true);
 }
 
+// The live exposure in ms and the live gain in x - the two numbers camLiveLine() prints, without
+// the string. Both come from the sensor, so they describe what the AEC settled on rather than what
+// was asked for, which is what makes them usable as the seed across a timing change
+static bool camExposureNow(float* expMs, float* gainX) {
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->get_reg == NULL) return false;
+  int e0 = camReg(s, 0x3500), e1 = camReg(s, 0x3501), e2 = camReg(s, 0x3502);
+  int g0 = camReg(s, 0x350A), g1 = camReg(s, 0x350B);
+  if (e0 < 0 || e1 < 0 || e2 < 0 || g0 < 0 || g1 < 0) return false;
+  int expLines = ((e0 & 0x0F) << 12) | (e1 << 4) | (e2 >> 4); // 1/16 line units, 0x3502[3:0] dropped
+  camClocks_t c = camClocks(s);
+  int hts = senReg16(s, OV5640_X_TOTAL_SIZE);
+  if (!c.valid || !c.pixClk || hts < 1) return false;
+  *expMs = (float)expLines * hts * senLineFactor(s) * 1000.0f / c.pixClk;
+  *gainX = (((g0 & 0x03) << 8) | g1) / 16.0f;
+  return true;
+}
+
+// Hand the AEC the gain a pending seed asks for, once the new timing is in force. Written to
+// 0x350A/0x350B rather than through the driver, which is the same pair the AEC itself steps, so it
+// resumes from this value instead of from one that belongs to the previous frame length
+static void applyAecGainSeed(sensor_t* s) {
+  if (nightSeedGain <= 0) return;
+  int g16 = (int)(nightSeedGain * 16.0f + 0.5f);
+  if (g16 < 16) g16 = 16;         // 1x, the bottom of the range
+  if (g16 > 0x3FF) g16 = 0x3FF;   // 63.9x, the datasheet's 64x ceiling
+  s->set_reg(s, 0x350A, 0x03, (g16 >> 8) & 0x03);
+  s->set_reg(s, 0x350B, 0xFF, g16 & 0xFF);
+  int back = ((camReg(s, 0x350A) & 0x03) << 8) | (camReg(s, 0x350B) & 0xFF);
+  if (back != g16) LOG_WRN("AEC gain seed %.2fx did not read back (wrote %d, reads %d)", nightSeedGain, g16, back);
+  else LOG_INF("AEC gain seeded at %.2fx for the new frame length", g16 / 16.0f);
+  nightSeedGain = 0;
+}
+
+// The AEC's STEP engine, damped while the exposure is a whole multi-second frame.
+//
+// Datasheet 4.5.2 and table 7-13: 0x3A05[5] selects step AUTO mode, where the step is scaled to
+// the difference between target and present; 0x3A11 and 0x3A1F are the fast zone, and above the
+// high limit the AEC "will decrease by half", below the low limit it "will double". None of that
+// is stable when the exposure fills the frame: integration for frame N+1 is already running while
+// N is being read out, so a correction computed from N cannot reach the pixels until N+2. The loop
+// then runs a frame behind itself and bounces between the two fast-zone triggers, and the up-swing
+// is a completely blown readout - flat, no scene at all.
+//
+// Measured at QSXGA on a 3.0s frame, 5 Sep 2026 (BOARD_TESTING §38.14): 7 of 19 streamed frames
+// came out flat white, luma 205-226 with a minimum of 198 and stddev 12. The driver's own
+// thresholds make it easy to reach - fast zone 74/16 around a stable window of only 32-37, with
+// the go-out thresholds equal to the enter ones, so there is no hysteresis either.
+//
+// Four configurations were streamed from the same dark bench scene to settle what to write:
+//  - the driver's own (auto step, ratio 16, fast zone 74/16): 7 blown of 19
+//  - gain pinned by hand: 14 clean of 14, which is what identified the loop as the cause
+//  - fast zone out of reach, auto step ratio 16: still 4 blown of 20 - those two registers only
+//    apply in step MANUAL mode (datasheet 4.5.2), so widening them alone changes little
+//  - fast zone out of reach, step manual: monotone, no oscillation, but far too slow to recover -
+//    11 frames after entering from a blown start it had come 225 -> 202 and was still walking
+//  - fast zone out of reach, auto step with the ratio at 2: from FULL saturation (four frames at
+//    luma 255, 100% white) it converged in 14 frames and then held 125-129. Both stable and
+//    ~8x gentler than the driver's ratio, which is what this writes
+//
+// Only while a night session is on. The ordinary low-fps regime (1-3fps, exposure also filling the
+// frame) shows the same instability and the same fix, measured at plain QSXGA 1fps - but those are
+// the rates the whole fps reference was taken at, so changing them is a separate measured job
+#define AEC_STEP_DRV    0x30 // the driver's own init values, read off the board 5 Sep 2026
+#define AEC_FAST_HI_DRV 0x4A // (the datasheet's resets are 0x30 / 0xD0 / 0x40 - the driver is tighter)
+#define AEC_FAST_LO_DRV 0x10
+#define AEC_STEP_NIGHT  0x22 // bit 5 keeps auto step; [4:0] is the ratio, 2 against the driver's 16
+static void applyAecStepDamping(sensor_t* s) {
+  bool night = nightFrameMs > 0;
+  int wantStep = night ? AEC_STEP_NIGHT : AEC_STEP_DRV;
+  int wantHi = night ? 0xF0 : AEC_FAST_HI_DRV; // no halving on a blown frame
+  int wantLo = night ? 0x02 : AEC_FAST_LO_DRV; // no doubling on a dark one
+  int gotStep = camReg(s, 0x3A05), gotHi = camReg(s, 0x3A11), gotLo = camReg(s, 0x3A1F);
+  if (gotStep >= 0 && (gotStep & 0x3F) == wantStep && gotHi == wantHi && gotLo == wantLo) return; // already there
+  s->set_reg(s, 0x3A05, 0x3F, wantStep); // read-modify-write: [7:6] are debug and frame-insert
+  s->set_reg(s, 0x3A11, 0xFF, wantHi);
+  s->set_reg(s, 0x3A1F, 0xFF, wantLo);
+  gotStep = camReg(s, 0x3A05); gotHi = camReg(s, 0x3A11); gotLo = camReg(s, 0x3A1F);
+  if ((gotStep & 0x3F) != wantStep || gotHi != wantHi || gotLo != wantLo)
+    LOG_WRN("AEC step %s did not read back: 0x3A05 0x%02X, 0x3A11 0x%02X, 0x3A1F 0x%02X",
+      night ? "damping" : "restore", gotStep, gotHi, gotLo);
+  else LOG_INF("AEC step %s: 0x3A05 0x%02X (step %s, ratio %d), fast zone %d-%d",
+    night ? "damped for the long frame" : "back to the driver's", gotStep,
+    (gotStep & 0x20) ? "auto" : "manual", gotStep & 0x1F, gotLo, gotHi);
+}
+
 static void applyAecLimits(sensor_t* s) {
   // The AEC's limits are fixed values from the driver's reset table and nothing recomputes them
   // when the timing changes. set_framesize() writes only 0x38xx, and applyHtsFloor() and
@@ -3083,6 +3224,8 @@ static void applyAecLimits(sensor_t* s) {
   //    costing the AEC's control loop accuracy rather than costing frame rate; do not expect fps
   //    from this, expect the AEC to stop asking for exposure the frame cannot hold.
   if (s == NULL || s->get_reg == NULL || s->set_reg == NULL) return;
+  applyAecStepDamping(s);
+  applyAecGainSeed(s); // after the damping, before the limits: the loop resumes from this gain
   camClocks_t c = camClocks(s);
   int hts = senReg16(s, OV5640_X_TOTAL_SIZE);
   int vts = senReg16(s, OV5640_X_TOTAL_SIZE + 2);
@@ -3130,11 +3273,19 @@ static void applyAecLimits(sensor_t* s) {
   ok &= senWrite16(s, OV5640_AEC_MAX_EXPO, maxExp);
   ok &= senWrite16(s, OV5640_AEC_MAX_EXPO_50, maxExp);
   // read modify write the two count registers, which are [5:0] with the rest reserved.
-  // floor(maxExp/step) guarantees count x step <= maxExp, keeping the config satisfiable
+  // floor(maxExp/step) guarantees count x step <= maxExp, keeping the config satisfiable.
+  // CLAMPED to the field, never masked into it: a long line makes the band tiny, so the count
+  // overflows 6 bits and a mask turns a satisfiable 327 into 7 - the same unsatisfiable config
+  // the comment above says parks the AEC. At the night HTS of 7724 the 50Hz band is 6 lines,
+  // so 1964/6 = 327 wrapped to 7 (found by reading, 5 Sep 2026; dormant only because the
+  // banding filter is off by default, and live the moment anyone selects 50 or 60Hz)
+  int n50 = maxExp / b50, n60 = maxExp / b60;
+  if (n50 > 0x3F) n50 = 0x3F;
+  if (n60 > 0x3F) n60 = 0x3F;
   int c50 = s->get_reg(s, OV5640_AEC_MAX_B50, 0xFF);
   int c60 = s->get_reg(s, OV5640_AEC_MAX_B60, 0xFF);
-  if (c50 >= 0) s->set_reg(s, OV5640_AEC_MAX_B50, 0x3F, (maxExp / b50) & 0x3F);
-  if (c60 >= 0) s->set_reg(s, OV5640_AEC_MAX_B60, 0x3F, (maxExp / b60) & 0x3F);
+  if (c50 >= 0) s->set_reg(s, OV5640_AEC_MAX_B50, 0x3F, n50);
+  if (c60 >= 0) s->set_reg(s, OV5640_AEC_MAX_B60, 0x3F, n60);
   // The AEC never re-seeks from a stable point, so an exposure chosen under the PREVIOUS
   // steps outlives every correction above - measured on boot, where convergence starts under
   // the driver's reset-table steps before this runs: it held 885 lines, exactly 3 of the
@@ -3269,6 +3420,19 @@ bool nightEnter(int fsIdx, int ms) {
     nightPrevIdle = idleFps;
     nightPrevMic = micGain;
   }
+  // Seed the AEC across the transition. The exposure REGISTER does not change - it sits at the
+  // 1964-line ceiling either side of the stretch - but the line grows by up to 15x, so the gain
+  // the AEC was holding is now 15x too much and every frame comes out fully saturated: measured
+  // 9 consecutive frames at luma 254, 100% white, before the damped loop had walked it down
+  // (5 Sep 2026, BOARD_TESTING §38.14). Scaling the gain by the exposure ratio puts the loop at
+  // the right operating point in one write and leaves it only the trim. The gain is read from the
+  // sensor here, BEFORE any retime, which is the only moment the old exposure is still knowable -
+  // the first of the two retimes already moves the line underneath it
+  float expMs = 0, gainX = 0;
+  if (camExposureNow(&expMs, &gainX) && expMs > 0 && gainX > 0) {
+    if (nightPrevGain <= 0) nightPrevGain = gainX; // for the way back out
+    nightSeedGain = gainX * expMs / (float)ms;
+  }
   idleFps = 0;  // the idle throttle retimes the sensor mid-session, which would undo the stretch
   micGain = 0;  // a multi-second-per-frame clip does not want audio
   nightFrameMs = ms;
@@ -3283,8 +3447,9 @@ void nightExit(bool restoreSize, bool restoreFps) {
   // no session is how the stretch leaked onto another size on 5 Sep 2026
   nightFrameMs = 0;
   nightFS = -1;
-  nightHtsBase = 0;
-  nightHtsFS = -1;
+  // nightHtsBase / nightHtsFS are deliberately LEFT SET: the next retime consumes them to put the
+  // size's own line back (applyTunedTiming), which is the only thing that undoes the stretch when
+  // the session ends on the size it started on. Clearing them here left QSXGA on a 7724-clock line
   if (nightPrevFS < 0) return; // nothing was saved, so nothing to put back
   // Whatever the user did NOT choose goes back where the session found it. A size change restores
   // the rate (they never asked for 1 fps - the session set that), a rate change restores the size,
@@ -3293,11 +3458,16 @@ void nightExit(bool restoreSize, bool restoreFps) {
   if (restoreFps) FPS = captureFPS = (uint8_t)nightPrevFPS;
   idleFps = nightPrevIdle;
   micGain = nightPrevMic;
+  // the inverse of the entry seed: the frame is about to get ~15x shorter, so the gain the session
+  // has been running is far too little for it. Put back the one the AEC held before the session
+  // rather than computing a ratio - it is the value that suited this scene at this frame length
+  if (nightPrevGain > 0) nightSeedGain = nightPrevGain;
   camFocusAuto();
   retimePending = true;
   LOG_INF("Night mode off - %s at %ufps, idleFps %d, micGain %d",
     frameData[fsizePtr].frameSizeStr, captureFPS, idleFps, micGain);
   nightPrevFS = nightPrevFPS = nightPrevIdle = nightPrevMic = -1;
+  nightPrevGain = 0;
 }
 
 // The achieved timing, read from the sensor rather than assumed, for the panel's readout and

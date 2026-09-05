@@ -413,6 +413,14 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
 - **A session is bound to the size it was entered for**, and any size or rate chosen in the camera
   panel ends it, returning whatever the user did not choose. Without that the stretch outlived its
   size and left the sensor on a 3.17 s frame while the UI reported HD 30 (§38.13).
+- **The white frames the panel was blamed for are the sensor's, not the page's** (§38.14). With the
+  exposure filling the frame the OV5640's AEC runs a frame behind itself and bounces between its
+  fast-zone triggers, blowing every second or third frame; it reproduces at plain QSXGA 1 fps with no
+  session on, so nothing in the panel or the white-balance sliders causes it. The firmware now damps
+  the step engine and seeds the gain across the transition for the duration of a session: a settled
+  session measured 15 frames in 60.5 s, luma 78-118, none blown, against 7 blown of 19 before.
+  Entering while the AEC sits at its 63.9x gain ceiling still costs ~6 blown frames.
 
-Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
-comparison from C3 is still outstanding.
+Still owed here: a long-exposure recording has never been run end to end, the dark-room AWB comparison
+from C3 is still outstanding, and the entry transient above (seed the sensor's quality for a dark 5MP
+session rather than letting the rescue walk to it) has not been measured.

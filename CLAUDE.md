@@ -273,7 +273,12 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   its size and left the sensor on a 3.17 s frame while `/status` reported HD 30: white frames and a
   starved stream. **`lf == 2` alone is not a sufficient guard** - `senLineFactor()` reads the PREVIOUS
   size mid-transition. The no-frame watchdog also has to know the sensor's period, not `FPS` (pinned
-  at the timer's floor of 1), or it fires between every night frame and walks quality 12 -> 30 (§38.13)
+  at the timer's floor of 1), or it fires between every night frame and walks quality 12 -> 30 (§38.13).
+  **The stretched line survives a same-size exit unless something puts it back**: nothing rewrites HTS
+  at a full-resolution size (`set_framesize` does, but only when the size CHANGES), so a session ending
+  on the size it began on left QSXGA with a 2.63 fps ceiling and a 379 ms exposure while the UI reported
+  the rate asked for. `nightExit` leaves `nightHtsBase` set and the next retime consumes it, one-shot,
+  which is also why it must NOT be cleared there (§38.14)
 - **Manual white balance**: `awbGains=<r>,<g>,<b>` (1024 = 1.0x) writes 0x3406 = 1 and 0x3400-0x3405
   with a read-back; `awbGainsAuto=1` hands the gains back. This is the control for a green cast, NOT
   `awb`: that one clears 0x5001 bit 0 so the ISP applies no gains at all and the picture goes further
@@ -282,7 +287,26 @@ shows up only on the NEXT boot as a refused camera frame buffer.
 - **Dark QSXGA steps its own quality and that is correct**: 5MP frames in the dark overrun the 983 KB
   buffer, the driver delivers nothing, and the rescue steps the sensor's quality until they fit -
   settling at q24, the same figure §37 measured. Do not suppress it; it is the reason dark 5MP works
-  at all. `/status` still reports the CONFIG quality, `camLive` the sensor's
+  at all. `/status` still reports the CONFIG quality, `camLive` the sensor's. **This also makes the
+  stream SELECT for blown frames**: at q10 a real dark 5MP frame is ~1 MB and never arrives, while a
+  blown one is 96-100 KB and always does - so one frame in three on the wire was white while the AEC
+  spent most of its time in a sane range. Judge a rate fault by what did NOT arrive too (§38.14)
+- **White frames at a long exposure are the sensor's AEC step engine, not our code** (§38.14, and it
+  reproduces at plain QSXGA 1 fps with no night session): with the exposure filling the frame, a
+  correction computed from frame N cannot reach the pixels until N+2, so the loop runs a frame behind
+  itself and bounces between the fast-zone triggers - 0x3A11 (above it the AEC HALVES) and 0x3A1F
+  (below it, DOUBLES), which the driver's table sets at 74/16 around a stable window of 32-37 with no
+  hysteresis. The fast zone only applies in step MANUAL mode; 0x3A05[5] selects auto, [4:0] its ratio.
+  `applyAecStepDamping` writes 0x3A05 0x22 (auto, ratio 2 against the driver's 16) with the fast zone
+  out of reach while a night session is on, and the driver's 0x30 / 0x4A / 0x10 back when it ends.
+  Night mode only - the low-fps regime has the same fault, but its rates are the fps reference's
+- **A night transition needs a GAIN seed** (`applyAecGainSeed`): the exposure register does not change
+  across the stretch (1964 lines either side) but the LINE grows up to 15x, so the gain the AEC holds
+  is suddenly 15x wrong and it discovers that one damped step at a time. `nightEnter` reads the live
+  exposure and gain BEFORE any retime - the only moment the old exposure is knowable, since the first
+  of the two retimes already moves the line - and the capture task writes `gain x expMs / requestedMs`
+  to 0x350A/0x350B once the timing lands. From gain 32x the first streamed frame was correctly exposed;
+  from the 63.9x ceiling the AEC does not take the seed cleanly and ~6 frames are still blown (§38.14)
 - `UI_REVIEW.md` - the web UI's camera controls: what the 5 Sep regression found, and every
   proposal with its measurement (committed). **All of A1-A4, B1-B3, C1-C5 and D1-D3 are done and
   deployed**; B1/B2 and part of C3 are retracted in place (I had read the static markup - see the
