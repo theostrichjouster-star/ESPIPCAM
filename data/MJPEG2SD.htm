@@ -989,6 +989,7 @@
             <div id="menu-container" class="menu-pinned">
               <nav id="menu-selector" class="menu-pinned menu-closed">
                 <nav class="quick-nav" id="camControl" name="camera-control"><svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg></nav>
+                <nav class="quick-nav" id="nightControl" name="night-control" title="Long exposure - stills and video below 1 fps"><svg class="icon" aria-hidden="true"><use href="#icon-moon"></use></svg></nav>
                 <nav class="quick-nav" id="motionRec" name="motion-record"><svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg></nav>
                 <nav class="quick-nav" id="fileControl" name="playback-transfers"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg></nav>
                 <nav class="quick-nav" id="picSettings" name="picture-settings"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg></nav>
@@ -1103,6 +1104,103 @@
                   <div class="input-group" id="micGain-group">
                     <label for="micGain">Microphone Gain</label>
                     <input title="Set microphone gain (3 is unity, 0 turns audio off)" type="range" id="micGain" min="0" max="10" value="5">
+                  </div>
+                </div>
+              </nav>
+              <!-- Long exposure (UI_REVIEW part 2). The frame is stretched by the LINE, not by VTS:
+                   VTS stays at the AEC engine's 1964-line cap so the exposure ceiling tracks the whole
+                   frame, the clock drops to its verified floor and HTS carries the rest. Only the two
+                   full-resolution sizes are here - a binned size's line cost flips above HTS 2277, so
+                   1280X960 tops out near 0.45 s and is not what this is for (BOARD_TESTING 37).
+                   Every control is "local": the panel sends the real control keys itself, because the
+                   generic dispatcher would otherwise send the element id as the key. -->
+              <nav class="menu panel" id="night-control">
+                <input type="checkbox" id="night-cb" class="menu-action local">
+                <div class="pin-menu" title="Pin / unpin menu"><svg class="icon" aria-hidden="true"><use href="#icon-pin"></use></svg></div>
+                <label for="night-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-moon"></use></svg>Long Exposure</label>
+                <div class='addButtons'></div>
+                <div>
+                  <div class="input-group" id="nightState-group">
+                    <label for="nightState">Status</label>
+                    <div id="nightState" class="displayonly camlive">off - pick a size and a time</div>
+                  </div>
+                  <div class="input-group" id="nightLive-group">
+                    <label for="nightLive">Camera now</label>
+                    <div id="nightLive" class="displayonly camlive">-</div>
+                  </div>
+
+                  <div class="input-group group-head"><label>Frame</label></div>
+                  <div class="input-group" id="nightSize-group">
+                    <label for="nightSize">Frame size</label>
+                    <select id="nightSize" class="selectField local" title="Only the full-resolution sizes reach multi-second frames. 1280x960 is binned - its line cost flips above HTS 2277, capping it near 0.45 s">
+                      <option value="16">FHDNARROW (1920x1080)</option>
+                      <option value="23">QSXGA (2560x1920)</option>
+                    </select>
+                  </div>
+                  <div class="input-group" id="nightSecs-group">
+                    <label for="nightSecs">Seconds per frame</label>
+                    <div name="rangeMin">-</div>
+                    <input type="range" id="nightSecs" class="local" min="850" max="3180" step="10" value="1000"
+                           title="The frame period. The exposure ceiling follows it, because VTS is held at the AEC engine's cap">
+                    <div name="rangeMax">-</div>
+                  </div>
+                  <div class="input-group" id="nightStart-group">
+                    <label for="nightStart">Mode</label>
+                    <button id="nightStart" class="local" type="button">Start</button>
+                    <button id="nightStop" class="local" type="button">Stop</button>
+                  </div>
+
+                  <div class="input-group group-head"><label>Exposure and gain</label></div>
+                  <div class="input-group" id="nightAec-group">
+                    <label for="nightAec">Auto exposure</label>
+                    <div class="switch">
+                      <input id="nightAec" class="local" type="checkbox" checked="checked">
+                      <label class="slider" for="nightAec"></label>
+                    </div>
+                  </div>
+                  <div class="input-group" id="nightExpSecs-group">
+                    <label for="nightExpSecs">Manual exposure</label>
+                    <div name="rangeMin">-</div>
+                    <input type="range" id="nightExpSecs" class="local" min="1" max="100" step="1" value="100"
+                           title="Percent of the frame given to exposure, sent as lines. 100% is the AEC engine's 1964-line cap">
+                    <div name="rangeMax">-</div>
+                  </div>
+                  <div class="input-group" id="nightAgc-group">
+                    <label for="nightAgc">Auto gain</label>
+                    <div class="switch">
+                      <input id="nightAgc" class="local" type="checkbox" checked="checked">
+                      <label class="slider" for="nightAgc"></label>
+                    </div>
+                  </div>
+                  <div class="input-group" id="nightGain-group">
+                    <label for="nightGain">Manual gain</label>
+                    <div name="rangeMin">1x</div>
+                    <input type="range" id="nightGain" class="local" min="0" max="63" step="1" value="8"
+                           title="0 and 1 are both 1x on this sensor; the top of the range is washed out">
+                    <div name="rangeMax">64x</div>
+                  </div>
+
+                  <div class="input-group group-head"><label>Focus</label></div>
+                  <div class="input-group" id="nightFocus-group">
+                    <label for="nightFocus">Lens position</label>
+                    <div name="rangeMin">near</div>
+                    <input type="range" id="nightFocus" class="local" min="0" max="1023" step="1" value="171"
+                           title="Sets the VCM lens position directly and holds it. The autofocus cannot focus in the dark - it parks wherever it gives up - so a long exposure needs the lens placed by hand">
+                    <div name="rangeMax">far</div>
+                  </div>
+                  <div class="input-group" id="nightFocusAuto-group">
+                    <label for="nightFocusAuto">Autofocus</label>
+                    <button id="nightFocusAuto" class="local" type="button">Give the lens back</button>
+                  </div>
+
+                  <div class="input-group group-head"><label>Capture</label></div>
+                  <div class="input-group" id="nightStill-group">
+                    <label for="nightStill">Still</label>
+                    <button id="nightStill" class="local" type="button">Take a still</button>
+                  </div>
+                  <div class="input-group" id="nightRecord-group">
+                    <label for="nightRecord">Video</label>
+                    <button id="nightRecord" class="local" type="button">Start recording</button>
                   </div>
                 </div>
               </nav>
@@ -1866,6 +1964,9 @@
           else if (key == "forcePlayback") fromUser ? playbackAction(key) : deactivatePlaybackButton();
           else if (key == "forceStream") streamAction(key);
           else if (key == "spkrRem") { value = micOrSpkrState(key); value ? runSpkr(wsInd) : closeSpkr(wsInd); }
+          // the long exposure panel sends the real control keys itself (its own are "local")
+          else if (key.substring(0, 5) == "night" && key != "night-cb") { nightControl(key, value); return; }
+          else if (key == "camLive") { const nl = $('#nightLive'); if (nl) nl.innerHTML = value; }
           else if (key == "colorbar") setColorbarBanner(value);
           else if (key == "colorbar-off") {
             const cb = $('#colorbar');
@@ -2486,6 +2587,77 @@
         // back, so the checkbox used to flick off by itself. Gate it instead of letting the user
         // send something the board will reject
         setGate('dbgMotion', on('enableMotion'), "Show Motion needs Motion Detect on - the detector draws the overlay");
+      }
+
+      /************ long exposure panel (UI_REVIEW part 2) ************/
+      // Its controls are all "local", so the generic dispatcher does not send the element id as a
+      // control key. This sends the real keys instead - the same aec / aec_value / agc / agc_gain
+      // the camera panel uses, because those driver paths are the ones the regression measured
+      // safe. The frame itself is one call, nightExp, whose reply carries the timing the sensor
+      // actually took: achieved period, the size's reachable range, and the line time that turns
+      // a requested exposure into lines
+      let nightInfo = {};
+
+      async function nightApply(ms) {
+        const idx = $('#nightSize').value;
+        const r = await fetch('/control?nightExp=' + idx + ',' + Math.round(ms));
+        if (!r.ok) { $('#nightState').innerHTML = 'failed: ' + r.status; return; }
+        nightInfo = await r.json();
+        nightShow();
+      }
+
+      function nightShow() {
+        const i = nightInfo;
+        if (!i || !i.gotMs) { $('#nightState').innerHTML = 'off - pick a size and a time'; return; }
+        const secs = (i.gotMs / 1000).toFixed(2);
+        const fps = i.gotMs > 0 ? (1000 / i.gotMs).toFixed(2) : '-';
+        $('#nightState').innerHTML = i.night
+          ? secs + ' s per frame (' + fps + ' fps), ' + i.size + ', HTS ' + i.hts + ' at ' + i.pixClkMHz + ' MHz'
+          : 'off - the sensor is back to its normal timing';
+        // the reachable range comes from the sensor, never from the page
+        if (i.minMs && i.maxMs) {
+          changeRange('nightSecs', String(Math.round(i.minMs)), String(Math.round(i.maxMs)),
+                      String(Math.round(i.gotMs)));
+          $('#nightSecs').parentElement.children.rangeMin.innerHTML = (i.minMs / 1000).toFixed(2) + 's';
+          $('#nightSecs').parentElement.children.rangeMax.innerHTML = (i.maxMs / 1000).toFixed(2) + 's';
+        }
+        if (i.vcm >= 0) { $('#nightFocus').value = i.vcm; rangeSlider($('#nightFocus')); }
+        nightGating();
+      }
+
+      function nightGating() {
+        // same rule as the camera panel: a control its automatic owns is shown inert, with why
+        setGate('nightExpSecs', !$('#nightAec').checked,
+          "Manual exposure needs auto exposure off - with the AEC on it is inert");
+        setGate('nightGain', !$('#nightAgc').checked,
+          "Manual gain needs auto gain off - with the AGC on it is inert");
+        // manual exposure AND manual gain together is the combination with the black-frame quirk
+        if (!$('#nightAec').checked && !$('#nightAgc').checked) $('#nightExpSecs').title =
+          "Both loops manual: this is the mode where an exposure DEcrease has given a persistent "
+          + "black frame. Leave gain automatic unless you need it.";
+      }
+
+      function nightControl(key, value) {
+        if (key == "nightSize" || key == "nightStart") nightApply($('#nightSecs').value);
+        else if (key == "nightSecs") nightApply(value);
+        else if (key == "nightStop") { nightApply(0); nightInfo = {}; $('#nightState').innerHTML = 'off'; }
+        else if (key == "nightAec") { sendControl('aec', value ? 1 : 0); nightGating(); }
+        else if (key == "nightAgc") { sendControl('agc', value ? 1 : 0); nightGating(); }
+        else if (key == "nightGain") sendControl('agc_gain', value);
+        else if (key == "nightExpSecs") {
+          // percent of the frame, sent as lines: the exposure register counts lines, and the
+          // engine's ceiling is 1964 whatever the line time is
+          const maxLines = Number(nightInfo.maxLines || 1964);
+          sendControl('aec_value', Math.max(1, Math.round(maxLines * Number(value) / 100)));
+        }
+        else if (key == "nightFocus") sendControl('afManual', value);
+        else if (key == "nightFocusAuto") sendControl('afAuto', 1);
+        else if (key == "nightStill") getStill();
+        else if (key == "nightRecord") {
+          const on = $('#nightRecord').innerHTML.indexOf('Start') == 0;
+          sendControl('forceRecord', on ? 1 : 0);
+          $('#nightRecord').innerHTML = on ? 'Stop recording' : 'Start recording';
+        }
       }
 
       // UI_REVIEW A4: banner while the test pattern is on, from wherever the user is in the page.

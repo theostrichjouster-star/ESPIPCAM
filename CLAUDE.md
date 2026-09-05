@@ -259,6 +259,14 @@ shows up only on the NEXT boot as a refused camera frame buffer.
 ## Docs map
 
 - `BATTERY.md` - battery deployment guide (committed)
+- **Long Exposure panel** (moon button, 5 Sep 2026): `nightExp=<size>,<ms>` programs a multi-second
+  frame by stretching the LINE - VTS held at `AEC_VTS_CEIL`, clock at the 10.13 MHz floor, HTS
+  carrying the rest - as a branch inside `applyTunedTiming`, so every retime reproduces it and the
+  capture task keeps sole ownership of sensor writes. QSXGA and FHDNARROW only (a binned size's line
+  cost flips above HTS 2277). Measured: FHDNARROW 3.00 s at HTS 7724, QSXGA 3.18 s at HTS 8191, both
+  agreeing with §37. `stillWaitMs()` scales the still wait to the frame (at 3 s the stock 1200 ms
+  lands 4 requests in 10). `afManual=<0..1023>` / `afAuto=1` hold and release the lens. Entering
+  forces idleFps and micGain to 0 and restores them on exit; nothing is persisted (§38.12)
 - `UI_REVIEW.md` - the web UI's camera controls: what the 5 Sep regression found, and every
   proposal with its measurement (committed). **All of A1-A4, B1-B3, C1-C5 and D1-D3 are done and
   deployed**; B1/B2 and part of C3 are retracted in place (I had read the static markup - see the

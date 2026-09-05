@@ -178,6 +178,11 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "extDVDD")) setExtDVDD(intVal);
   // bench: pulse the OTHER board's reset line (PEER_RESET_PIN), see peerReset() - no config row
   else if (!strcmp(variable, "peerReset")) peerReset(intVal);
+  // the night panel's focus slider: hold the lens at a VCM code, or give it back to the AF
+  // program. The AF cannot focus in low light - it parks wherever it gives up - so a long
+  // exposure needs the lens placed by hand and held (BOARD_TESTING §37)
+  else if (!strcmp(variable, "afManual")) camFocusManual(intVal);
+  else if (!strcmp(variable, "afAuto")) camFocusAuto();
   // debug: exercise the supply sag path without a failing supply. Sets the same flag the
   // brownout ISR sets, so the whole Stage 1 sequence runs for real - close, park, re-arm
   else if (!strcmp(variable, "sagTest")) supplySagging = (bool)intVal;
@@ -420,11 +425,48 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   }
+  else if (!strcmp(variable, "nightExp")) {
+    // Night (long exposure) mode: "<framesize index>,<ms>", or ms 0 to leave. Only the two
+    // full-resolution sizes are offered - a binned size's line cost flips above HTS 2277, so
+    // 1280X960 tops out near 0.45s and is not what this mode is for (BOARD_TESTING §37)
+    int idx = atoi(value);
+    const char* comma = strchr(value, ',');
+    int ms = comma ? atoi(comma + 1) : 0;
+    if (ms <= 0) {
+      nightExit();
+      // the retime happens in the capture task, so wait for it or the reply reports the timing
+      // the sensor is about to leave rather than the one it lands on
+      uint32_t startTime = millis();
+      while ((sensorFS != (framesize_t)fsizePtr || retimePending) && millis() - startTime < 8000) delay(100);
+      delay(200);
+    }
+    else if (idx < 0 || idx >= (int)(sizeof(frameData) / sizeof(frameData[0]))
+             || (strcmp(frameData[idx].frameSizeStr, "QSXGA") && strcmp(frameData[idx].frameSizeStr, "FHDNARROW"))) {
+      LOG_WRN("Night mode: %s is not a long-exposure size (QSXGA or FHDNARROW only)",
+        (idx >= 0 && idx < (int)(sizeof(frameData) / sizeof(frameData[0]))) ? frameData[idx].frameSizeStr : "index");
+    }
+    else if (nightEnter(idx, ms)) {
+      // the capture task owns sensor writes, so wait for it to apply the retime before
+      // reporting - bounded, and reporting whatever is there if it does not land
+      uint32_t startTime = millis();
+      while ((sensorFS != (framesize_t)fsizePtr || retimePending) && millis() - startTime < 8000) delay(100);
+      delay(200);
+    }
+    nightStatus(jsonBuff, JSON_BUFF_LEN);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, jsonBuff);
+  }
+  else if (!strcmp(variable, "nightStatus")) {
+    nightStatus(jsonBuff, JSON_BUFF_LEN);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, jsonBuff);
+  }
   else if (!strcmp(variable, "still")) {
     // send single jpeg to browser
     uint32_t startTime = millis();
     doKeepFrame = true;
-    while (doKeepFrame && millis() - startTime < MAX_FRAME_WAIT) delay(100);
+    // the wait follows the frame: at a 3s frame the stock 1.2s misses most requests
+    while (doKeepFrame && millis() - startTime < stillWaitMs()) delay(100);
     if (!doKeepFrame && alertBufferSize) {
       httpd_resp_set_type(req, "image/jpeg");
       httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");

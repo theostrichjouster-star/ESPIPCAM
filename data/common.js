@@ -17,6 +17,8 @@
             '<symbol id="icon-speaker" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4v-5Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></symbol>' +
             '<symbol id="icon-pin" viewBox="0 0 24 24"><path d="M9 3h6l-.7 6.2L18 12.5v2h-5v6l-1 2-1-2v-6H6v-2l3.7-3.3L9 3Z"/></symbol>' +
             '<symbol id="icon-close" viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></symbol>' +
+            // long exposure / night mode. Stroked crescent, same weight as the rest of the set
+            '<symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.5 14.4A8.6 8.6 0 0 1 9.6 3.5a8.6 8.6 0 1 0 10.9 10.9Z"/></symbol>' +
             '<symbol id="icon-rotate" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 13.7-5.7M20 12a8 8 0 0 1-13.7 5.7"/><path d="M17 3v4h-4M7 21v-4h4" fill="currentColor" stroke="none"/></symbol>' +
             '<symbol id="icon-frame" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5"/><line x1="12" y1="8.5" x2="12" y2="15.5"/><line x1="8.5" y1="12" x2="15.5" y2="12"/></symbol>' +
             '<symbol id="icon-maximize" viewBox="0 0 24 24"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></symbol>' +

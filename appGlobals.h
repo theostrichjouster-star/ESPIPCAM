@@ -262,6 +262,15 @@ void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
 void dumpCamRegs();
 const char* camLiveLine(); // settled exposure / gain / sensor quality / AWB gains for the web UI
+// night (long exposure) mode - see applyTunedTiming's night branch
+extern int nightFrameMs;   // 0 = off, else the requested frame period in ms
+bool nightEnter(int fsIdx, int ms);
+void nightExit();
+void nightStatus(char* buf, size_t len);
+uint32_t stillWaitMs();    // MAX_FRAME_WAIT, or twice the frame when a night session is on
+bool camFocusManual(int code); // hold the lens at a VCM DAC code (0-1023), AF program stopped
+void camFocusAuto();       // restart the AF program, continuous again
+int camFocusCode();        // the lens position now, -1 if unreadable
 void setSubSample(const char* csv); // debug probe: subsample increments + VTS, see mjpeg2sd.cpp
 void setCamReg(const char* csv);
 void setCamRegGrp(const char* csv);

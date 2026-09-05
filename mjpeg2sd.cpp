@@ -826,6 +826,20 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
 static void applyAecLimits(sensor_t* s);
 static int senLineFactor(sensor_t* s);
 
+// Night (long exposure) mode, UI_REVIEW part 2. 0 = off, else the requested frame period in ms.
+// Read by applyTunedTiming (which does the work) and by stillWaitMs(). Deliberately NOT a config
+// row: a night session is a mode you are in, not a setting the board boots with
+int nightFrameMs = 0;
+#define NIGHT_PIXCLK_MHZ 10.1333f  // mul 76 / sys_div 5, the verified clock floor
+#define NIGHT_HTS_MAX 8191         // 0x380C[4:0] + 0x380D is 13 bits - 3.18s at the floor clock
+static int nightPrevFS = -1, nightPrevFPS = -1, nightPrevIdle = -1, nightPrevMic = -1;
+// The size's OWN line length, captured before the first stretch and keyed to the size. It cannot
+// be read live once stretched: clamping a new target against the current (already long) HTS would
+// ratchet upwards and never let the user ask for a shorter exposure again. set_framesize rewrites
+// HTS from the driver's table on a size change, which is when this is recaptured
+static int nightHtsBase = 0;
+static int nightHtsFS = -1;
+
 int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
 volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
 // config: the mains banding filter. 0 = off (the persisted default since 4 Sep 2026), 50 or
@@ -917,6 +931,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
 #define AEC_VTS_CEIL 1968
   int vts = (int)(80e6f / ((float)hts * lf * fps * fpsOverdrive(fps)));
   int mul = 120, sysDiv = 1; // PIXCLK 80MHz, the high-fps default
+  int htsWant = hts; // every path but night mode leaves the line length exactly as it found it
   // 0x3108 root dividers: 0x26 is route A (SCLK = pll_clki/4, the tree every reference point
   // was measured on), 0x11 is route B (every root divider halved, so the same SCLK comes from
   // half the VCO). The tuner never used to write this register at all, which left whatever a
@@ -924,7 +939,25 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   // retime, in the order that keeps the transient SLOW (see the register block below)
   int r3108 = 0x26;
   float clkMHz = 80.0f;
-  if (vts > AEC_VTS_CEIL) {
+  // Night (long exposure) mode. The frame is made long by the LINE, not by VTS: VTS stays at the
+  // AEC engine's cap so the exposure ceiling tracks the whole frame (growing VTS past it never
+  // bought exposure, it only cost it - see the regime below), the clock goes to its verified
+  // floor, and HTS carries the rest. At full resolution HTS is free blanking to the register's
+  // 13-bit end: FHDNARROW measured 3.18 s at HTS 8191 and QSXGA 2.84 s at its own clock, 3.18 s
+  // on this floor (BOARD_TESTING §37, hts_stretch.sh). Binned sizes are excluded by lf == 2
+  // because their line cost flips above HTS 2277, which is why 1280X960 is not offered.
+  // The floor is also never crossed downwards: hts is the tuner's own line for this size, and at
+  // full resolution there is almost no spare blanking (FHD is dead at HTS 2650, applyHtsFloor)
+  if (nightFrameMs > 0 && lf == 2) {
+    mul = 76; sysDiv = 5; // 10.13MHz, the same verified floor combo the low-fps regime uses
+    clkMHz = NIGHT_PIXCLK_MHZ;
+    vts = AEC_VTS_CEIL;
+    if (nightHtsBase <= 0 || nightHtsFS != (int)fs) { nightHtsBase = hts; nightHtsFS = (int)fs; }
+    htsWant = (int)((float)nightFrameMs * NIGHT_PIXCLK_MHZ * 1e3f / (AEC_VTS_CEIL * lf) + 0.5f);
+    if (htsWant < nightHtsBase) htsWant = nightHtsBase; // never below the size's own line
+    if (htsWant > NIGHT_HTS_MAX) htsWant = NIGHT_HTS_MAX;
+  }
+  else if (vts > AEC_VTS_CEIL) {
     // Exposure-first low-fps regime. VTS-only stretching froze the exposure ceiling at
     // 1964 x tROW once VTS crossed the engine cap (HD: 50.6ms for everything under
     // ~19fps). Hold VTS at the cap instead and put the rest of the frame period into
@@ -1000,6 +1033,23 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     return;
   }
   float pixClkMHz = mul * 2.0f / 3 / sysDiv * ((r3108 == 0x11) ? 2.0f : 1.0f);
+  if (htsWant != hts) {
+    // HIGH byte first when raising, low byte first when lowering, so every transient value sits
+    // between the two endpoints and no frame is ever read with an invalid line. Written plainly,
+    // NOT as a group write: the group mechanism does not land at these rates because the launch
+    // poll misses the frame (hts_stretch.sh). A mid-frame HTS write once latched a magenta cast
+    // that a whole campaign then blamed on the line length (BOARD_TESTING §37)
+    if (htsWant > hts) {
+      s->set_reg(s, 0x380C, 0xFF, (htsWant >> 8) & 0x1F);
+      s->set_reg(s, 0x380D, 0xFF, htsWant & 0xFF);
+    } else {
+      s->set_reg(s, 0x380D, 0xFF, htsWant & 0xFF);
+      s->set_reg(s, 0x380C, 0xFF, (htsWant >> 8) & 0x1F);
+    }
+    int gotHts = senReg16(s, 0x380C);
+    if (gotHts != htsWant) LOG_WRN("Night timing: HTS %d did not read back (got %d)", htsWant, gotHts);
+    else hts = gotHts;
+  }
   if (!senWrite16(s, 0x380E, vts)) LOG_WRN("Tuned timing: VTS %d did not read back", vts);
   else {
     int expLines = vts - 4;
@@ -3102,6 +3152,134 @@ static void applyAecLimits(sensor_t* s) {
   if (!ok) LOG_WRN("AEC limits did not read back: B50 %d B60 %d maxExp %d", b50, b60, maxExp);
   else LOG_VRB("AEC limits for HTS %d VTS %d: B50 %d, B60 %d, max exposure %d (%d/%d steps)",
     hts, vts, b50, b60, maxExp, maxExp / b50, maxExp / b60);
+}
+
+// ---------------------------------------------------------------- night mode ---------------
+// The lens, held by hand. The sensor's AF program has to be STOPPED first (0x3000 bit 5) or it
+// moves the lens straight back, and in low light it cannot focus at all - it parks wherever it
+// gives up (DAC codes 42 / 114 / 612 measured in one dark room against 171-256 lit), which is
+// exactly why a long exposure needs the focus set by hand. Datasheet table 3-2:
+// code = 0x3603[5:0] << 4 | 0x3602[7:4], with 0x3602[3:0] the slew mode, which is preserved.
+// Same sequence as bench_lib.sh af_hold, including 0x3603 before 0x3602 and the read-back
+bool camFocusManual(int code) {
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return false;
+  if (code < 0) code = 0;
+  if (code > 1023) code = 1023;
+  s->set_reg(s, 0x3000, 0xFF, 0x20); // AF MCU into reset - the lens freezes where it stands
+  delay(50);
+  if (camReg(s, 0x3000) != 0x20) {
+    LOG_WRN("Focus: AF MCU did not stop (0x3000 reads 0x%02X) - lens not held", camReg(s, 0x3000));
+    return false;
+  }
+  int cur = camReg(s, 0x3602);
+  int slew = (cur >= 0) ? (cur & 0x0F) : 0;
+  s->set_reg(s, 0x3603, 0xFF, (code >> 4) & 0x3F);
+  delay(20);
+  s->set_reg(s, 0x3602, 0xFF, ((code & 0x0F) << 4) | slew);
+  delay(100);
+  int r2 = camReg(s, 0x3602), r3 = camReg(s, 0x3603);
+  int got = ((r3 & 0x3F) << 4) | ((r2 >> 4) & 0x0F);
+  if (got != code) {
+    LOG_WRN("Focus: VCM %d reads back %d (0x3602 0x%02X, 0x3603 0x%02X)", code, got, r2, r3);
+    return false;
+  }
+  LOG_INF("Focus: lens held at VCM code %d (0x3602 0x%02X, 0x3603 0x%02X)", got, r2, r3);
+  return true;
+}
+
+void camFocusAuto() {
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->set_reg == NULL) return;
+  s->set_reg(s, 0x3000, 0xFF, 0x00); // restart the AF program - continuous again
+  LOG_INF("Focus: AF program restarted, continuous");
+}
+
+int camFocusCode() {
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->get_reg == NULL) return -1;
+  int r2 = camReg(s, 0x3602), r3 = camReg(s, 0x3603);
+  if (r2 < 0 || r3 < 0) return -1;
+  return ((r3 & 0x3F) << 4) | ((r2 >> 4) & 0x0F);
+}
+
+// A still request only lands if a frame arrives inside the wait, so the stock 1.2s misses most
+// of them once the frame is seconds long (measured: at QSXGA 7000 six requests 2.45s apart all
+// missed a 2.56s frame). The bench walks the phase instead; here the wait simply follows the
+// frame
+uint32_t stillWaitMs() {
+  uint32_t w = MAX_FRAME_WAIT;
+  if (nightFrameMs > 0) {
+    uint32_t want = (uint32_t)nightFrameMs * 2 + 500;
+    if (want > w) w = want;
+  }
+  return w;
+}
+
+// Enter or leave a night session. The web task must never write sensor timing itself (the
+// capture task owns that, see settleSensor), so this sets the target and raises retimePending
+bool nightEnter(int fsIdx, int ms) {
+  if (ms < 1) return false;
+  if (nightPrevFS < 0) { // first entry - remember what to put back
+    nightPrevFS = fsizePtr;
+    nightPrevFPS = captureFPS;
+    nightPrevIdle = idleFps;
+    nightPrevMic = micGain;
+  }
+  idleFps = 0;  // the idle throttle retimes the sensor mid-session, which would undo the stretch
+  micGain = 0;  // a multi-second-per-frame clip does not want audio
+  nightFrameMs = ms;
+  fsizePtr = fsIdx;
+  FPS = captureFPS = 1; // the frame timer's floor; the sensor runs slower and delivers every Nth
+  retimePending = true;
+  return true;
+}
+
+void nightExit() {
+  if (nightPrevFS < 0) return; // never entered
+  nightFrameMs = 0;
+  fsizePtr = nightPrevFS;
+  FPS = captureFPS = (uint8_t)nightPrevFPS;
+  idleFps = nightPrevIdle;
+  micGain = nightPrevMic;
+  camFocusAuto();
+  retimePending = true;
+  LOG_INF("Night mode off - back to %s at %ufps, idleFps %d, micGain %d",
+    frameData[fsizePtr].frameSizeStr, captureFPS, idleFps, micGain);
+  nightPrevFS = nightPrevFPS = nightPrevIdle = nightPrevMic = -1;
+  nightHtsBase = 0;
+  nightHtsFS = -1;
+}
+
+// The achieved timing, read from the sensor rather than assumed, for the panel's readout and
+// for the seconds-to-lines conversion the manual exposure mode needs
+void nightStatus(char* buf, size_t len) {
+  sensor_t* s = esp_camera_sensor_get();
+  camClocks_t c = {};
+  int hts = -1, vts = -1, lf = 2;
+  if (s != NULL) {
+    hts = senReg16(s, 0x380C);
+    vts = senReg16(s, 0x380E);
+    lf = senLineFactor(s);
+    c = camClocks(s);
+  }
+  float lineUs = (c.valid && c.pixClk && hts > 0) ? (float)hts * lf * 1e6f / c.pixClk : 0;
+  float gotMs = lineUs * AEC_VTS_CEIL / 1000.0f;
+  // The reachable range on the floor clock. The short end is the size's OWN line (nightHtsBase),
+  // not the stretched one - reporting the current value as the minimum would let the slider trap
+  // itself at whatever it last set. The long end is the register's 13-bit end
+  float minMs = 0, maxMs = 0;
+  if (lineUs > 0 && hts > 0) {
+    float usPerHts = lineUs / hts;
+    int base = (nightHtsBase > 0) ? nightHtsBase : hts;
+    minMs = usPerHts * base * AEC_VTS_CEIL / 1000.0f;
+    maxMs = usPerHts * NIGHT_HTS_MAX * AEC_VTS_CEIL / 1000.0f;
+  }
+  snprintf(buf, len,
+    "{\"night\":%d,\"size\":\"%s\",\"reqMs\":%d,\"gotMs\":%.0f,\"minMs\":%.0f,\"maxMs\":%.0f,"
+    "\"hts\":%d,\"vts\":%d,\"lineUs\":%.2f,\"maxLines\":%d,\"pixClkMHz\":%.2f,\"vcm\":%d}",
+    nightFrameMs > 0 ? 1 : 0, frameData[sensorFS].frameSizeStr, nightFrameMs, gotMs, minMs, maxMs,
+    hts, vts, lineUs, AEC_VTS_CEIL - 4, c.valid ? c.pixClk / 1e6f : 0, camFocusCode());
 }
 
 // UI_REVIEW C2: the one line the web UI needs to answer "why is it dark" - the exposure the AEC
