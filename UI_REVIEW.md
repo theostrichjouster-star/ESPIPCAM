@@ -466,5 +466,17 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
   its guard as soon as it left the toolbar. The phone drops the OV5640 tab, Show Log, OTA Upload and
   Start Playback by the user's choice; playback lives in the Gallery sheet.
 
+- **The Gallery shows what is on the card** (§38.20, firmware and page). Stills were never saved at
+  all - `/control?still=1` sent the JPEG to the browser and cleared it, and nothing had ever written a
+  `.jpg` - so the listing was not hiding them, there were none. Every Get Still is now filed in the
+  day folder beside the recordings, the listing carries both kinds, and a `/file?path=` route serves
+  any file on the card (`/web?` can only reach `/data`). Thumbnails are cached `.thm` files generated
+  on first view from a clip's MIDDLE frame, because the first frame of a motion clip is the empty
+  scene that triggered it; the decoder streams its input off the card, so a 157MB clip costs 585ms and
+  a ~1.7KB tile with the PSRAM low-water mark barely moving. The panel has a Tile view toggle over the
+  same listing the select uses, and tapping a file closes the sheet and shows it in the live card. Two
+  guards that are not tuning: generation is refused while recording, and the page keeps exactly two
+  thumbnail fetches in flight - measured at 2, with the SD log still serving 4.9MB straight afterwards.
+
 Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
 comparison from C3 is still outstanding.

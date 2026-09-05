@@ -160,6 +160,7 @@ void killSocket(int skt = -99);
 bool getJsonValue(const char* json, const char* key, char* value, const char* nestedKey = nullptr, int occurrence = 1);
 void listBuff(const uint8_t* b, size_t len); 
 bool listDir(const char* fname, char* jsonBuff, size_t jsonBuffLen, const char* extension);
+bool nameHasExt(const char* name, const char* extList); // extList is one, or several comma separated
 void loadCerts();
 bool loadConfig();
 void logLine();

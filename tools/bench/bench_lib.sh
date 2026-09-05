@@ -105,6 +105,9 @@ assert_campaign_config() {
   ctl record=0 > /dev/null
   ctl idleFps=0 > /dev/null      # idleThrottle would retime the sensor to idleFps after 10 s idle
   ctl micGain=0 > /dev/null      # audio bytes would swamp frame length at 1-2 fps
+  ctl stillSave=0 > /dev/null    # every Get Still is filed on the card by default, and a full
+                                 # ui_regress run takes 214 of them - up to a gigabyte of test
+                                 # frames. RAM only, restored by the exit replay of status0
   ctl "quality=$q" > /dev/null
   sleep 2
   local r f i

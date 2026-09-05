@@ -130,6 +130,16 @@
 #define AVI_EXT "avi"
 #define CSV_EXT "csv"
 #define SRT_EXT "srt"
+// Saved stills land in the same day folder as recordings, under the same
+// <date>_<time>_<SIZE> stem, because the web page reads the frame size out of the name
+// (showView() takes split('_')[2]) to size the viewer.
+#define STILL_EXT "jpg"
+// Cached thumbnail beside its file. Deliberately NOT .jpg: listDir(), the FTP upload
+// filter and the tarball download all match on extension, so a .thm is invisible to
+// every one of them and none of them needed changing.
+#define THM_EXT "thm"
+#define THM_SCALE 8       // esp_jpg_decode JPG_SCALE_8X - 1/8 in each axis
+#define THM_QUALITY 12    // re-encode quality for the cached tile
 #define AVI_HEADER_LEN 310 // AVI header length
 #define CHUNK_HDR 8 // bytes per jpeg hdr in AVI 
 #define AVITEMP "/current.avi"
@@ -341,6 +351,9 @@ extern bool dbgMotion;
 extern bool doPlayback;
 extern bool doRecording; // whether to capture to SD or not
 extern bool forceRecord; // Recording enabled by rec button or dashcam slider
+extern bool stillSave; // file every Get Still on the card; the bench turns it off for a run
+// thumbs.cpp - cached tile for a recording or a saved still, generated on first request
+bool makeThumb(const char* srcPath, char* thmPath, size_t thmPathLen);
 extern uint8_t FPS;
 extern uint8_t captureFPS; // user's chosen rate for the capture resolution
 extern uint8_t fsizePtr; // index to frameData[] for record

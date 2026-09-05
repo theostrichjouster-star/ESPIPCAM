@@ -48,7 +48,11 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - `/control?displayLog=1` - RAM log; lives in RTC memory and SURVIVES resets, so it
   holds the pre-crash tail the SD log may be missing
 - `/web?log.txt` - SD log (large; fetch with `-m 90`)
-- `/sustain?stream=0` - live MJPEG stream; `/control?sfile=/` - file listings
+- `/sustain?stream=0` - live MJPEG stream; `/control?sfile=/` - file listings (recordings AND
+  saved stills since §38.20; the cached `.thm` thumbnails never appear)
+- `/file?path=/20260905/x.avi` - ANY file on the card, behind auth and `pathIsSafe()`. `/web?` only
+  reaches `/data`. Add `&thumb=1` for a cached 160x90 tile, generated on first request from the
+  clip's MIDDLE frame and refused while capturing
 - `/control?reset=1` - soft restart
 
 ## Bench discipline
@@ -86,13 +90,15 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   inline USB meter (5V side, includes charge offset - deltas are the signal);
   voltages via multimeter. Structural checks alone pass on corrupt frames.
 - Concurrency fixes get soak tests (races need repetition, not one green run).
-- **Every file in /data suddenly unopenable? It is the mount's FIVE open-file slots, not the card.**
-  `utilsFS.cpp` calls `SD_MMC.begin(...)` with four arguments and the core's fifth is
-  `maxOpenFiles = 5`. The SD log holds one, a recording holds its AVI plus the CSV and SRT, and an
-  aborted browser transfer leaves another (`WARN sendChunks Failed to send to browser ...
-  ESP_ERR_HTTPD_RESP_SEND` opens each window). Past that, EVERY open fails - reads and writes, any
-  file - until a remount, while the boot listing still shows the files present with their real
-  timestamps. Measured on COM4 twice on 5 Sep 2026 (§38.8); COM3 took the identical uploads at the
+- **Every file in /data suddenly unopenable? It is the mount's open-file slots, not the card.**
+  `utilsFS.cpp` `prepSD_MMC()` passes `maxOpenFiles = 15` (raised from the core's default of 5,
+  before 5 Sep 2026 - earlier notes here and in §38.8 / §38.19 say five and are STALE). The SD log
+  holds one, a recording holds its AVI plus the CSV and SRT, and an aborted browser transfer leaves
+  another (`WARN sendChunks Failed to send to browser ... ESP_ERR_HTTPD_RESP_SEND` opens each
+  window). Past that, EVERY open fails - reads and writes, any file - until a remount, while the
+  boot listing still shows the files present with their real timestamps. The 5 Sep exhaustion
+  therefore reached FIFTEEN, so the leak is worse than the raised ceiling suggests and any bulk
+  browsing must stay bounded (the gallery holds 2 fetches in flight). Measured on COM4 twice on 5 Sep 2026 (§38.8); COM3 took the identical uploads at the
   identical bus clock with recording OFF and never failed. **A reset cures it; do not blame the
   card and do not reach for `chkdsk` - I did, and it was wrong.** `/control?peerReset=1` on COM3 is
   the fastest recovery.
@@ -231,6 +237,13 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   Check a layout change by reading each row's right edge against the panel's content edge, at a
   viewport you set deliberately: the Browser pane reports `innerWidth` 0 when it is hidden and the page
   then renders in the phone layout, which reads as a pass (§38.18)
+- **`maxOpenFiles` is 15, not the core's 5** (`utilsFS.cpp` `prepSD_MMC`) - raised before 5 Sep
+  2026, so §38.8's and §38.19's "five slots" are stale and the exhaustion measured on 5 Sep
+  reached FIFTEEN open files. The leak audit is still owed, and browsing must stay bounded
+  (the gallery keeps 2 thumbnail fetches in flight, measured)
+- **`showView()` reads the frame size as `split('_')[2]`**, which is bare for a recording
+  (`_HD_20_12.avi`) but carries the extension for a saved still (`QSXGA.jpg`); it must be stripped
+  or the viewer prefix matches no option and sizes nothing (§38.20)
 - **A page that overflows on a phone can report NO overflow**: the browser widens the layout viewport
   to fit, so every right edge then sits inside `innerWidth` and an element scan comes back clean. The
   test is `document.documentElement.scrollWidth == innerWidth` AND `innerWidth == the width you set`.
@@ -369,6 +382,15 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   sensor-branch rule above). After any UI change, `DRY=1` on `ui_regress.sh` is the smoke test and
   the full run is the gate. Still owed: the dark-room AWB comparison, the `colorbar` firmware half
   (never persist, clear at boot), the `wb_mode` firmware gate, and the open-file leak audit
+- **Gallery** (§38.20, 5 Sep 2026, firmware + page): every Get Still is now FILED on the card as
+  `/YYYYMMDD/YYYYMMDD_HHMMSS_<SIZE>.jpg` - before this, stills existed only as a browser response
+  and nothing had ever written a `.jpg`. The listing carries them (`listDir` takes a comma list;
+  `doPlayback` is set from the extension, not from its return). Thumbnails are cached beside their
+  file as `.thm`, generated on first request from a clip's MIDDLE frame; `esp_jpg_decode`'s reader
+  callback streams the source off the card so nothing large is ever held in RAM, and generation is
+  refused while capturing. `.thm` is invisible to `listDir`, the FTP filter and the tarball, and
+  `deleteOthers()` strips it. **The bench opts out of saving** (`stillSave=0` in
+  `assert_campaign_config`, restored via `CAM_KEYS`) - a full run is 214 stills
 - **Phone layout** (§38.19, 5 Sep 2026, page only): below `48rem` the page is a column of cards - app
   header, Device Controls, a live "viewfinder" card, Camera Tools, System Status - driven from ONE
   `@media (max-width: 48rem)` block on the same DOM, because `updateStatus()` matches a status key to

@@ -957,6 +957,57 @@
         flex-shrink: 0;
       }
 
+      /* ---- gallery tiles: the same listing as the select, drawn as thumbnails ---- */
+      #fileGrid {
+        grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+        gap: var(--buttonHalf);
+        margin-top: var(--buttonHalf);
+        max-height: 60vh;
+        overflow-y: auto;
+      }
+      .fileTile {
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        padding: 0;
+        border: 1px solid var(--itemBorder);
+        border-radius: var(--buttonQuart);
+        background: var(--cardBackground);
+        color: var(--pageText);
+        font-size: var(--footerSize);
+        line-height: 1.4;
+        overflow: hidden;
+        text-align: center;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      /* the tap has to reach the tile, not its picture or its caption */
+      .fileTile > * {
+        pointer-events: none;
+      }
+      .fileTile img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        background: var(--pageBackground);
+      }
+      /* no thumbnail yet - the board refuses to decode while it is recording. The box keeps its
+         place so the grid does not reflow when one arrives later */
+      .fileTile img.noThumb {
+        visibility: hidden;
+      }
+      .fileTile span {
+        padding: 2px 3px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .fileTile.folderTile {
+        padding: var(--buttonHalf) 0;
+        background: var(--buttonReady);
+      }
+
       /* ============ pieces shared with the phone card layout ============
          Everything here is inert on a desktop: .mobileOnly has no display until the card block
          gives it one, tile icons are hidden, and tile labels are simply the buttons' own text. */
@@ -2314,6 +2365,16 @@
                 <label for="files-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-film"></use></svg>Playback & File Transfers</label>
                 <div class='addButtons'></div>
                 <div>
+                  <!-- Tiles and list are two views of the SAME listing: getFiles() fills both from
+                       one fetch, and the select stays the thing that holds the selection, so
+                       Download, Delete and Upload keep working unchanged -->
+                  <div class="input-group" id="galleryTiles-group">
+                    <label for="galleryTiles">Tile view</label>
+                    <div class="switch">
+                      <input id="galleryTiles" type="checkbox" class="local">
+                      <label title="Show thumbnails instead of a list" class="slider" for="galleryTiles"></label>
+                    </div>
+                  </div>
                   <div class="input-group" id="sfiles-group" style="display: grid;">
                     <label for="sfile">Select folder / file</label>
                     <select title="Select sd card file or folder" id="sfile" size="12">
@@ -2323,6 +2384,7 @@
                       <option value="/~previous">List previous (yesterday)</option>
                     </select>
                   </div>
+                  <div id="fileGrid" class="hidden" style="display:none"></div>
                   <div>
                     <progress id="progressBar" value='0' max='100' class="info"></progress>%
                   </div>
@@ -2758,6 +2820,7 @@
         fetchTimeZones();
         hideBuiltOut();
         mobileInit(); // the phone card layout - see the block below
+        galleryInit(); // tile view, the thumbnail queue and the tap-to-view listener
         nightInit(); // sync the long exposure panel with whatever the board is actually doing
       }
 
@@ -2982,6 +3045,7 @@
           else if (key == "get-still") getStill();
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
+          else if (key == "galleryTiles") { setGalleryView(isOn(value)); return; }
           // UI_REVIEW C1 and C4: one gate for every control whose owner decides whether it can
           // act at all. These keys do not return - the value still goes to the board below
           else if (key == "aec" || key == "agc" || key == "awb" || key == "awb_gain"
@@ -3360,6 +3424,9 @@
         if (isFile) {
           // get framesize from filename
           sizeStr = $('#sfile').value.split('_')[2]; // the frame type eg SVGA
+          // a recording's token is bare (..._HD_20_12.avi) but a still's is the last field, so it
+          // arrives as "QSXGA.jpg" and prefix matches no option - the viewer then sized nothing
+          if (sizeStr) sizeStr = sizeStr.split('.')[0];
           $$('#framesize option').forEach(el => {
             if (el.innerHTML.substr(0, sizeStr.length) == sizeStr) sizeStr = el.innerHTML; // now contains eg SVGA(800x600)
           });
@@ -3492,17 +3559,137 @@
         const response = await fetch(encodeURI(webServer + '/control?sfile='+filePath));
         if (response.ok) {
           const fileData = await response.json();
+          const rows = [];
           Object.entries(fileData).forEach(([key, value]) => {
             if (!value.includes("System") && !value.includes("FOUND")) {
               let option = document.createElement("option");
               option.text = value;
               option.value = key;
               $('#sfile').add(option);
+              rows.push([key, value]);
             }
           });
+          buildFileGrid(rows); // the same listing, drawn as tiles - no second request
         } else alert("getFiles - " + response.status + ": " + response.statusText);
         await sleep(500);
         $$('*').forEach(el => { el.style.cursor = ("default")});
+      }
+
+      /************** gallery: tiles, thumbnails and the viewer **************/
+      /* The board holds a limited number of files open at once, mount wide, and a browser left to
+         itself opens six connections for six images. Thumbnails are therefore fetched through a
+         queue that keeps at most two in flight and starts the next only when one has finished -
+         load or error, either way. Everything else here is the existing listing and the existing
+         viewer; the only new request is /file. */
+
+      const THUMB_PARALLEL = 2;
+      let thumbQueue = [];      // tiles waiting for an image
+      let thumbActive = 0;
+      let thumbRun = 0;         // bumped on every rebuild, so a stale queue stops itself
+
+      function thumbNext(run) {
+        while (thumbActive < THUMB_PARALLEL && thumbQueue.length && run == thumbRun) {
+          const img = thumbQueue.shift();
+          thumbActive++;
+          const done = () => { thumbActive--; thumbNext(run); };
+          img.addEventListener('load', done, {once: true});
+          // a 404 is the normal answer while a recording is running - the board refuses to
+          // decode rather than compete with the recorder, so the tile keeps its placeholder
+          img.addEventListener('error', () => { img.classList.add('noThumb'); done(); }, {once: true});
+          img.src = img.dataset.src;
+        }
+      }
+
+      function tileCaption(label) {
+        // Names are <date>_<hhmmss>_<SIZE>... and every one in a folder shares the date, so a
+        // truncated filename reads the same on every tile. The time and the frame size are what
+        // tell them apart; the full name stays on the tile's title
+        const base = label.split(' ')[0];
+        const p = base.split('_');
+        if (p.length >= 3 && p[1].length == 6 && /^\d+$/.test(p[1]))
+          return p[1].substr(0, 2) + ':' + p[1].substr(2, 2) + ' ' + p[2].split('.')[0];
+        return base;
+      }
+
+      function buildFileGrid(rows) {
+        const grid = $('#fileGrid');
+        if (!grid) return;
+        thumbRun++;
+        thumbQueue = [];
+        thumbActive = 0;
+        grid.innerHTML = '';
+        const run = thumbRun;
+        rows.forEach(([path, label]) => {
+          const isAvi = path.substr(-4) === '.avi';
+          const isJpg = path.substr(-4) === '.jpg';
+          const tile = document.createElement('button');
+          tile.type = 'button';
+          tile.className = 'fileTile local' + (isAvi || isJpg ? '' : ' folderTile');
+          tile.dataset.path = path;
+          tile.title = label;
+          if (isAvi || isJpg) {
+            const img = document.createElement('img');
+            img.alt = '';
+            img.dataset.src = webServer + '/file?path=' + encodeURIComponent(path) + '&thumb=1';
+            tile.appendChild(img);
+            thumbQueue.push(img);
+          }
+          const cap = document.createElement('span');
+          cap.textContent = tileCaption(label);
+          tile.appendChild(cap);
+          grid.appendChild(tile);
+        });
+        thumbNext(run);
+      }
+
+      async function openFile(path) {
+        // tap a tile: make it the selection the way the select does, so Download / Delete /
+        // Upload still act on it, then show it
+        const sel = $('#sfile');
+        if (sel) sel.value = path;
+        await getFiles(path); // records the selection on the board, and lists a folder
+        if (path.substr(-4) === '.jpg') {
+          stopAll("openFile", false);
+          view.src = webServer + '/file?path=' + encodeURIComponent(path);
+          showView(true);
+          setLiveCard('still');
+          if (isMobile()) closeSheetForViewer();
+        } else if (path.substr(-4) === '.avi') {
+          if (isMobile()) closeSheetForViewer();
+          if (!isActive(playbackButton)) activatePlaybackButton();
+        }
+      }
+
+      function closeSheetForViewer() {
+        const t = $('nav.quick-nav.active');
+        if (t) navigation(t.id);
+      }
+
+      function galleryInit() {
+        const grid = $('#fileGrid');
+        if (!grid) return;
+        // one delegated listener rather than one per tile, and it stops the event here: the
+        // document dispatch routes a BUTTON by its id, and these tiles deliberately have none
+        grid.addEventListener('click', ev => {
+          const tile = ev.target.closest ? ev.target.closest('.fileTile') : null;
+          if (!tile) return;
+          ev.stopPropagation();
+          openFile(tile.dataset.path);
+        });
+        let tiles = false;
+        try { tiles = localStorage.getItem('galleryTiles') == '1'; } catch (e) {}
+        const cb = $('#galleryTiles');
+        if (cb) cb.checked = tiles;
+        setGalleryView(tiles);
+      }
+
+      function setGalleryView(tiles) {
+        const grid = $('#fileGrid'), list = $('#sfiles-group');
+        if (!grid || !list) return;
+        tiles ? show(grid) : hide(grid);
+        if (tiles) grid.style.display = 'grid';
+        list.style.display = tiles ? 'none' : 'grid';
+        try { localStorage.setItem('galleryTiles', tiles ? '1' : '0'); } catch (e) {}
       }
 
       function setFrameSize(key, value, fromUser) {

@@ -96,7 +96,7 @@ ORDER="brightness contrast saturation sharpness denoise special_effect lenc bpc 
 declare -A CAMPAIGN=([record]=0 [enableMotion]=0 [dbgMotion]=0 [dashCamOn]=0 [micGain]=0)
 # the camera keys the exit restore replays from status0, in a safe order (size before rate
 # and quality, the automatics on before their manual values, detection and recording last)
-CAM_KEYS="framesize fps quality brightness contrast saturation sharpness denoise special_effect wb_mode aec_value aec2 agc_gain hmirror vflip awb awb_gain aec ae_level dcw agc gainceiling lenc colorbar bpc wpc raw_gma motionVal moveStopSecs lswitch zoneMask dashCamOn dbgMotion micGain idleFps enableMotion record"
+CAM_KEYS="framesize fps quality brightness contrast saturation sharpness denoise special_effect wb_mode aec_value aec2 agc_gain hmirror vflip awb awb_gain aec ae_level dcw agc gainceiling lenc colorbar bpc wpc raw_gma motionVal moveStopSecs lswitch zoneMask dashCamOn dbgMotion micGain stillSave idleFps enableMotion record"
 
 # ---------------------------------------------------------------- helpers ------------------
 sf0() { python "$HERE/jfield.py" "$1" < "$STATUS0"; }

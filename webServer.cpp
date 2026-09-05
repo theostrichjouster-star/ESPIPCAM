@@ -4,7 +4,9 @@
 
 #include "appGlobals.h"
 
-#define MAX_HANDLERS 12
+// one per registered URI, and the registration loop below now has 12 of them (/file was the
+// twelfth). Kept one clear so the next route does not silently fail to register
+#define MAX_HANDLERS 13
 
 char inFileName[IN_FILE_NAME_LEN];
 static char variable[FILE_NAME_LEN]; 
@@ -263,6 +265,60 @@ static esp_err_t webHandler(httpd_req_t* req) {
   } else LOG_WRN("Unknown file type %s", variable);  
   int dlen = snprintf(inFileName, IN_FILE_NAME_LEN - 1, "%s/%s", DATA_DIR, variable);               
   if (dlen >= IN_FILE_NAME_LEN) LOG_WRN("file name truncated");
+  return fileHandler(req);
+}
+
+static esp_err_t cardFileHandler(httpd_req_t* req) {
+  // Serve one file from anywhere on the card: /file?path=/20260905/xxx.avi
+  // /web is hard wired to DATA_DIR, and the only other route to a recording is the stateful
+  // sfile + sustain download, which is one file at a time - neither can back a gallery.
+  // Adding &thumb=1 serves the cached thumbnail instead, generating it on first request.
+  // One route rather than two: the work either side of it is identical.
+  if (!checkAuth(req)) return ESP_OK;
+  char query[FILE_NAME_LEN];
+  char path[FILE_NAME_LEN];
+  char thumbFlag[8];
+  size_t queryLen = httpd_req_get_url_query_len(req) + 1;
+  if (queryLen <= 1 || queryLen >= sizeof(query)) {
+    httpd_resp_set_status(req, "400 Bad path");
+    httpd_resp_sendstr(req, NULL);
+    return ESP_FAIL;
+  }
+  httpd_req_get_url_query_str(req, query, queryLen);
+  if (httpd_query_key_value(query, "path", path, sizeof(path)) != ESP_OK) {
+    httpd_resp_set_status(req, "400 Bad path");
+    httpd_resp_sendstr(req, NULL);
+    return ESP_FAIL;
+  }
+  urlDecode(path);
+  // pathIsSafe rejects '..'; the leading slash keeps it on the card root rather than relative
+  if (!pathIsSafe(path) || path[0] != '/') {
+    LOG_WRN("Rejected unsafe path in file request: %s", path);
+    httpd_resp_set_status(req, "400 Invalid path");
+    httpd_resp_sendstr(req, NULL);
+    return ESP_FAIL;
+  }
+  bool wantThumb = httpd_query_key_value(query, "thumb", thumbFlag, sizeof(thumbFlag)) == ESP_OK
+                   && thumbFlag[0] == '1';
+  if (wantThumb) {
+    char thmPath[FILE_NAME_LEN];
+    if (!makeThumb(path, thmPath, sizeof(thmPath))) {
+      // no thumbnail yet and none can be made now - the page shows a placeholder rather than
+      // blocking, and asks again next time the folder is opened
+      httpd_resp_send_404(req);
+      return ESP_OK;
+    }
+    strncpy(inFileName, thmPath, IN_FILE_NAME_LEN - 1);
+    httpd_resp_set_type(req, "image/jpeg");
+  } else {
+    strncpy(inFileName, path, IN_FILE_NAME_LEN - 1);
+    if (nameHasExt(path, STILL_EXT)) httpd_resp_set_type(req, "image/jpeg");
+    else if (nameHasExt(path, AVI_EXT)) httpd_resp_set_type(req, "video/x-msvideo");
+    else httpd_resp_set_type(req, "application/octet-stream");
+  }
+  inFileName[IN_FILE_NAME_LEN - 1] = 0;
+  // fileHandler's ETag is the file's size and write time, so a thumbnail is fetched once and
+  // answered 304 from then on - the tile grid costs nothing on a revisit
   return fileHandler(req);
 }
 
@@ -714,6 +770,7 @@ bool startWebServer() {
   }
   httpd_uri_t indexUri = {.uri = "/", .method = HTTP_GET, .handler = indexHandler, .user_ctx = NULL};
   httpd_uri_t webUri = {.uri = "/web", .method = HTTP_GET, .handler = webHandler, .user_ctx = NULL};
+  httpd_uri_t cardFileUri = {.uri = "/file", .method = HTTP_GET, .handler = cardFileHandler, .user_ctx = NULL};
   httpd_uri_t controlUri = {.uri = "/control", .method = HTTP_GET, .handler = controlHandler, .user_ctx = NULL};
   httpd_uri_t updateUri = {.uri = "/update", .method = HTTP_POST, .handler = updateHandler, .user_ctx = NULL};
   httpd_uri_t statusUri = {.uri = "/status", .method = HTTP_GET, .handler = statusHandler, .user_ctx = NULL};
@@ -729,7 +786,7 @@ bool startWebServer() {
     // unexplainable mystery: on 30 Aug the root page 404'd for an entire boot while every
     // other route worked, and nothing recorded why. A failed registration now names the
     // route and the reason, so the log convicts the culprit immediately
-    const httpd_uri_t* uris[] = {&indexUri, &webUri, &controlUri, &updateUri, &statusUri,
+    const httpd_uri_t* uris[] = {&indexUri, &webUri, &cardFileUri, &controlUri, &updateUri, &statusUri,
       &uploadUri, &sseUri, &wifiUri, &wsUri, &sustainUri, &checkUri};
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
       esp_err_t regRes = httpd_register_uri_handler(httpServer, uris[i]);

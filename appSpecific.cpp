@@ -18,6 +18,46 @@ bool useUart = false; // auxiliary board support removed; kept for the INCLUDE_P
 volatile audioAction THIS_ACTION = PASS_ACTION;
 static void stopRC();
 
+// Every Get Still is filed on the card, by the user's decision. The bench opts out instead of
+// the button behaving differently: bench_lib.sh sets stillSave=0 in campaign_config() and
+// restores it, the same as record and idleFps, because a full ui_regress run fires 214 stills
+// through this same endpoint and would otherwise leave up to a gigabyte of test frames behind.
+bool stillSave = true;
+
+static bool saveStill() {
+  // write the JPEG just captured into today's folder, under the same stem recordings use so
+  // the page can read the frame size back out of the name (showView takes split('_')[2])
+  if (!alertBufferSize || alertBuffer == NULL) return false;
+  char folder[FILE_NAME_LEN];
+  char stem[FILE_NAME_LEN];
+  char stillName[FILE_NAME_LEN];
+  dateFormat(folder, sizeof(folder), true);
+  STORAGE.mkdir(folder);
+  dateFormat(stem, sizeof(stem), false);
+  // sensorFS is the hardware truth - naming fsizePtr would label the file with a size that
+  // was never captured whenever the two disagree, the same trap the still log line avoids
+  for (int attempt = 0; attempt < 100; attempt++) {
+    if (attempt) snprintf(stillName, FILE_NAME_LEN - 1, "%s_%s_%d.%s", stem,
+      frameData[sensorFS].frameSizeStr, attempt, STILL_EXT);
+    else snprintf(stillName, FILE_NAME_LEN - 1, "%s_%s.%s", stem,
+      frameData[sensorFS].frameSizeStr, STILL_EXT);
+    if (!STORAGE.exists(stillName)) break;
+  }
+  File sf = STORAGE.open(stillName, FILE_WRITE);
+  if (!sf) {
+    LOG_WRN("Failed to open %s for the still", stillName);
+    return false;
+  }
+  size_t written = sf.write(alertBuffer, alertBufferSize);
+  sf.close();
+  if (written != alertBufferSize) {
+    LOG_WRN("Still %s short write: %u of %u bytes", stillName, written, alertBufferSize);
+    return false;
+  }
+  LOG_ALT("Saved still %s (%s)", stillName, fmtSize(written));
+  return true;
+}
+
 /************************ webServer callbacks *************************/
 
 bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
@@ -69,8 +109,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     stopPlayback = true;
     deleteFolderOrFile(value);
   }
-  else if (!strcmp(variable, "record")) doRecording = (intVal) ? true : false;   
-  else if (!strcmp(variable, "forceRecord")) forceRecord = (intVal) ? true : false; 
+  else if (!strcmp(variable, "record")) doRecording = (intVal) ? true : false;
+  else if (!strcmp(variable, "forceRecord")) forceRecord = (intVal) ? true : false;
+  else if (!strcmp(variable, "stillSave")) stillSave = (intVal) ? true : false;
   else if (!strcmp(variable, "dbgMotion")) {
     // Show Motion streams the detector's zone overlay, which works at any frame size now -
     // it only needs detection to be running. A refusal is said out loud and the real state
@@ -411,8 +452,13 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
   if (!strcmp(variable, "sfile")) {
     // get folders / files on SD, save received filename if has required extension
     strcpy(inFileName, value);
-    if (!forceRecord) doPlayback = listDir(inFileName, jsonBuff, JSON_BUFF_LEN, AVI_EXT); // browser control
-    else strcpy(jsonBuff, "{}");
+    if (!forceRecord) {
+      // stills are listed alongside recordings. listDir returns "a file of a listed type was
+      // selected", which is no longer the same question as "can this be played" - only an AVI
+      // can, and doPlayback is what /sustain?playback=0 checks before starting
+      listDir(inFileName, jsonBuff, JSON_BUFF_LEN, AVI_EXT "," STILL_EXT);
+      doPlayback = nameHasExt(inFileName, AVI_EXT);
+    } else strcpy(jsonBuff, "{}");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   } 
@@ -497,6 +543,8 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
       // report the size actually delivered - sensorFS is the hardware truth, and naming
       // fsizePtr would confidently report a size that was never captured on any mismatch
       LOG_INF("%s JPEG: %uB in %lums", frameData[sensorFS].frameSizeStr, alertBufferSize, jpegTime);
+      // file it AFTER the browser has its copy, so a slow card never delays the preview
+      if (stillSave) saveStill();
       alertBufferSize = 0;
     } else LOG_WRN("Failed to get still");
   } 
@@ -1043,6 +1091,7 @@ streamVid~0~8~C~Enable NVR Video stream: /sustain?video=1
 streamAud~0~8~C~Enable NVR Audio stream: /sustain?audio=1
 smtpUse~0~2~C~Enable email sending
 smtpMaxEmails~10~2~N~Max daily alerts
+stillSave~1~2~C~Save each Get Still on the SD card
 sdMinCardFreeSpace~100~2~N~Min free MBytes on SD before action
 sdFreeSpaceMode~1~2~S:No Check:Delete oldest:Ftp then delete~Action mode on SD min free
 formatIfMountFailed~0~2~C~Format file system on failure

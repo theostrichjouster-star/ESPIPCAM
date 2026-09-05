@@ -292,6 +292,27 @@ void setFolderName(const char* fname, char* fileName) {
   } else strcpy(fileName, fname);
 }
 
+bool nameHasExt(const char* name, const char* extList) {
+  // extList is one extension or several comma separated, eg "avi,jpg". Matched the way the
+  // single-extension version always did, with strstr rather than an end-of-name test, so
+  // nothing that relied on the loose match changes behaviour
+  if (name == NULL || extList == NULL) return false;
+  const char* start = extList;
+  char one[16];
+  while (*start) {
+    const char* comma = strchr(start, ',');
+    size_t len = comma ? (size_t)(comma - start) : strlen(start);
+    if (len && len < sizeof(one)) {
+      memcpy(one, start, len);
+      one[len] = 0;
+      if (strstr(name, one) != NULL) return true;
+    }
+    if (!comma) break;
+    start = comma + 1;
+  }
+  return false;
+}
+
 bool listDir(const char* fname, char* jsonBuff, size_t jsonBuffLen, const char* extension) {
   // either list day folders in root, or files in a day folder
   bool hasExtension = false;
@@ -301,7 +322,7 @@ bool listDir(const char* fname, char* jsonBuff, size_t jsonBuffLen, const char* 
   setFolderName(fname, fileName);
 
   // check if folder or file
-  if (strstr(fileName, extension) != NULL) {
+  if (nameHasExt(fileName, extension)) {
     // required file type selected
     hasExtension = true;
     noEntries = true; 
@@ -330,7 +351,7 @@ bool listDir(const char* fname, char* jsonBuff, size_t jsonBuffLen, const char* 
       }
       if (!returnDirs && !file.isDirectory()) {
         // build file list
-        if (strstr(file.name(), extension) != NULL) {
+        if (nameHasExt(file.name(), extension)) {
           sprintf(partJson, "\"%s\":\"%s %s\",", file.path(), file.name(), fmtSize(file.size()));
           fileVec.push_back(std::string(partJson));
           noEntries = false;
@@ -370,6 +391,10 @@ static void deleteOthers(const char* baseFile) {
   changeExtension(otherDeleteName, CSV_EXT);
   if (STORAGE.remove(otherDeleteName)) LOG_INF("File %s deleted", otherDeleteName);
   changeExtension(otherDeleteName, SRT_EXT);
+  if (STORAGE.remove(otherDeleteName)) LOG_INF("File %s deleted", otherDeleteName);
+  // the cached thumbnail goes with its file. Both delete paths reach here, and the free
+  // space reaper removes whole day folders, so a thumbnail is never orphaned
+  changeExtension(otherDeleteName, THM_EXT);
   if (STORAGE.remove(otherDeleteName)) LOG_INF("File %s deleted", otherDeleteName);
 #endif  
 }
