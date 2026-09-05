@@ -1197,6 +1197,13 @@
                            title="1024 is 1.0x. Raise this against green to warm the frame">
                     <div name="rangeMax">3x</div>
                   </div>
+                  <div class="input-group" id="nightAwbG-group">
+                    <label for="nightAwbG">Green gain</label>
+                    <div name="rangeMin">0.5x</div>
+                    <input type="range" id="nightAwbG" class="local" min="512" max="3072" step="8" value="1024"
+                           title="1024 is 1.0x. Lowering this is the direct cure for a green cast, and it darkens the frame - the AEC will put the brightness back">
+                    <div name="rangeMax">3x</div>
+                  </div>
                   <div class="input-group" id="nightAwbB-group">
                     <label for="nightAwbB">Blue gain</label>
                     <div name="rangeMin">0.5x</div>
@@ -2642,6 +2649,7 @@
           // seed the gain sliders from what the ISP actually converged on, so going manual starts
           // from the current picture rather than from 1.0x
           if (nightInfo.awbR > 0) $('#nightAwbR').setAttribute('value', nightInfo.awbR);
+          if (nightInfo.awbG > 0) $('#nightAwbG').setAttribute('value', nightInfo.awbG);
           if (nightInfo.awbB > 0) $('#nightAwbB').setAttribute('value', nightInfo.awbB);
         } catch (e) {} // older firmware without the key - leave the panel at its defaults
       }
@@ -2684,6 +2692,7 @@
         nightRow('nightGain', !$('#nightAgc').checked);      // manual gain, only under manual AGC
         const awbManual = !$('#nightAwb').checked;
         nightRow('nightAwbR', awbManual);                     // the gains, only off auto white balance
+        nightRow('nightAwbG', awbManual);
         nightRow('nightAwbB', awbManual);
         nightRow('nightFocus', !$('#nightFocusAuto').checked); // the lens, only off autofocus
         // manual exposure AND manual gain together is the combination with the black-frame quirk
@@ -2692,10 +2701,11 @@
           + "black frame. Leave gain automatic unless you need it.";
       }
 
-      // green is the reference channel, so only R and B are exposed - moving all three together
-      // would only change brightness, which is the AEC's job
+      // All three channels, green included: the ISP applies the gains it is given, so lowering green
+      // is the direct cure for a green cast where raising the other two is the indirect one. Moving
+      // all three the same way only changes brightness, which the AEC then undoes
       function nightAwbSend() {
-        sendControl('awbGains', $('#nightAwbR').value + ',1024,' + $('#nightAwbB').value);
+        sendControl('awbGains', $('#nightAwbR').value + ',' + $('#nightAwbG').value + ',' + $('#nightAwbB').value);
       }
 
       function nightControl(key, value) {
@@ -2721,7 +2731,7 @@
           value ? sendControl('awbGainsAuto', 1) : nightAwbSend();
           nightGating();
         }
-        else if (key == "nightAwbR" || key == "nightAwbB") {
+        else if (key == "nightAwbR" || key == "nightAwbG" || key == "nightAwbB") {
           if ($('#nightAwb').checked) $('#nightAwb').checked = false; // adjusting IS going manual
           nightAwbSend();
           nightGating();

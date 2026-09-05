@@ -19,7 +19,12 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - Rollback ladder: a fresh image boots PENDING_VERIFY and is confirmed only after
   camera + storage + wifi validate (otaConfirm); unconfirmed image + any reset =
   automatic revert. After a failed-looking deployment, check WHICH image is actually
-  running before blaming the transfer.
+  running before blaming the transfer. **The tell is the `otaConfirm` line on the boot
+  that follows**: a fresh image boots PENDING_VERIFY and logs "OTA image confirmed
+  valid" ~45 s in, while an unchanged one is already valid and `otaConfirm` returns
+  silently. No confirm line on that boot means the image did NOT change, however
+  convincingly the board rebooted (COM3, 5 Sep 2026: curl 56, a reboot, and the old
+  image still running - §38.15).
 - Serial fallback: manual boot mode (hold BOOT, tap RESET, release BOOT), then
   `arduino-cli upload -p <port> --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi" .`
   This is NOT app-only (an earlier version of this file said so and was wrong):
@@ -283,11 +288,18 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   with a read-back; `awbGainsAuto=1` hands the gains back. This is the control for a green cast, NOT
   `awb`: that one clears 0x5001 bit 0 so the ISP applies no gains at all and the picture goes further
   green. Measured on a lit bench frame: green sits 13% above the other channels on auto and 15% below
-  at R 1600 / B 1400, so neutral is reachable between them (§38.12)
+  at R 1600 / B 1400, so neutral is reachable between them (§38.12). The panel exposes **all three
+  channels** in R, G, B order since §38.15 - green was held at 1024 on the theory that it is the
+  reference channel, which is true of the ratio and unhelpful to a user: lowering green is the direct
+  cure for a green cast, and the only one that does not also brighten the frame
 - **Dark QSXGA steps its own quality and that is correct**: 5MP frames in the dark overrun the 983 KB
   buffer, the driver delivers nothing, and the rescue steps the sensor's quality until they fit -
-  settling at q24, the same figure §37 measured. Do not suppress it; it is the reason dark 5MP works
-  at all. `/status` still reports the CONFIG quality, `camLive` the sensor's. **This also makes the
+  settling at q24-28, the range §37 measured. Do not suppress it; it is the reason dark 5MP works
+  at all. `/status` still reports the CONFIG quality, `camLive` the sensor's. A night session at QSXGA
+  now SEEDS q28 when the gain the AEC held at entry is 8x or more (a lit bench is 1-4x, this dark room
+  32-64x) and restores the configured quality on exit, which turns a seven-step walk with no picture
+  into one step: measured first frame clean, luma 91-132, none blown (§38.15). Seed high, not low -
+  the rescue only walks quality UP, so a low seed does not save the steps, it makes them slower. **This also makes the
   stream SELECT for blown frames**: at q10 a real dark 5MP frame is ~1 MB and never arrives, while a
   blown one is 96-100 KB and always does - so one frame in three on the wire was white while the AEC
   spent most of its time in a sane range. Judge a rate fault by what did NOT arrive too (§38.14)

@@ -408,8 +408,10 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
 - **This panel hides a control its automatic owns**, where the camera panel disables it in place
   (C1). Deliberate, and the user's call: the camera panel is a reference sheet, this is a working set.
 - **Manual white balance** (`awbGains`) is the answer to a green cast, not the AWB switch - that one
-  stops the ISP applying gains at all and goes further green. Green is the reference channel and is
-  not exposed.
+  stops the ISP applying gains at all and goes further green. All three channels are exposed, in
+  R, G, B order: green was held at 1024 at first because it is the ratio's reference channel, which
+  helps nobody looking at a green frame. Lowering green is the direct cure and the only one that does
+  not also brighten the picture.
 - **A session is bound to the size it was entered for**, and any size or rate chosen in the camera
   panel ends it, returning whatever the user did not choose. Without that the stretch outlived its
   size and left the sensor on a 3.17 s frame while the UI reported HD 30 (§38.13).
@@ -421,6 +423,11 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
   session measured 15 frames in 60.5 s, luma 78-118, none blown, against 7 blown of 19 before.
   Entering while the AEC sits at its 63.9x gain ceiling still costs ~6 blown frames.
 
-Still owed here: a long-exposure recording has never been run end to end, the dark-room AWB comparison
-from C3 is still outstanding, and the entry transient above (seed the sensor's quality for a dark 5MP
-session rather than letting the rescue walk to it) has not been measured.
+- **A dark 5MP session seeds the sensor's quality** (§38.15). At the configured q10 a dark 5MP frame
+  never fits the 983 KB buffer, so the rescue used to walk seven steps with no picture at all in the
+  meantime. Entering now seeds q28, the top of the range that walk settles at, whenever the gain the
+  AEC held at entry says the scene is dark, and the configured quality comes back on exit. Measured:
+  first frame clean, luma 91-132, one further rescue step in 45 s of streaming.
+
+Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
+comparison from C3 is still outstanding.

@@ -857,6 +857,19 @@ static int nightFS = -1;
 // discover that one step at a time. See nightEnter
 static float nightSeedGain = 0;
 static float nightPrevGain = 0; // what it was holding before the session, for the way back
+// Sensor JPEG quality to write once the retime has landed, -1 = nothing pending. A dark 5MP frame at
+// the configured q10 is ~1MB against the 983KB buffer, so the driver delivers NOTHING and the no-frame
+// rescue walks the quality up until frames fit - seven steps, 12s apart, no picture at all in the
+// meantime. It always settles at the same place, so a dark session can simply start there
+static int nightSeedQ = -1;
+static int nightPrevQ = -1;     // the quality before the session, restored on the way out
+#define NIGHT_DARK_GAIN 8.0f    // gain the AEC held at entry above this = a dark scene (a lit bench is 1-4x)
+// The rescue's OWN settling point in the dark, so not a guess: §37 measured q24-28 and this bench room
+// three times over needed 26-28, where the frames come out 933-948KB against the 983KB buffer. Seeded at
+// the TOP of that range deliberately - the rescue can only walk quality UP, so seeding 24 does not save
+// the two steps, it just makes them slower, and a coarser quantiser costs nothing on a frame whose
+// detail is noise anyway. Restored on exit either way
+#define NIGHT_DARK_QSXGA_Q 28
 
 int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
 volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
@@ -3152,6 +3165,22 @@ static void applyAecGainSeed(sensor_t* s) {
   nightSeedGain = 0;
 }
 
+// The sensor's JPEG quality for a dark 5MP session, and the configured one back on the way out. Same
+// two calls the no-frame rescue makes, from the same task - this only skips the walk to a figure the
+// rescue reaches anyway, seven steps and a picture-free minute later (see nightEnter)
+static void applyNightQuality(sensor_t* s) {
+  if (nightSeedQ < 0) return;
+  int want = nightSeedQ;
+  nightSeedQ = -1;
+  if (s->set_quality == NULL) return;
+  if (s->set_quality(s, want) != 0) {
+    LOG_WRN("Night quality %d refused", want);
+    return;
+  }
+  govRebaseQuality(want); // the governor's new base, exactly as the rescue treats its own steps
+  LOG_INF("Night quality %d (sensor reads q%d)", want, camReg(s, 0x4407) & 0x3F);
+}
+
 // The AEC's STEP engine, damped while the exposure is a whole multi-second frame.
 //
 // Datasheet 4.5.2 and table 7-13: 0x3A05[5] selects step AUTO mode, where the step is scaled to
@@ -3226,6 +3255,7 @@ static void applyAecLimits(sensor_t* s) {
   if (s == NULL || s->get_reg == NULL || s->set_reg == NULL) return;
   applyAecStepDamping(s);
   applyAecGainSeed(s); // after the damping, before the limits: the loop resumes from this gain
+  applyNightQuality(s); // and the frames it will produce have to fit the buffer to arrive at all
   camClocks_t c = camClocks(s);
   int hts = senReg16(s, OV5640_X_TOTAL_SIZE);
   int vts = senReg16(s, OV5640_X_TOTAL_SIZE + 2);
@@ -3432,6 +3462,16 @@ bool nightEnter(int fsIdx, int ms) {
   if (camExposureNow(&expMs, &gainX) && expMs > 0 && gainX > 0) {
     if (nightPrevGain <= 0) nightPrevGain = gainX; // for the way back out
     nightSeedGain = gainX * expMs / (float)ms;
+    // And the quality, for a DARK 5MP session only. The gain the AEC was holding is the only evidence
+    // about the scene available before the stretch: a lit bench sits at 1-4x, this dark room at 32-64x.
+    // 5MP is the size whose dark frames overrun the buffer - FHDNARROW's window is smaller but so are
+    // its frames, and its walk has not been measured, so it is left to the rescue
+    sensor_t* s = esp_camera_sensor_get();
+    if (s != NULL && fsIdx == (int)FRAMESIZE_QSXGA && gainX >= NIGHT_DARK_GAIN
+        && s->status.quality < NIGHT_DARK_QSXGA_Q) {
+      if (nightPrevQ < 0) nightPrevQ = s->status.quality;
+      nightSeedQ = NIGHT_DARK_QSXGA_Q;
+    }
   }
   idleFps = 0;  // the idle throttle retimes the sensor mid-session, which would undo the stretch
   micGain = 0;  // a multi-second-per-frame clip does not want audio
@@ -3462,6 +3502,9 @@ void nightExit(bool restoreSize, bool restoreFps) {
   // has been running is far too little for it. Put back the one the AEC held before the session
   // rather than computing a ratio - it is the value that suited this scene at this frame length
   if (nightPrevGain > 0) nightSeedGain = nightPrevGain;
+  // and the configured quality, if the session raised it for a dark 5MP frame. Whatever the rescue
+  // did on top of the seed goes with it - the short frame this returns to has no trouble fitting
+  if (nightPrevQ >= 0) { nightSeedQ = nightPrevQ; nightPrevQ = -1; }
   camFocusAuto();
   retimePending = true;
   LOG_INF("Night mode off - %s at %ufps, idleFps %d, micGain %d",
