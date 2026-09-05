@@ -16,8 +16,8 @@ Each item is a proposal with its evidence, for the user to pick from. Numbering 
 within each group. After any UI change, `DRY=1` on the regression is the smoke test and the full run
 is the gate.
 
-**Status, 5 Sep 2026: A1-A4 and B1-B3 are done and deployed to both boards; C and D are not started,
-on the user's instruction to pause before C1.** Of the B items only **B3 was a real defect** - B1 and
+**Status, 5 Sep 2026: A1-A4, B1-B3 and C1-C5 are done and deployed to both boards; D is not started,
+on the user's instruction to pause before it.** Of the B items only **B3 was a real defect** - B1 and
 B2 are retracted, because I had read the static markup, which carries the OV2640 ranges, where the
 page re-ranges every slider for the detected sensor on load. Part of C3 falls to the same error. Both
 retractions are written up in place rather than deleted, and the measurements behind them survive as
@@ -28,9 +28,9 @@ both boards, register-verified (0x5183 = 0x94, bit 7 set = simple per the datash
 comparison is still owed. Two pieces of A4 remain, both firmware rather than page: never persisting
 `colorbar` and clearing it at boot.
 
-The page files are deployed to both boards through the `startOTA` gate and served byte-exact.
-Firmware is **not** flashed: the `appConfig` default change reaches a board only on the next flash,
-which is why both boards were also set live and saved.
+Both boards now run the current firmware and the current page, deployed through the `startOTA`
+gate: the image carries the AWB, recording and detection defaults plus the open-file and C2 changes,
+and both OTAs confirmed valid on camera, storage and wifi.
 
 How A1-A4 were verified: the page was served from a local stub whose `/status` returned the state
 that makes each defect visible (AEC manual, AGC manual, AWB gain off, colour bar on), every value a
@@ -61,11 +61,11 @@ panels are not treated as inert, and normal controls still send.
 | B1 | ~~`ae_level` -5..+5~~ RETRACTED, tooltip added | range | already -5..+5 at runtime; I read the OV2640 markup |
 | B2 | ~~`agc_gain` 0..63~~ RETRACTED, tooltip added | range | already 0..63 with 1x-64x labels at runtime |
 | B3 | `gainceiling` to the firmware's 1023 | range | **a board at 1023 rendered as 511** - wrong by 2x |
-| C1 | Disable manual controls under the automatics | layout | all three measured inert under auto |
-| C2 | Show what the automatics are doing | layout | exposure, gain and live quality are invisible |
-| C3 | Re-home the AWB algorithm toggle | layout | label is already right; the switch reads as a feature, not a choice |
-| C4 | Gate Show Motion on motion detection | layout | firmware refuses it and warns |
-| C5 | Group the low-light-only controls | layout | two controls do nothing by daylight |
+| C1 | DONE - manual controls shown disabled, not hidden | layout | all measured inert under auto |
+| C2 | DONE - live readout on the status poll | layout | exposure, gain and sensor quality were invisible |
+| C3 | DONE - moved beside AWB Mode, sense explained | layout | label was already right; the switch read as a feature |
+| C4 | DONE - gated, and now reported in /status | layout | firmware refused it; the state was unreadable |
+| C5 | DONE - one Low light group | layout | three controls do nothing by daylight |
 | D1 | Regroup the camera panel | layout | current order mixes picture, exposure and diagnostics |
 | D2 | Clean the duplicate ids and the class typo | hygiene | found by reading, cheap to fix |
 | D3 | Move `xclkMhz` out of the picture controls | safety | a clock control beside brightness |
@@ -116,7 +116,8 @@ whose group is hidden. This is the general form of A1: the page's visibility sta
 firmware's state are two different things today.
 
 **Done 5 Sep 2026**, for this control and as a general guard: AWB Mode is now shown disabled with a
-reason in its tooltip rather than hidden (`setWbMode`), and `isInert()` in `common.js` stops the page
+reason in its tooltip rather than hidden (in `setWbMode`, folded into `applyCamGating` by C1), and
+`isInert()` in `common.js` stops the page
 sending from any control that is hidden or disabled, itself or through its `input-group`. The
 firmware half - the handler ignoring `wb_mode` while `awb_gain` is off - is **not** done, so a
 request sent by hand still applies. Whether the other state-dependent groups (Manual Exposure, Gain,
@@ -310,3 +311,42 @@ special effect does not clobber the brightness registers; sharpness at quality 6
 frame window at both QSXGA and FHDNARROW with no rescue; mid-recording rate and size changes were
 deferred to the clip's close. The page's problem is that it describes the camera badly, not that
 it drives it badly.
+
+
+---
+
+## C1-C5 as built (5 Sep 2026)
+
+All five are in `data/MJPEG2SD.htm`, with two supporting fields added to the firmware's status JSON.
+Verified first against the local stub (before and after, the committed page served beside the new
+one), then on COM4 itself after deployment.
+
+**C1** - `applyCamGating()` replaces the old `setAgc` / `showAec` / `setWbMode` trio. Every control
+whose automatic owns it is shown **disabled with the reason in its tooltip** rather than hidden, so
+the panel no longer jumps and the user can see what exists. The gates, all measurement-backed:
+Manual Exposure needs AEC off; Gain needs AGC off; Gain Ceiling is the AEC's own limit so it is
+disabled while gain is manual; Manual AWB needs AWB on, because with AWB off the ISP applies no
+gains at all; AWB Mode additionally needs Manual AWB on (A3). Checked in all three states on the
+board and both directions in the stub.
+
+**C2** - a read-only "Camera now" line at the top of the camera settings, filled by
+`camLiveLine()` in the firmware: the settled exposure in lines **and milliseconds**, the gain
+multiplier, the quality the **sensor** is using, and the AWB gains. It rides on the status poll the
+page already makes, so it costs **no extra request**, and the register reads are cached 4 s so a
+faster poll, a second browser or the bench cannot turn it into SCCB traffic. Measured on COM4 after
+deployment: `/status` latency 0.04-0.40 s, the same band as before the change. The ms figure was
+checked against the tuner's own arithmetic - 922 lines at 92.9 ms is 100.8 us a line, exactly HTS
+2060 at the idle PIXCLK of 20.44 MHz.
+
+**C3** - the algorithm toggle now sits directly after AWB Mode, and its tooltip says which way is
+which, what simple measured on the chart, and that it is the board's default. The AWB switch itself
+gained the tooltip it needed: off is raw colour, not a freeze.
+
+**C4** - Show Motion is disabled unless Motion Detect is on, and `dbgMotion` is now in the status
+JSON. It was write-only before: the firmware pushed refusals over the websocket but never reported
+the state, so a reload drew the checkbox from its HTML default and the bench could not read it back
+at all - which is why that gate could never pass in the regression.
+
+**C5** - Night Mode, Gain Ceiling and Night Switch are one **Low light** group at the end of the
+camera panel, with a heading. Night Switch came across from the motion panel. All three measured
+inert in a lit room, which is what made them look broken.

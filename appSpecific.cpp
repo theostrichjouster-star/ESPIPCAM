@@ -559,6 +559,13 @@ char* buildAppJsonString(bool filter) {
 #ifndef AUXILIARY
   // the sensor changes size on its own now, and nothing else in the UI reports that
   p += sprintf(p, "\"sensorState\":\"%s\",", sensorStateStr());
+  // UI_REVIEW C2: what the automatics actually chose, for the page's read-only line. camLiveLine
+  // caches its register reads, so this costs the poll nothing beyond the string
+  p += sprintf(p, "\"camLive\":\"%s\",", camLiveLine());
+  // UI_REVIEW C4: Show Motion was write-only - the firmware pushed refusals over the websocket but
+  // never reported the state, so a page reload drew the checkbox from its HTML default and the
+  // bench could not read it back at all
+  p += sprintf(p, "\"dbgMotion\":\"%d\",", dbgMotion ? 1 : 0);
   uint8_t cardType = 99; // not MMC
   if ((fs::SDMMCFS*)&STORAGE == &SD_MMC) cardType = SD_MMC.cardType();
   if (cardType == CARD_NONE) p += sprintf(p, "\"card\":\"%s\",", "NO card");

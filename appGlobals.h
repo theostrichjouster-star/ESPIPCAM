@@ -261,6 +261,7 @@ bool recoverAvi(); // repair a recording interrupted by supply loss - call befor
 void setCamPan(int panVal);
 void setCamTilt(int tiltVal);
 void dumpCamRegs();
+const char* camLiveLine(); // settled exposure / gain / sensor quality / AWB gains for the web UI
 void setSubSample(const char* csv); // debug probe: subsample increments + VTS, see mjpeg2sd.cpp
 void setCamReg(const char* csv);
 void setCamRegGrp(const char* csv);

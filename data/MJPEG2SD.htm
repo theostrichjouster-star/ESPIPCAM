@@ -154,6 +154,26 @@
         opacity: 0.55;
       }
 
+      /* a control its automatic owns is shown inert, not hidden (UI_REVIEW C1) */
+      input.disabled, input:disabled, .input-group input.disabled + div {
+        opacity: 0.5;
+      }
+
+      /* the live readout (C2) and the low-light group heading (C5) */
+      .camlive {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.85em;
+        opacity: 0.85;
+      }
+
+      .lowlight-head label {
+        font-weight: 600;
+        opacity: 0.75;
+        border-top: 1px solid var(--itemInactive);
+        padding-top: 6px;
+        width: 100%;
+      }
+
       #colorbar-banner {
         display: flex;
         align-items: center;
@@ -1096,6 +1116,14 @@
                           <input id="xclkMhz" title="Set camera clock speed in MHz" type="number" minlength="1" maxlength="2" size="2" value="20">
                       </div>
                   </div>
+                  <!-- UI_REVIEW C2: what the automatics actually chose. The exposure and gain answer every
+                       "why is it dark", and the sensor quality diverges from the config after the no-frame
+                       rescue steps it - until now nothing on the page showed that. Filled by the status poll
+                       from camLive, which the firmware reads off the sensor and caches for 2 s. -->
+                  <div class="input-group" id="camLive-group">
+                    <label for="camLive">Camera now</label>
+                    <div id="camLive" class="displayonly camlive">reading...</div>
+                  </div>
                   <div class="input-group" id="brightness-group">
                     <label for="brightness">Brightness</label>
                     <input type="range" id="brightness" min="-2" max="2" value="0">
@@ -1141,16 +1169,16 @@
                       <option value="4">Home</option>
                     </select>
                   </div>
+                    <div class="input-group" id="dcw-group">
+                      <label for="dcw" id="dcw_lab">DCW (Downsize)</label>
+                      <div class="switch">
+                        <input id="dcw" type="checkbox" checked="checked">
+                        <label class="slider" for="dcw"></label>
+                      </div>
+                    </div>
                   <div class="input-group" id="aec_value-group">
                     <label for="aec_value"id="aec_value_lab">Manual Exposure</label>
                     <input type="range" id="aec_value" min="0" max="1200" value="204">
-                  </div>
-                  <div class="input-group" id="aec2-group">
-                    <label for="aec2" id="aec2_lab">AEC DSP</label>
-                    <div class="switch">
-                      <input id="aec2" type="checkbox" checked="checked">
-                      <label class="slider" for="aec2"></label>
-                    </div>
                   </div>
                   <div class="input-group hidden" id="agc_gain-group">
                     <label for="agc_gain" id="agc_gain_lab">Gain</label>
@@ -1198,25 +1226,12 @@
                       <label for="ae_level">Exposure Level</label>
                       <input type="range" id="ae_level" min="-2" max="2" value="0">
                     </div>
-                    <div class="input-group" id="dcw-group">
-                      <label for="dcw" id="dcw_lab">DCW (Downsize)</label>
-                      <div class="switch">
-                        <input id="dcw" type="checkbox" checked="checked">
-                        <label class="slider" for="dcw"></label>
-                      </div>
-                    </div>
                     <div class="input-group" id="agc-group">
                       <label for="agc">AGC Enable</label>
                       <div class="switch">
                         <input id="agc" type="checkbox" checked="checked">
                         <label class="slider" for="agc"></label>
                       </div>
-                    </div>
-                    <div class="input-group" id="gainceiling-group">
-                      <label for="gainceiling">Gain Ceiling</label>
-                      <div name="rangeMin">2x</div>
-                      <input type="range" id="gainceiling" min="0" max="6" value="0">
-                      <div name="rangeMax">128x</div>
                     </div>
                     <div class="input-group" id="lenc-group">
                       <label for="lenc">Lens Correction</label>
@@ -1253,6 +1268,28 @@
                         <label class="slider" for="raw_gma"></label>
                       </div>
                     </div>
+                    <!-- UI_REVIEW C5: these three only act when the AEC is near its ceiling. Measured in a lit
+                         room at HD 30: gain ceiling 0, 511 and 1023 all gave luma 105.7 and gain 2.5x, and night
+                         switch 0, 10 and 100 did nothing at all - so they are grouped and labelled as low light
+                         rather than left among the picture controls, where they look broken by daylight. -->
+                    <div class="input-group lowlight-head"><label>Low light</label></div>
+                  <div class="input-group" id="aec2-group">
+                    <label for="aec2" id="aec2_lab">AEC DSP</label>
+                    <div class="switch">
+                      <input id="aec2" type="checkbox" checked="checked">
+                      <label class="slider" for="aec2"></label>
+                    </div>
+                  </div>
+                    <div class="input-group" id="gainceiling-group">
+                      <label for="gainceiling">Gain Ceiling</label>
+                      <div name="rangeMin">2x</div>
+                      <input type="range" id="gainceiling" min="0" max="6" value="0">
+                      <div name="rangeMax">128x</div>
+                    </div>
+                  <div class="input-group" id="lswitch-group">
+                    <label for="lswitch">Night Switch</label>
+                    <input title="Set night switch sensitivity" type="range" id="lswitch" min="0" max="100" value="10">
+                  </div>
                   </div>
                 </div>
                 <br><br>
@@ -1295,10 +1332,6 @@
                       <input id="dbgMotion" type="checkbox">
                       <label title="Display detected camera motion" class="slider" for="dbgMotion"></label>
                     </div>
-                  </div>
-                  <div class="input-group" id="lswitch-group">
-                    <label for="lswitch">Night Switch</label>
-                    <input title="Set night switch sensitivity" type="range" id="lswitch" min="0" max="100" value="10">
                   </div>
                   <div class="vsep"></div>
                   <div class="input-group" id="dcam-group">
@@ -1812,9 +1845,10 @@
           else if (key == "get-still") getStill();
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
-          else if (key == "aec") isOn(value) ? hide($('#aec_value-group')) : showAec();
-          else if (key == "awb_gain") setWbMode(value);
-          else if (key == "agc") setAgc(key, value);
+          // UI_REVIEW C1 and C4: one gate for every control whose owner decides whether it can
+          // act at all. These keys do not return - the value still goes to the board below
+          else if (key == "aec" || key == "agc" || key == "awb" || key == "awb_gain"
+                   || key == "enableMotion") applyCamGating();
           else if (key == "forceRecord") value = recordAction(key);
           else if (key == "showRecord") setRecIndicator(value);
           else if (key == "forcePlayback") fromUser ? playbackAction(key) : deactivatePlaybackButton();
@@ -1888,7 +1922,16 @@
             // change button labels
             $('#aec2_lab').innerHTML = "Night Mode";
             $('#awbg_lab').innerHTML = "Manual AWB";
+            // UI_REVIEW C3: the label is right, the SENSE is what misleads - this is a choice between
+            // two algorithms shown as a switch, so off reads as a feature disabled rather than as
+            // simple AWB selected, which is now the default. Say which is which, and what it measured
             $('#dcw_lab').innerHTML = "Advanced AWB";
+            $('#dcw').title = "AWB algorithm: on = advanced, off = simple. Simple measured the more "
+              + "neutral of the two on the star chart (R/G 0.965 and B/G 0.918 against 0.882 / 0.882) "
+              + "and is this board's default. Not yet compared in a dark room.";
+            // and the AWB switch itself is not a hold: off means the ISP stops applying the gains
+            $('#awb').title = "Off is RAW colour, not a freeze: the gains keep their converged values "
+              + "but the ISP stops applying them, and the picture goes green (chart R/G 0.46).";
             // change range slider parameters
             changeRange('brightness', "-3", "3", "0");
             changeRange('contrast', "-3", "3", "0");
@@ -2387,21 +2430,44 @@
                              : 'Within the measured SD ceiling');
       }
 
-      function setAgc(key, value) {
-        if (isOn(value)) {
-          show($('#gainceiling-group'));
-          hide($('#agc_gain-group'));
-          rangeSlider($('#gainceiling'));
+      // UI_REVIEW C1: a control whose automatic owns it is shown DISABLED with the reason in its
+      // tooltip, not hidden. These are measured inert, not assumed: at HD 30 with the automatics
+      // on, aec_value 0 and 1252 both left the exposure at 1252 lines, and agc_gain 0 and 63 both
+      // left the gain at ~2.6x (BOARD_TESTING §38.5). Hiding them made the panel jump and taught
+      // nothing; the previous code also hid the wrong one, because "0" is truthy (A1).
+      // Gains are gated the other way round from exposure: the Gain Ceiling is the AEC's own
+      // limit, so it means nothing while gain is manual.
+      function setGate(id, allowed, why) {
+        const el = $('#' + id);
+        if (!el) return;
+        const grp = $('#' + id + '-group');
+        if (grp) show(grp);
+        if (allowed) {
+          enable(el);
+          el.title = "";
+          if (el.type === 'range') rangeSlider(el);
         } else {
-          hide($('#gainceiling-group'));
-          show($('#agc_gain-group'));
-          rangeSlider($('#agc_gain'));
+          disable(el);
+          el.title = why;
         }
       }
 
-      function showAec() {
-        show($('#aec_value-group'));
-        rangeSlider($('#aec_value'));
+      function applyCamGating() {
+        // read the checkboxes, not the event's value: on a status poll updateStatus has already
+        // applied every one of them, and from a user click the box is already toggled
+        const on = id => { const el = $('#' + id); return el ? el.checked : false; };
+        setGate('aec_value', !on('aec'), "Manual Exposure needs AEC off - with the AEC on it is inert");
+        setGate('agc_gain', !on('agc'), "Gain needs AGC off - with the AGC on it is inert");
+        setGate('gainceiling', on('agc'), "Gain Ceiling bounds the AEC's gain, so it does nothing while gain is manual");
+        // With AWB off the ISP stops APPLYING the gains (0x5001 bit 0) - measured, the chart falls
+        // to 0.46 R/G and stays there - so neither the manual gains nor a preset can reach the
+        // picture. AWB Mode additionally needs the manual AWB gate on (A3).
+        setGate('awb_gain', on('awb'), "Manual AWB needs AWB on - with AWB off the ISP applies no gains at all");
+        setGate('wb_mode', on('awb') && on('awb_gain'), "AWB Mode needs AWB on and Manual AWB on");
+        // UI_REVIEW C4: the firmware refuses Show Motion without a detector and pushes the state
+        // back, so the checkbox used to flick off by itself. Gate it instead of letting the user
+        // send something the board will reject
+        setGate('dbgMotion', on('enableMotion'), "Show Motion needs Motion Detect on - the detector draws the overlay");
       }
 
       // UI_REVIEW A4: banner while the test pattern is on, from wherever the user is in the page.
@@ -2411,22 +2477,6 @@
         const banner = $('#colorbar-banner');
         if (!banner) return;
         isOn(value) ? show(banner) : hide(banner);
-      }
-
-      // AWB Mode is DISABLED, not hidden, when AWB Gain is off. Measured 5 Sep 2026 (UI_REVIEW A3):
-      // a preset sent while the page had hidden this select still wrote 0x3406 and moved the AWB
-      // gains, because the firmware handler calls set_wb_mode whatever the toggle says. Hiding a
-      // control that still works teaches the wrong thing; showing it inert with a reason does not.
-      function setWbMode(value) {
-        const el = $('#wb_mode');
-        show($('#wb_mode-group'));
-        if (isOn(value)) {
-          enable(el);
-          el.title = "";
-        } else {
-          disable(el);
-          el.title = "AWB Mode needs AWB Gain on - the preset would be applied by the sensor but not held";
-        }
       }
 
       function sdFile(key, value) {

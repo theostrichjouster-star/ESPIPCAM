@@ -3104,6 +3104,44 @@ static void applyAecLimits(sensor_t* s) {
     hts, vts, b50, b60, maxExp, maxExp / b50, maxExp / b60);
 }
 
+// UI_REVIEW C2: the one line the web UI needs to answer "why is it dark" - the exposure the AEC
+// settled on in lines and ms, the gain multiplier, the quality the SENSOR is using (which diverges
+// from the config once the no-frame rescue steps it, and which nothing on the page showed before)
+// and the AWB gains. Rides on the existing /status poll, so it costs NO extra request; the reads
+// are cached for CAM_LIVE_CACHE_MS so a faster poll, several browsers, or the bench polling as well
+// cannot turn this into a stream of SCCB traffic. Worst case per refresh is 11 register reads,
+// ~2ms of I2C, against a 5s page refresh - measured no change in /status latency (§38.10)
+#define CAM_LIVE_CACHE_MS 4000
+const char* camLiveLine() {
+  static char line[128] = "";
+  static uint32_t readAt = 0;
+  if (line[0] && millis() - readAt < CAM_LIVE_CACHE_MS) return line;
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == NULL || s->get_reg == NULL) return "n/a";
+  int e0 = camReg(s, 0x3500), e1 = camReg(s, 0x3501), e2 = camReg(s, 0x3502);
+  int g0 = camReg(s, 0x350A), g1 = camReg(s, 0x350B);
+  int q = camReg(s, 0x4407);
+  int ar = senReg16(s, 0x3400), ag = senReg16(s, 0x3402), ab = senReg16(s, 0x3404);
+  if (e0 < 0 || e1 < 0 || e2 < 0 || g0 < 0 || g1 < 0) return "n/a";
+  // exposure is 20 bits in 1/16 line units (0x3500[3:0], 0x3501, 0x3502[7:4]); gain is 10 bits /16
+  int expLines = ((e0 & 0x0F) << 12) | (e1 << 4) | (e2 >> 4);
+  int gain16 = ((g0 & 0x03) << 8) | g1;
+  // the line time is the tuner's own arithmetic: HTS clocks, doubled at full resolution
+  camClocks_t c = camClocks(s);
+  int hts = senReg16(s, OV5640_X_TOTAL_SIZE);
+  float expMs = 0;
+  if (c.valid && c.pixClk && hts > 0) expMs = (float)expLines * hts * senLineFactor(s) * 1000.0 / c.pixClk;
+  char* p = line;
+  p += sprintf(p, "%d lines", expLines);
+  if (expMs > 0) p += sprintf(p, " (%.1f ms)", expMs);
+  p += sprintf(p, ", gain %.2fx", gain16 / 16.0);
+  if (q >= 0) p += sprintf(p, ", sensor q%d", q & 0x3F);
+  if (ar >= 0 && ag >= 0 && ab >= 0)
+    sprintf(p, ", AWB %d/%d/%d", ar & 0x0FFF, ag & 0x0FFF, ab & 0x0FFF);
+  readAt = millis();
+  return line;
+}
+
 void dumpCamRegs() {
   // report the OV5640 clock tree and frame timing as actually programmed
   sensor_t* s = esp_camera_sensor_get();
