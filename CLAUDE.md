@@ -178,11 +178,16 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   witness; the whole-frame ratio is confounded by the pedestal at high gain. **`awb=0` is raw, not
   frozen**: it clears 0x5001 bit 0 (a read-modify-write, the tuner's scaler bit 5 survives) so the
   ISP stops APPLYING the gains, which keep their converged values in 0x3400-0x3405 - the chart
-  falls to 0.46 R/G and stays there (5 Sep 2026, §38.5). **Simple AWB (`dcw=0`, 0x5183[7]) measured
-  more neutral than advanced**: chart 0.965/0.918 against 0.882/0.882. Do not change the default on
-  that alone - it wants an eyeball and a dark-room check. A still needs a converged AWB: the
+  falls to 0.46 R/G and stays there (5 Sep 2026, §38.5). A still needs a converged AWB: the
   FHDNARROW baseline of that run was taken too early and read 1.746 where every later point read
   1.10-1.19.
+- **`dcw` is not downsizing and its sense is inverted.** The driver's flag and the web page's
+  "DCW (Downsize)" label both mislead: it writes 0x5183[7], which the datasheet defines as AWB
+  simple enable (0 = advance, 1 = simple, sensor reset default 0x90 = simple). So `dcw=0` gives
+  **simple** AWB and bit 7 SET. **Simple is the default since 5 Sep 2026** on the user's decision -
+  it measured the more neutral of the two on the star chart, R/G 0.965 and B/G 0.918 against
+  advanced's 0.882 / 0.882 - changed in `appConfig` and persisted on both boards (`/status` dcw 0,
+  0x5183 = 0x94 on each). **Still owed: the same comparison in a dark room.**
 - The colour bar is not in the block `set_framesize` reloads, so **0x503D survives a size change**
   and, being persistable, can boot a board into test bars (5 Sep 2026, §38.5).
 - The gain ceiling is `gainceiling~1023` (63.9x, the datasheet's 64x) since 4 Sep 2026,

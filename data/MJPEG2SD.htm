@@ -149,6 +149,26 @@
         background: var(--itemInactive)
       }
 
+      select.disabled, select:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      #colorbar-banner {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 14px;
+        background: #b8791f;
+        color: #fff;
+        font-weight: 600;
+      }
+
+      #colorbar-banner button {
+        padding: 3px 10px;
+        cursor: pointer;
+      }
+
       .tabcontent {
         display: none;
       }
@@ -930,6 +950,14 @@
           </ul>
         </nav>
       </section>
+    </div>
+
+    <!-- UI_REVIEW A4: the colour bar is not in the register block set_framesize reloads, so it
+         survives a size change, and it can be persisted - a board can boot into test bars and
+         look broken. It stays a one-click fix from wherever the user is. -->
+    <div id="colorbar-banner" class="hidden" style="display:none">
+      <span>Colour bar test pattern is ON - the sensor is generating bars, not the scene.</span>
+      <button id="colorbar-off" class="local" type="button">Turn it off</button>
     </div>
 
     <div id="mainPage" class="tabcontent" style="display:block">
@@ -1784,16 +1812,38 @@
           else if (key == "get-still") getStill();
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
-          else if (key == "aec") value ? hide($('#aec_value-group')) : showAec();
-          else if (key == "awb_gain") value ? show($('#wb_mode-group')) : hide($('#wb_mode-group'));
+          else if (key == "aec") isOn(value) ? hide($('#aec_value-group')) : showAec();
+          else if (key == "awb_gain") setWbMode(value);
           else if (key == "agc") setAgc(key, value);
           else if (key == "forceRecord") value = recordAction(key);
           else if (key == "showRecord") setRecIndicator(value);
           else if (key == "forcePlayback") fromUser ? playbackAction(key) : deactivatePlaybackButton();
           else if (key == "forceStream") streamAction(key);
           else if (key == "spkrRem") { value = micOrSpkrState(key); value ? runSpkr(wsInd) : closeSpkr(wsInd); }
+          else if (key == "colorbar") setColorbarBanner(value);
+          else if (key == "colorbar-off") {
+            const cb = $('#colorbar');
+            if (cb) cb.checked = false;
+            setColorbarBanner(0);
+            sendControl("colorbar", 0);
+            return;
+          }
+          else if (key == "clear" && fromUser) {
+            // UI_REVIEW A2: one click used to wipe the NVS - the WiFi credentials and the
+            // calibration keys with them - and a board that then reboots is off the network
+            // until someone puts a cable on it
+            if (!confirm("Clear NVS?\n\nThis erases the saved WiFi credentials and every calibration "
+                       + "key held in NVS (battery scale, the DVDD mod). The board will need to be "
+                       + "set up over USB or its access point afterwards.\n\nThe SD card is not touched.")) return;
+          }
           else if (key == 'save') await sleep(600); // allow last input to debounce
-          if (fromUser && !$('#'+key).classList.contains("local")) debounceSendControl(key, value);
+          // UI_REVIEW A3: never send from a control the page has hidden or disabled. A hidden
+          // select still reaches the sensor (measured 5 Sep 2026), so the page must not be the
+          // one to send it - what it shows and what it sends have to be the same state
+          if (fromUser && !$('#'+key).classList.contains("local")) {
+            if (isInert($('#'+key))) console.warn("not sending " + key + ": the control is hidden or disabled");
+            else debounceSendControl(key, value);
+          }
         }
         else if (dest == CLASS) {
           // operations based on class
@@ -2029,9 +2079,9 @@
 
       function setRecIndicator(value) {
         // indicate if motion capture is being recorded
-        if (value && isHidden(recordingIndicator)) activateRecordButton();
+        if (isOn(value) && isHidden(recordingIndicator)) activateRecordButton();
         // remove recording indicator and deactivate record button if active
-        else if (!value && !isHidden(recordingIndicator)) deactivateRecordButton();
+        else if (!isOn(value) && !isHidden(recordingIndicator)) deactivateRecordButton();
       }
 
       async function activateStreamButton() {
@@ -2320,7 +2370,7 @@
       }
 
       function setAgc(key, value) {
-        if (value) {
+        if (isOn(value)) {
           show($('#gainceiling-group'));
           hide($('#agc_gain-group'));
           rangeSlider($('#gainceiling'));
@@ -2334,6 +2384,31 @@
       function showAec() {
         show($('#aec_value-group'));
         rangeSlider($('#aec_value'));
+      }
+
+      // UI_REVIEW A4: banner while the test pattern is on, from wherever the user is in the page.
+      // The banner is driven by /status, so it also catches a bar left on by a previous session
+      // or carried through a reboot by a saved config.
+      function setColorbarBanner(value) {
+        const banner = $('#colorbar-banner');
+        if (!banner) return;
+        isOn(value) ? show(banner) : hide(banner);
+      }
+
+      // AWB Mode is DISABLED, not hidden, when AWB Gain is off. Measured 5 Sep 2026 (UI_REVIEW A3):
+      // a preset sent while the page had hidden this select still wrote 0x3406 and moved the AWB
+      // gains, because the firmware handler calls set_wb_mode whatever the toggle says. Hiding a
+      // control that still works teaches the wrong thing; showing it inert with a reason does not.
+      function setWbMode(value) {
+        const el = $('#wb_mode');
+        show($('#wb_mode-group'));
+        if (isOn(value)) {
+          enable(el);
+          el.title = "";
+        } else {
+          disable(el);
+          el.title = "AWB Mode needs AWB Gain on - the preset would be applied by the sensor but not held";
+        }
       }
 
       function sdFile(key, value) {

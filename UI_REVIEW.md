@@ -12,9 +12,38 @@ came back to its calibration; the restore diffed clean. What it found instead is
 misreports its own state, offers controls that do nothing in the state it is in, and cannot
 express some values the firmware holds.
 
-**Nothing here is implemented.** Each item is a proposal with its evidence, for the user to pick
-from. Numbering is priority order within each group. After any UI change, `DRY=1` on the
-regression is the smoke test and the full run is the gate.
+Each item is a proposal with its evidence, for the user to pick from. Numbering is priority order
+within each group. After any UI change, `DRY=1` on the regression is the smoke test and the full run
+is the gate.
+
+**Status, 5 Sep 2026: A1-A4 are implemented and verified in a browser; B and C are not started, on
+the user's instruction to pause before B1.** The AWB algorithm decision is also taken: **simple**
+(`dcw=0`), changed in `appConfig` and persisted on both boards, register-verified (0x5183 = 0x94,
+bit 7 set = simple per the datasheet). The dark-room comparison is still owed. Two pieces of A4
+remain, both firmware rather than page: never persisting `colorbar` and clearing it at boot.
+
+The page files are **committed but not deployed** - `data/MJPEG2SD.htm` and `data/common.js` reach a
+board through the `startOTA` gate, which needs the user's go.
+
+How A1-A4 were verified: the page was served from a local stub whose `/status` returned the state
+that makes each defect visible (AEC manual, AGC manual, AWB gain off, colour bar on), every value a
+string as the firmware sends them, and the stub recorded every `/control` it received. The
+committed version was served beside it as the before case. Results:
+
+| check | before | after |
+|---|---|---|
+| Manual Exposure group with AEC manual | hidden | visible |
+| Gain group with AGC manual | hidden | visible |
+| Gain Ceiling group with AGC manual | visible | hidden |
+| AWB Mode with AWB Gain off | visible and live | visible, disabled, with a reason |
+| change sent from the disabled AWB Mode | sent | not sent |
+| change sent from AWB Mode once enabled | sent | sent |
+| Clear NVS declined at the prompt | no prompt, sent | prompt, nothing sent |
+| Clear NVS accepted | - | prompt, `clear=1` sent |
+| colour bar banner with the bar on | absent | shown, its button sends `colorbar=0` and clears both |
+
+Unchanged elsewhere: the only state-hidden group in that state is Gain Ceiling, controls on other
+panels are not treated as inert, and normal controls still send.
 
 | # | proposal | kind | why now |
 |---|---|---|---|
@@ -53,8 +82,11 @@ In JavaScript `"0"` is truthy. So on every page load with the AEC in **manual**,
 boolean and behaves; only the load and refresh path is wrong, which is why this survives casual
 use.
 
-Proposal: one helper, `const on = v => v !== "0" && v !== "" && v !== false && v != null;`, used
-by every state test in `processStatus`. Low risk, no firmware change.
+Proposal: one helper, used by every state test in `processStatus`. Low risk, no firmware change.
+
+**Done 5 Sep 2026**: `isOn()` in `common.js`, applied at the `aec` and `awb_gain` branches, in
+`setAgc` and in `setRecIndicator` - the last was the same bug on the recording indicator, which
+would have lit on a `showRecord` of "0".
 
 ### A2. Clear NVS is a single click with no confirmation
 
@@ -62,6 +94,9 @@ It wipes the wifi credentials and the `extDVDD` calibration key in the APP_NAME 
 means a board that then reboots is off the network until someone puts a cable on it.
 
 Proposal: a confirm dialog that names what is lost. Optionally require the board to be on USB.
+
+**Done 5 Sep 2026**: the prompt names the WiFi credentials and the calibration keys, and says the
+SD card is untouched. Declining sends nothing. The USB requirement was not added.
 
 ### A3. A hidden control still writes to the sensor
 
@@ -73,6 +108,14 @@ Proposal: prefer `disabled` over `hidden` for state-dependent controls, and do n
 whose group is hidden. This is the general form of A1: the page's visibility state and the
 firmware's state are two different things today.
 
+**Done 5 Sep 2026**, for this control and as a general guard: AWB Mode is now shown disabled with a
+reason in its tooltip rather than hidden (`setWbMode`), and `isInert()` in `common.js` stops the page
+sending from any control that is hidden or disabled, itself or through its `input-group`. The
+firmware half - the handler ignoring `wb_mode` while `awb_gain` is off - is **not** done, so a
+request sent by hand still applies. Whether the other state-dependent groups (Manual Exposure, Gain,
+Gain Ceiling) should also become disabled-in-place rather than hidden is C1's question, deliberately
+left alone here.
+
 ### A4. The colour bar survives a framesize change and can be persisted
 
 Measured: with the bar on, `framesize=25` kept 0x503D set (the still was the pattern: luma 128.1,
@@ -81,6 +124,12 @@ reloads. `colorbar` is also persistable, so a board can boot into test bars and 
 
 Proposal: never persist `colorbar`, clear it on boot, and show a banner while it is set. Same
 treatment for `special_effect` if the user wants it (that one at least looks deliberate).
+
+**Partly done 5 Sep 2026**: the banner is in, driven by `/status` so it also catches a bar left on
+by an earlier session or carried through a reboot, and its button clears the bar in one click from
+anywhere in the page. **Not done**: never persisting `colorbar` and clearing it at boot, both of
+which are firmware changes needing a build and a flash. The page deliberately does not write
+`colorbar=0` by itself on load - it reports and offers, it does not change the camera unasked.
 
 ---
 
@@ -163,8 +212,14 @@ Simple AWB was the most neutral state measured, and the same ordering appears in
 That is a lead on the standing green-cast question, not a settled answer - it wants the user's
 eyeball on the two stills and a dark-room check before any default changes.
 
-Proposal: rename to "AWB algorithm: simple / advanced", move it into the AWB group next to Mode,
-and keep the default where it is until the comparison is judged.
+Proposal: rename to "AWB algorithm: simple / advanced", move it into the AWB group next to Mode.
+
+**The default is now simple** (user's decision, 5 Sep 2026): `appConfig` carries `dcw~0` and both
+boards were set live and saved, register-verified at 0x5183 = 0x94 (bit 7 set, which the datasheet
+defines as simple; the driver's flag is inverted, so `dcw=0` means simple). **The dark-room
+comparison is still owed.** That makes the rename more urgent, not less: the page now shows a
+control labelled "DCW (Downsize)" sitting off, which reads as a downsizing feature being disabled
+rather than as simple white balance being chosen. The rename itself is still C3, not done here.
 
 While there: the AWB checkbox is not a hold. With `awb=0` the gain registers keep their converged
 values yet the chart collapses to 0.46 R/G, because clearing 0x5001 bit 0 stops the ISP applying

@@ -459,6 +459,17 @@
           return response;
         }
 
+        // /status serialises every value as a STRING, and "0" is truthy in JavaScript, so a state
+        // test written as `value ? a : b` takes the wrong branch on every page load. Measured
+        // 5 Sep 2026 (UI_REVIEW A1): with the AEC in manual the page hid the Manual Exposure
+        // slider, and with AWB Gain off it showed the AWB Mode select it meant to hide. The
+        // from-user path passes a real boolean, which is why it survives casual use. Every state
+        // test on a value that can come from /status goes through here.
+        function isOn(value) {
+          return !(value === undefined || value === null || value === false
+                   || value === "" || value === "0" || value === 0 || value === "false");
+        }
+
         function hide(el) {
           el.classList.add('hidden')
           el.style.display = "none";
@@ -467,6 +478,15 @@
         function show(el) {
           el.classList.remove('hidden')
           el.style.display = "";
+        }
+
+        // a control the page has hidden or disabled must not be sent (UI_REVIEW A3): its own
+        // element, or the input-group wrapping it, being hidden is enough
+        function isInert(el) {
+          if (!el) return false;
+          if (el.disabled || el.classList.contains('disabled') || el.classList.contains('hidden')) return true;
+          const grp = el.closest ? el.closest('.input-group') : null;
+          return !!(grp && (grp.classList.contains('hidden') || grp.style.display === "none"));
         }
 
         function disable(el) {

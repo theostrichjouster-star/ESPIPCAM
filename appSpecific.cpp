@@ -346,6 +346,11 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
     // "vertical striping" that took a firmware A/B against 6624230 to pin down. Leave it off
     // unless exposure beyond 1964 rows matters more than flicker-free light
     else if (!strcmp(variable, "aec2")) res = s->set_aec2(s, intVal);
+    // "dcw" is the driver's name and the web page's label, and both are wrong: on the OV5640 this
+    // writes 0x5183[7], which selects SIMPLE (0) against ADVANCED (1) AWB - nothing downsizes.
+    // Default 0 since 5 Sep 2026 on the user's decision: simple measured the more neutral of the
+    // two on the star chart at QSXGA, R/G 0.965 and B/G 0.918 against advanced's 0.882 / 0.882
+    // (BOARD_TESTING §38.5). Still owed: the same comparison in a dark room
     else if (!strcmp(variable, "dcw")) res = s->set_dcw(s, intVal);
     else if (!strcmp(variable, "bpc")) res = s->set_bpc(s, intVal);
     else if (!strcmp(variable, "wpc")) res = s->set_wpc(s, intVal);
@@ -917,7 +922,7 @@ bpc~1~98~~na
 brightness~0~98~~na
 colorbar~0~98~~na
 contrast~0~98~~na
-dcw~1~98~~na
+dcw~0~98~~na
 enableMotion~1~98~~na
 fps~20~98~~na
 framesize~10~98~~na
