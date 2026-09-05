@@ -16,7 +16,13 @@ Rules the scripts enforce: the board must have been up 240 s; `record=0`, `idleF
 `tunedFps=1`; the RTC ring is read per point with `grep -a`; a closeAvi block is identified by
 its filename, never its frame count; motion counters are read before and after a clip because
 reading resets them; a reboot (uptime decreasing) aborts the tier; two consecutive anomalies
-abort the tier; every poll is bounded; no background jobs are left behind.
+abort the tier; every poll is bounded; no background jobs are left behind; **at most one HTTP
+request to a board every 5 s** (`http_gap`, since 4 Sep 2026 - the bench board went off the
+network after a burst; every helper and every direct `curl` in the newer scripts goes through
+it, `MIN_HTTP_GAP=` overrides); with `PEER=<other board>` set, a control call that fails twice
+pulses the board's reset through the other board (`peer_reset`, COM3 D1 to COM4 RESET) after
+30 s of confirmed silence, then the run still aborts (a rebooted board fails the settle rule).
+The boards' log timestamps are UTC (timezone GMT0).
 
 Runtime `/control` changes do not persist - re-assert the standing config and `save=1`
 deliberately when the campaign ends. `bench_lib.sh` holds the helpers; the `*.py` files are the
@@ -40,7 +46,14 @@ Library and parsers:
   (playback block), `parse_motion.py` (detector counters), `parse_zones.py` (the avgZones
   grid: mean / min / max / YAVG / band / AEC state), `jfield.py` (one `/status` field),
   `jpeg_dims.py`, `still_color.py` (w h bytes, channel means, ratio, saturation, adjacent
-  pixel noise hdiff / vdiff - the two gates that catch a corrupt still; the eyeball is the third)
+  pixel noise hdiff / vdiff - the two gates that catch a corrupt still; the eyeball is the third),
+  `regsnap.py` (the register snapshot for the UI regression under the 5 s HTTP gap: `dump`
+  parses a `dumpCam=1` block from the SD log tail into the tuner set - PLL and root divider,
+  HTS / VTS, window, subsample and binning bytes, scaler enable, ceiling, night / banding
+  state, JPEG state; `parse` turns `camRegRd` lines from the ring into `ADDR=VV` and refuses a
+  batch that came back short; `expand` a `5587,5381-538B` spec for the shell; `diff` classifies
+  every change as the control's own (with the dump's derived names aliased), unexpected, or
+  live (AEC exposure / gain / extra lines, AWB gains); `live` decodes the live set)
 
 The frame-rate tiers (§19-20, §26, §30a):
 - `fps_t0_proofs.sh` - one-variable proofs and ceiling+1 probes
@@ -78,6 +91,21 @@ Exposure (§37):
   and a manual 3932-line stage; the 12-bit AWB gains (0x3400-0x3405) and the manual bit
   (0x3406) sampled every 10 s, a still per stage with the star-chart box's and the frame's
   R/G and B/G (`BOX=` the chart in QSXGA pixels, `EGAIN=` the manual stage's agc_gain)
+
+The web UI's controls (§38):
+- `ui_regress.sh` - every camera control the page can send (`/control?<key>=`), one variable
+  at a time at HD 30 / 1280X960 41 / FHDNARROW 1: min, max and the live default, each with a
+  register snapshot diffed against the size's baseline (the control's own registers expected,
+  anything else a finding), `/status` readback, VSYNC, a still through `still_color.py`, the
+  sensor's quality (0x4407) and the rescue / WRN lines; the default must diff clean. Then the
+  UI's own sequences as scenarios: manual exposure (AEC off, slider up, slider down, AEC on),
+  manual gain, the AWB presets / off / simple-vs-advanced at QSXGA with the chart box, colour
+  bar across a size change, flip and mirror on the cropped sizes, the special-effect coupling,
+  fps and framesize sent mid-recording, sharpness at q6 against the frame window. Hidden
+  `/control` keys are never sent (audit only). `DRY=1` is the HD-only smoke run; `SIZES=`,
+  `CONTROLS=`, `SCENARIOS=` take subsets; `findings.txt` is written by the gates; the exit
+  restore replays every camera key from the `/status` snapshot taken at the start and diffs
+  the registers at HD against that size's baseline. Never `save=1`
 
 Dead ends kept as records (§31, §37) - do not re-walk without a new mechanism:
 - `hts_floor.sh` - the HTS floor walk whose gates passed corrupt frames (the reason for

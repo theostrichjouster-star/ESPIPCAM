@@ -259,6 +259,10 @@ read the RTC ring.
 - `LOG_INF` and above -> RTC ring **and** SD. `/control?displayLog=1` reads the ring,
   which survives resets. `camRegRd` is LOG_INF, so it lands in the ring.
 - `LOG_WRN`/`LOG_ERR`/`LOG_ALT` force an SD sync; INF may sit in the stdio buffer.
+- **Log timestamps are UTC** (the boards' `timezone` is GMT0), seven hours ahead of this
+  bench's local clock in September. A grep for a local hour in the SD log lands on another
+  day's traffic: on 4 Sep 2026 that turned the morning's probes (11:04 local = 18:04 UTC)
+  into a phantom "orphaned script" running during an 18:04 local incident. Convert first.
 
 ## On-board diagnostics (`/control?<key>`)
 
@@ -284,6 +288,13 @@ State and budgets:
 - `updateFPS=1` - fpsCeil, aecMax, budgetKBs, live frameKB, govBoost, frameCapKB
 - `motionStats=1`, `zoneStats`, `avgZones` - detector counters and the AEC 4x4 zone grid
 - `sdBusClk` / `sdBusDiv`, `battScale` / `sagTest`, `extDVDD`, `lencFhd` (LENC A/B)
+- `peerReset=1` - pulse the OTHER board's RESET through D1 / GPIO 2 for 5 s (`=<ms>` 500-10000,
+  `=0` reads the pin: 1 = the other board's EN is high). Wired COM3 -> COM4 only; on a board
+  with nothing on D1 it is a harmless pulse. The far board comes back POWERON (RTC ring and
+  crash snapshot gone). An EN reset is NOT a power cycle: on 4 Sep 2026 COM4 came back from
+  the pulse alive but handling every packet ~1 s late (TCP body at 35 B/s, its own gateway
+  ping failing, the wifi supervisor flapping the link) and only a real power cycle cured it -
+  the card and the radio keep their state through EN. Prefer a power cycle after a wedge
 - `banding=0|50|60` - the mains banding filter, persisted with `save=1`. 0 (the default) is
   off: the AEC then spends the whole frame on exposure before gain. 50/60 select the manual
   band; `dumpCam` reports the live state on its Exposure line
@@ -371,8 +382,12 @@ Destructive or dangerous:
   clean. Scenarios replay the UI's own sequences (manual exposure and gain, the AWB presets,
   colour bar across a size change, flip/mirror on the cropped sizes, the special-effect
   coupling, mid-recording fps / framesize, sharpness at q6 against the frame window). Hidden
-  keys are audit-only, never sent; `DRY=1` is the HD smoke run; the exit restore replays the
-  start-of-run `/status` snapshot and proves it by register. Never `save=1`
+  keys are audit-only, never sent; `DRY=1` is the HD smoke run (`CONTROLS=none` for a
+  scenario-only run); `PEER=<COM3 address>` arms the peer reset; `RESTORE_ONLY=1 OUT=<run dir>`
+  replays a run's restore after an abort; the exit restore replays the start-of-run `/status`
+  snapshot and proves it by register before idleFps / detection / recording return. Never
+  `save=1`. Full matrix plus scenarios is ~10.5 h at one request per 5 s (HD 3.1 h, 1280X960
+  2.4 h, FHDNARROW 2.9 h, scenarios 1.9 h) - an overnight run with the lamp held
 - Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
   `parse_motion.py`, `parse_zones.py` (the avgZones grid: mean / min / max / YAVG / band / AEC
   state), `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel ratio +

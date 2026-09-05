@@ -19,21 +19,54 @@ ANOM=0   # consecutive anomalies; two in a row abort the tier (FPS_RECAL method)
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGF"; }
 
-# ctl key=value : one retry after 5 s, then abort. Prints the response body
+# Minimum gap between HTTP requests to the board, run-wide (user, 4 Sep 2026 18:20): the bench
+# board went off the network at 18:04:35 seconds after a burst of back-to-back /status and
+# /control requests followed by a size switch, and had to be reset. The timestamp lives in a
+# file, not a variable, because every helper below is called from a $(...) subshell. Every
+# helper here goes through http_gap; scripts that call curl directly must call it too
+MIN_HTTP_GAP=${MIN_HTTP_GAP:-5}
+http_gap() {
+  local f="$OUT/.http_last" last now waitNs
+  now=$(date +%s%N); last=$(cat "$f" 2>/dev/null || echo 0)
+  waitNs=$(( last + MIN_HTTP_GAP * 1000000000 - now ))
+  [ "$waitNs" -gt 0 ] && sleep "$(printf '%d.%03d' $(( waitNs / 1000000000 )) $(( (waitNs % 1000000000) / 1000000 )))"
+  date +%s%N > "$f"
+}
+
+# peer_reset: bring the bench board back through the OTHER board's reset pulse (4 Sep 2026:
+# COM3 D1 / GPIO 2 open-drain to COM4 RESET, /control?peerReset=1 on COM3, see peerReset() in
+# mjpeg2sd.cpp). PEER=<other board address> comes from the environment. The loss is confirmed
+# first - three /status attempts over 30 s - so a wifi hiccup does not reboot a healthy board;
+# then the pulse, then up to 150 s for $BOARD to answer again. The board comes back POWERON:
+# its RTC ring is gone, read the SD log tail for the forensics
+peer_reset() {
+  local i u
+  for i in 1 2 3; do sleep 10; curl -s -m 5 "$B/status" > /dev/null && { log "peer_reset: $BOARD answered again on its own - no pulse"; return 0; }; done
+  [ -n "${PEER:-}" ] || { log "peer_reset: PEER not set - the board needs a reset by hand"; return 1; }
+  log "peer_reset: $BOARD silent for 30 s - pulsing its reset through $PEER"
+  curl -s -m 15 "http://$PEER/control?peerReset=1" > /dev/null || { log "peer_reset: $PEER did not answer either"; return 1; }
+  for i in $(seq 1 30); do sleep 5; u=$(curl -s -m 5 "$B/status" | python "$HERE/jfield.py" up_time 2>/dev/null); [ -n "$u" ] && { log "peer_reset: $BOARD back, uptime $u (POWERON - RTC ring wiped)"; return 0; }; done
+  log "peer_reset: $BOARD not back 150 s after the pulse"; return 1
+}
+
+# ctl key=value : one retry after 5 s, then abort. Prints the response body. On the abort the
+# board is recovered through the other board if PEER is set (the run still stops: a rebooted
+# board fails the 240 s settle rule and its RAM config is gone)
 ctl() {
   local r
+  http_gap
   if ! r=$(curl -s -m 25 "$B/control?$1"); then
-    sleep 5
-    r=$(curl -s -m 25 "$B/control?$1") || { log "ABORT: control $1 failed twice"; exit 3; }
+    sleep 5; http_gap
+    r=$(curl -s -m 25 "$B/control?$1") || { log "ABORT: control $1 failed twice"; peer_reset; exit 3; }
   fi
   printf '%s' "$r"
 }
 
 # the RTC ring: 7KB, wraps in ~95 lines, carries non-text bytes (hence grep -a)
-ramlog() { curl -s -m 40 "$B/control?displayLog=1" | grep -a ''; }
+ramlog() { http_gap; curl -s -m 40 "$B/control?displayLog=1" | grep -a ''; }
 
 # /status field, with the stray control characters the board sometimes emits stripped
-status_field() { curl -s -m 15 "$B/status" | python "$HERE/jfield.py" "$1"; }
+status_field() { http_gap; curl -s -m 15 "$B/status" | python "$HERE/jfield.py" "$1"; }
 
 uptime_s() {
   local u d t h m s
