@@ -81,6 +81,16 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   inline USB meter (5V side, includes charge offset - deltas are the signal);
   voltages via multimeter. Structural checks alone pass on corrupt frames.
 - Concurrency fixes get soak tests (races need repetition, not one green run).
+- **Every file in /data suddenly unopenable? It is the mount's FIVE open-file slots, not the card.**
+  `utilsFS.cpp` calls `SD_MMC.begin(...)` with four arguments and the core's fifth is
+  `maxOpenFiles = 5`. The SD log holds one, a recording holds its AVI plus the CSV and SRT, and an
+  aborted browser transfer leaves another (`WARN sendChunks Failed to send to browser ...
+  ESP_ERR_HTTPD_RESP_SEND` opens each window). Past that, EVERY open fails - reads and writes, any
+  file - until a remount, while the boot listing still shows the files present with their real
+  timestamps. Measured on COM4 twice on 5 Sep 2026 (§38.8); COM3 took the identical uploads at the
+  identical bus clock with recording OFF and never failed. **A reset cures it; do not blame the
+  card and do not reach for `chkdsk` - I did, and it was wrong.** `/control?peerReset=1` on COM3 is
+  the fastest recovery.
 - Board acts possessed? Check SD free space first (a full card wedges as a fake wifi
   failure), then audit the host PC for orphaned automation from earlier sessions.
   All host-side polling loops must be bounded.
