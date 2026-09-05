@@ -267,6 +267,13 @@ void setCamRegGrp(const char* csv);
 void setBanding(int hz); // config: mains banding filter 0 (off) / 50 / 60, see applyBanding() in mjpeg2sd.cpp
 void getCamReg(const char* addr);
 void setExtDVDD(int val); // per-board NVS key: OV5640 internal regulator bypass for external DVDD
+// Bench: the other board's RESET. COM3's D1 (GPIO 2) is wired to COM4's RESET pad (4 Sep 2026),
+// so a bench script that loses COM4 brings it back through COM3: /control?peerReset=1 (5 s) or
+// =<ms>. GPIO 2 because it is the one header pin nothing else here uses: 1 is the battery ADC,
+// 3 a strapping pin, 7/9/8 the SD card, 43/44 the UART0 console, 21 the LED, 41/42 the mic
+#define PEER_RESET_PIN 2
+void peerResetInit(); // at boot: the pin idles INPUT_PULLUP so the far board is never pulled low by accident
+void peerReset(int val); // 0 reports the pin, 1 the default 5 s pulse, else the pulse in ms
 uint16_t sdBudgetKBs(); // measured SD write ceiling for the live bus clock - UI badge and governor
 uint16_t frameWindowKB(int fs); // measured JPEG frame-window cliff per size, 0 = no prediction
 void govRebaseQuality(int q); // user quality change mid-recording re-bases the SD governor

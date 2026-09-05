@@ -55,6 +55,17 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   `esptool --chip esp32s3 --port COMx --before default_reset --after no_reset
   read_mac` parks a board in download mode with the radio fully off;
   `--before no_reset --after hard_reset chip_id` brings it back.
+- **Minimum 5 s between HTTP requests to a board** (`bench_lib.sh` `http_gap`, run-wide through
+  a timestamp file; every helper and every direct curl goes through it). COM4 went off the
+  network on 4 Sep 2026 at 18:04:35, seconds after a burst of back-to-back `/status` and
+  `/control` requests followed by a size switch, and needed a finger on the button. A
+  register snapshot is therefore `dumpCam=1` plus a handful of `camRegRd`, never a hundred.
+- **Peer reset**: COM3's D1 (GPIO 2) is wired to COM4's RESET pad; `/control?peerReset=1` on
+  COM3 pulls it open-drain low for 5 s (`peerReset()`, mjpeg2sd.cpp), and `bench_lib.sh`
+  `peer_reset` does that with `PEER=<COM3 address>` after a control call to COM4 fails twice
+  and 30 s of silence. GPIO 9 is NOT free - it is the SD card command line on both boards
+  (`camera_pins.h` `SD_MMC_CMD 9`), and wiring it took COM3 off the network. The far board
+  comes back POWERON: RTC ring and crash snapshot gone, SD log tail and restart breadcrumb kept.
 - Record link RTT alongside every throughput number. Throughput here is
   window/RTT, so a radio drift masquerades perfectly as a config effect. RF also
   varies hugely by time of day: 3-5ms RTT at 2am vs 150-250ms midday.
@@ -350,11 +361,24 @@ Destructive or dangerous:
   4 Sep 2026 - the driver's own init is manual 50 Hz, which held the AEC at two bands plus
   gain near the ceiling. Both decide how bright a still looks before the tuning does
   (BOARD_TESTING §37)
+- `ui_regress.sh` - the web UI's camera controls, every `/control` key the page can send, one at
+  a time at the three mainstays (HD 30, 1280X960 41, FHDNARROW 1): min / max / the live default,
+  each with a register snapshot diffed against the size's baseline (`regsnap.py`: the tuner
+  set from `dumpCam=1` read back off the SD log plus the core three and the control's own
+  registers by `camRegRd` - the control's own expected, anything else a finding, the AEC/AWB
+  live set logged; ~35 s per snapshot under the 5 s HTTP gap),
+  `/status` readback, VSYNC, a still, 0x4407 and the rescue / WRN lines; the default must diff
+  clean. Scenarios replay the UI's own sequences (manual exposure and gain, the AWB presets,
+  colour bar across a size change, flip/mirror on the cropped sizes, the special-effect
+  coupling, mid-recording fps / framesize, sharpness at q6 against the frame window). Hidden
+  keys are audit-only, never sent; `DRY=1` is the HD smoke run; the exit restore replays the
+  start-of-run `/status` snapshot and proves it by register. Never `save=1`
 - Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
   `parse_motion.py`, `parse_zones.py` (the avgZones grid: mean / min / max / YAVG / band / AEC
   state), `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel ratio +
-  adjacent-pixel noise: the two gates that catch a corrupt still). `tools/bench/README.md`
-  carries the full inventory with each script's purpose and env knobs
+  adjacent-pixel noise: the two gates that catch a corrupt still), `regsnap.py` (register
+  snapshot list / parse / diff / live). `tools/bench/README.md` carries the full inventory with
+  each script's purpose and env knobs
 
 Reference data: `FPS_RECAL_stills/sweep.csv` is the current register reference (224 points
 across 9 sizes as of 4 Sep 2026, 1280X960 at HTS 2156 / ceiling 41); the displaced rows live

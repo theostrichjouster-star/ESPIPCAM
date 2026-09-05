@@ -176,6 +176,8 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "camRegRd")) getCamReg(value);
   // per-board provisioning, stored in NVS not the config file - see setExtDVDD()
   else if (!strcmp(variable, "extDVDD")) setExtDVDD(intVal);
+  // bench: pulse the OTHER board's reset line (PEER_RESET_PIN), see peerReset() - no config row
+  else if (!strcmp(variable, "peerReset")) peerReset(intVal);
   // debug: exercise the supply sag path without a failing supply. Sets the same flag the
   // brownout ISR sets, so the whole Stage 1 sequence runs for real - close, park, re-arm
   else if (!strcmp(variable, "sagTest")) supplySagging = (bool)intVal;

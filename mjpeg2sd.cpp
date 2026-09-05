@@ -3535,6 +3535,48 @@ void setExtDVDD(int val) {
   }
 }
 
+// Bench: reset the OTHER board. COM3's D1 (GPIO 2, PEER_RESET_PIN) is wired to COM4's RESET pad
+// (4 Sep 2026, after COM4 wedged off the network mid-campaign and needed a finger on the
+// button), so a bench script that loses COM4 brings it back through COM3: /control?peerReset=1
+// is the 5 s pulse, =<ms> any length 500-10000, =0 reports the pin.
+// The pin is driven OPEN-DRAIN low for the pulse and then released to high impedance: the far
+// board's own pull-up owns its EN net and its reset button sits in parallel, so this pin must
+// never drive HIGH (a pressed button would then short it to ground). The pulse runs in its own
+// task so the web server keeps answering during the 5 s. Idle - from boot (peerResetInit) and
+// again after every pulse - the pin is INPUT_PULLUP: a weak pull-up in parallel with the far
+// board's own, never a driven level, so the far board cannot be pulled low by anything but the
+// deliberate pulse (user, 4 Sep: "make sure GPIO 2 stays high during the test"). With the wire
+// in place it reads the far board's EN level - 1 while that board is powered.
+// An EN reset comes back as POWERON on the far board (BOARD_TESTING 28): its RTC ring and crash
+// snapshot are wiped, only the SD log tail and the /data restart breadcrumb survive. Both boards
+// run the same image; on a board with nothing wired to D1 the pulse is harmless.
+void peerResetInit() {
+  pinMode(PEER_RESET_PIN, INPUT_PULLUP);
+}
+
+static void peerResetTask(void* arg) {
+  int ms = (int)(intptr_t)arg;
+  pinMode(PEER_RESET_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(PEER_RESET_PIN, LOW);
+  LOG_ALT("peerReset: GPIO %d held low for %d ms - the other board is in reset", PEER_RESET_PIN, ms);
+  vTaskDelay(pdMS_TO_TICKS(ms));
+  digitalWrite(PEER_RESET_PIN, HIGH); // open drain: released, the far board's pull-up takes over
+  peerResetInit();
+  LOG_ALT("peerReset: GPIO %d released to INPUT_PULLUP (reads %d) - the other board is booting", PEER_RESET_PIN, digitalRead(PEER_RESET_PIN));
+  vTaskDelete(NULL);
+}
+
+void peerReset(int val) {
+  if (val == 0) {
+    peerResetInit();
+    LOG_INF("peerReset: GPIO %d idle (INPUT_PULLUP), reads %d (1 = the other board's EN is high)", PEER_RESET_PIN, digitalRead(PEER_RESET_PIN));
+    return;
+  }
+  int ms = (val == 1) ? 5000 : constrain(val, 500, 10000);
+  if (xTaskCreate(peerResetTask, "peerReset", 2048, (void*)(intptr_t)ms, 1, NULL) != pdPASS)
+    LOG_WRN("peerReset: task not created - pin untouched");
+}
+
 void getCamReg(const char* addr) {
   // debug: read one sensor register. The counterpart to setCamReg(), and needed by it - any
   // register holding unrelated bits (0x5001 holds the scale enable next to AWB and the colour

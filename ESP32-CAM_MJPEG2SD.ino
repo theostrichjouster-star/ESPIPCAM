@@ -11,6 +11,7 @@ void setup() {
   if (utilsStartup()) {
 #ifndef AUXILIARY
     LOG_INF("Selected board %s", CAM_BOARD);
+    peerResetInit(); // D1 / GPIO 2 to INPUT_PULLUP before anything else: it is wired to the other board's RESET
     prepCam();
     // Repair a recording interrupted by supply loss. After prepCam(), which is what sets
     // maxFrameBuffSize - the sanity bound the chunk walk validates lengths against, so
