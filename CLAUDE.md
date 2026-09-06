@@ -480,7 +480,18 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   (§38.26). The first left the Tile view pair stuck at the left whenever the Up button was hidden -
   `justify-content: flex-end` on the row is the fix. The second is why the grid's own `max-height`
   could not stop the action row being pushed off the bottom: the bar and the four buttons are a
-  `position: sticky; bottom: 0` footer now, and the grid no longer scrolls inside the sheet
+  sticky footer now, and the grid no longer scrolls inside the sheet
+- **Chrome sticks a sticky element to its scroll container's CONTENT box, not its padding box**
+  (§38.27, measured). `bottom: 0` therefore parked the gallery's footer exactly the sheet's 32px
+  `padding-bottom` above the screen - 780 against an 812 viewport - with a strip of grid showing
+  under it. The offset cancels that padding and the two share `--sheetPadBottom` so they cannot
+  drift. **Do NOT blame the phone's URL bar**: I did, set the sheet to `100dvh`, and the panel being
+  `content-box` made it 852 tall inside 812 and pushed the footer BELOW the fold - worse than the bug
+- **Several files download as ONE zip** (§38.27), STORE, built in the page - no CDN, because this
+  board's LAN is often offline. CRC summed per chunk as it arrives, timestamps from the filenames,
+  refusal past 4GB (no ZIP64), fallback to one file at a time on any failure. **Select All** is files
+  only, never day folders, and is disabled at the root; the panel is **Playback & Download** and the
+  File Upload button is gone with it (`INCLUDE_FTP_HFS` is false, it never did anything here)
 - **Phone layout** (§38.19, 5 Sep 2026, page only): below `48rem` the page is a column of cards - app
   header, Device Controls, a live "viewfinder" card, Camera Tools, System Status - driven from ONE
   `@media (max-width: 48rem)` block on the same DOM, because `updateStatus()` matches a status key to
