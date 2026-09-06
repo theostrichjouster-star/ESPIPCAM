@@ -451,8 +451,11 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   while a tile took the buffered player. **Long press (500ms, cancelled by a 10px drag) or ctrl/cmd
   click ticks tiles** for Download and Delete, which then act on the set one file at a time with a
   gap; Start Playback and File Upload are disabled while a set is ticked because both act on one
-  file. Folders are tiles with a folder glyph, the listing's own `/` row is the go-up tile, and every
-  file tile carries its byte count. Two traps found here: **selecting a file answers `{}`** (the
+  file. **Day folders tick too** (§38.26): a set is files OR folders and never both (`pickKind`),
+  because a folder delete takes everything inside it and `/file?path=` cannot fetch a folder, so
+  Download goes unavailable for a folder set. Folders are tiles with a folder glyph and every file
+  tile carries its byte count; the listing's own `/` row is no longer a tile but the small **Up
+  button** on the left of the Tile view row, tile view only, hidden at the root. Two traps found here: **selecting a file answers `{}`** (the
   board records the name and lists nothing), so rebuilding the grid from that empty answer wiped the
   tiles just tapped - `getFiles` now keeps the grid when a listing is empty; and the action row must
   NOT be `id="buttons"`, the id `addButtons()` injects above it, or `placePlaybackButton` drops Start
@@ -463,6 +466,21 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   the tarball** `downloadFile()` builds from the clip plus its `.csv` and `.srt`; a file fetched now
   is the file itself, and the others are on the card and fetch the same way. The wedge itself is
   still unexplained and `/sustain?download=0` is still not to be called
+- **The gallery's percent bar had never worked** (§38.26, 6 Sep 2026). `updateStatus()` writes a
+  status value only into `text`, `DIV.displayonly`, `INPUT`, `TD` and `SELECT`, and `#progressBar` is
+  a `PROGRESS` element, so the board's `progressBar` arrived on every poll and was discarded. It is
+  driven from `processStatus` now, by three sources with `xferBusy` saying which owns it. **The
+  upload half is dormant on this build**: `progressBar` sits inside `#if INCLUDE_FTP_HFS` and that
+  flag is false, so the board never sends it and File Upload does nothing at all. A **download** gets
+  true per-byte progress by reading the response body in the page, with **no size ceiling** (the
+  user's decision) - the 256MB one is playback's, where decoded frames sit on top of the buffer - and
+  a catch that hands the URL to the browser's own downloader if the bytes cannot be held, so the file
+  always arrives and only the bar is lost
+- **A hidden element's auto margin pushes nothing**, and **`60vh` is the LARGE viewport on a phone**
+  (§38.26). The first left the Tile view pair stuck at the left whenever the Up button was hidden -
+  `justify-content: flex-end` on the row is the fix. The second is why the grid's own `max-height`
+  could not stop the action row being pushed off the bottom: the bar and the four buttons are a
+  `position: sticky; bottom: 0` footer now, and the grid no longer scrolls inside the sheet
 - **Phone layout** (§38.19, 5 Sep 2026, page only): below `48rem` the page is a column of cards - app
   header, Device Controls, a live "viewfinder" card, Camera Tools, System Status - driven from ONE
   `@media (max-width: 48rem)` block on the same DOM, because `updateStatus()` matches a status key to
