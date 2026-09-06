@@ -2654,6 +2654,16 @@ void stopPlaying() {
     }
     stopPlayback = false;
     isPlaying = false;
+    // An abandoned playback leaves its descriptor open: showPlayback() only closes it on the
+    // branch that runs when playback ends normally, and a browser that walks away never gets
+    // there. Measured with the slot probe (BOARD_TESTING 38.21): an aborted playback cost one
+    // slot and stopPlaying did not give it back. It never accumulated, because openSDfile()
+    // closes a stale descriptor before taking the next one, but a board that plays once and is
+    // abandoned sits one slot down until it reboots.
+    if (playbackFd >= 0) {
+      close(playbackFd);
+      playbackFd = -1;
+    }
   }
 }
 

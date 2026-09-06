@@ -90,6 +90,20 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   inline USB meter (5V side, includes charge offset - deltas are the signal);
   voltages via multimeter. Structural checks alone pass on corrupt frames.
 - Concurrency fixes get soak tests (races need repetition, not one green run).
+- **`/control?fileProbe=1` reports how many file slots are free.** It opens one file repeatedly
+  until the mount refuses, then closes them all. Take a reading, do the suspect operation, take
+  another: the difference is the leak, per operation. Healthy idle is **14 free with SD logging on,
+  15 with it off** - anything less is a leak.
+- **THE open-file leak was the SD log, fixed §38.21** - not the aborted browser transfer this file
+  and §38.8 blamed for months. `remote_log_init_SD()` assigned NULL over a live `FILE*` and
+  reopened, and `remote_log_init()` runs at boot AND on every `logType` / `sdLog` change, so one
+  descriptor was abandoned per call, unbounded (measured 12/11/10/9/8). Every boot leaked two -
+  the tell was "Opened SD file for logging" appearing TWICE in the boot log.
+- **DO NOT abort a download - it wedges the web server** (§38.21, open, unfixed). Select a file,
+  start `/sustain?download=0`, kill the client, and the board answers ping but no HTTP at all until
+  it is reset. Reproduced twice, once with a 102KB file. An aborted stream and an aborted playback
+  are both safe. Use `/file?path=` to fetch a recording instead - it does not go through a sustain
+  task.
 - **Every file in /data suddenly unopenable? It is the mount's open-file slots, not the card.**
   `utilsFS.cpp` `prepSD_MMC()` passes `maxOpenFiles = 15` (raised from the core's default of 5,
   before 5 Sep 2026 - earlier notes here and in §38.8 / §38.19 say five and are STALE). The SD log

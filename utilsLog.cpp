@@ -307,8 +307,18 @@ void flush_log(bool andClose) {
 static void remote_log_init_SD() {
 #if !CONFIG_IDF_TARGET_ESP32C3
   STORAGE.mkdir(DATA_DIR);
-  // Open remote file
-  log_remote_fp = NULL;
+  // THE open-file leak (BOARD_TESTING 38.21). This used to be `log_remote_fp = NULL;` followed
+  // by the fopen below, which drops a live FILE* on the floor: it is never fclosed, so its slot
+  // in the mount's maxOpenFiles budget is gone until the next reboot. remote_log_init() reaches
+  // here at boot AND on every logType / sdLog change, and remote_log_init() only ever called
+  // flush_log(false), which flushes without closing. Measured with the slot probe on 5 Sep 2026:
+  // 12 free, then 11, 10, 9, 8 - exactly one per call, with no ceiling. Closing here rather than
+  // in the caller covers every route in.
+  if (log_remote_fp != NULL) {
+    fflush(log_remote_fp);
+    fclose(log_remote_fp);
+    log_remote_fp = NULL;
+  }
   log_remote_fp = fopen("/sdcard" LOG_FILE_PATH, "a");
   if (log_remote_fp == NULL) {LOG_WRN("Failed to open SD log file %s", LOG_FILE_PATH);}
   else {

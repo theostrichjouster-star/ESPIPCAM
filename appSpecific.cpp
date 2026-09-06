@@ -548,6 +548,28 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
       alertBufferSize = 0;
     } else LOG_WRN("Failed to get still");
   } 
+  else if (!strcmp(variable, "fileProbe")) {
+    // Open-file slot probe. The mount is created with maxOpenFiles, and when that budget is
+    // exhausted EVERY open fails - reads and writes, any file - while the card is perfectly
+    // healthy and /status still answers (BOARD_TESTING 38.8, 38.19). Nothing reports how many
+    // slots are in use, so a leak could only ever be guessed at.
+    //
+    // This opens the same file over and over until the mount refuses, reports how many it got,
+    // and closes them all again. Take a reading, do the suspect operation, take another: the
+    // difference IS the leak, in slots, per operation. Read only and non destructive.
+    const int probeMax = 32;
+    File probe[probeMax];
+    int got = 0;
+    for (; got < probeMax; got++) {
+      probe[got] = STORAGE.open(INDEX_PAGE_PATH, FILE_READ);
+      if (!probe[got]) break;
+    }
+    for (int i = 0; i < got; i++) probe[i].close();
+    LOG_ALT("File slot probe: %d free%s", got, got >= probeMax ? " (probe limit reached)" : "");
+    sprintf(jsonBuff, "{\"freeSlots\":%d,\"probeMax\":%d}", got, probeMax);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, jsonBuff);
+  }
   else if (!strcmp(variable, "formatSD")) {
     if (formatSDcard()) doRestart("user requested format of SD card");
   } 
