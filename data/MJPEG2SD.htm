@@ -935,7 +935,8 @@
         color: var(--pageText);
       }
 
-      #stream-container.clipPlaying #playBar {
+      #stream-container.clipPlaying #playBar,
+      #stream-container.clipStreaming #playBar {
         display: flex;
       }
 
@@ -3235,7 +3236,8 @@
         if (badge) badge.classList.toggle('streaming', mode === 'live');
         // a buffered clip is neither: sizeView() calls this on every resize, so the label has to be
         // decided here or it reverts to STILL the moment the view is sized
-        if (state) state.textContent = clip ? 'CLIP' : (mode === 'live' ? 'LIVE' : 'STILL');
+        const isClip = !!clip || (viewContainer && viewContainer.classList.contains('clipStreaming'));
+        if (state) state.textContent = isClip ? 'CLIP' : (mode === 'live' ? 'LIVE' : 'STILL');
       }
 
       function isFullscreen() {
@@ -3294,6 +3296,10 @@
         setText('#appLinkText', 'Online');
         clearTimeout(onlineTimer);
         onlineTimer = setTimeout(() => {
+          // A clip download saturates the link, so the status poll can miss three intervals while
+          // the board is perfectly healthy - and the header then reads Offline mid-playback, which
+          // is alarming and wrong. Buffering IS traffic answering, so hold the pill while it runs
+          if (clip && !clip.done) { markOnline(); return; }
           link.classList.remove('online');
           setText('#appLinkText', 'Offline');
         }, refreshInterval * 3);
@@ -4030,7 +4036,14 @@
           // hold in memory, which is start-and-stop only and silent
           stopAll("openFile", false);
           if (!playClip(path)) {
+            // SAY SO. This used to fall through in silence: no bar, no controls, and the badge read
+            // LIVE because the playback button was active - indistinguishable from a stream, which
+            // is exactly how it was reported. A 102MB clip took this path three times
             if (!isActive(playbackButton)) activatePlaybackButton();
+            viewContainer.classList.add('clipStreaming');
+            setText('#liveState', 'CLIP');
+            const mb = fileSizes[path] ? Math.round(fileSizes[path] / 1048576) + 'MB' : 'This clip';
+            setText('#playState', mb + ' is too large to buffer - no sound or seeking');
           }
         }
       }
@@ -4090,7 +4103,12 @@
          faster. It converts a stuttering silent 21.9fps into a smooth 30fps with sound, for about
          the same wall clock. */
 
-      const CLIP_MAX_BYTES = 64 * 1024 * 1024; // above this, fall back to the board's own playback
+      /* A sanity ceiling, not a policy. The real gate is whether the buffer can be ALLOCATED, tried
+         below and caught - a fixed 64MB cap was wrong for this card: HD recordings here run 28 to
+         157MB, the median is 54, and a 66 second clip at 102MB was refused in silence, which is
+         exactly the report that produced this comment. Judge it on what the phone can hold, and say
+         so out loud when it cannot. */
+      const CLIP_MAX_BYTES = 256 * 1024 * 1024;
       const CLIP_MIN_LEAD = 1.5;   // seconds of content before the start rule is even considered
       const CLIP_AUD_AHEAD = 2.0;  // seconds of audio scheduled ahead of the playhead
       const CLIP_SAFETY = 0.95;    // shave the download estimate rather than start a shade too early
@@ -4244,6 +4262,20 @@
       function clipBar() {
         const c = clip;
         if (!c) return;
+        // A big recording is a long wait - 102MB at ~1.4MB/s is over a minute before the start rule
+        // lets it begin. A bare "Buffering" for that long reads as a hang, so say how far in it is
+        // and roughly how long is left
+        if (!c.started && c.size) {
+          const pct = Math.floor(100 * c.got / c.size);
+          const secs = (performance.now() - c.t0) / 1000;
+          const rate = secs > 0.5 ? c.got / secs : 0;
+          let msg = 'Buffering ' + pct + '%';
+          if (rate > 0) {
+            const left = Math.round((c.size - c.got) / rate);
+            if (left > 2) msg += '  ' + clipFmt(left) + ' left';
+          }
+          setText('#playState', msg);
+        }
         const total = clipDuration();
         const t = Math.min(clipTime(), total);
         setText('#playElapsed', clipFmt(t) + ' / ' + clipFmt(total));
@@ -4586,8 +4618,14 @@
         // concurrent reads of the same card for no reason
         thumbRun++;
         thumbQueue = [];
+        // The allocation IS the gate. A 157MB recording may or may not fit on a given phone, and the
+        // honest way to find out is to ask for the memory and catch the refusal, rather than pick a
+        // number and refuse clips a phone could have held
+        let buf;
+        try { buf = new Uint8Array(fileSizes[path]); }
+        catch (e) { return false; }
         clip = {
-          path: path, size: fileSizes[path], buf: new Uint8Array(fileSizes[path]), got: 0,
+          path: path, size: fileSizes[path], buf: buf, got: 0,
           parseOff: AVI_HDR, frames: [], auds: [], audBytes: 0, hdr: null, hasAudio: false,
           cv: cv, ctx: null, ac: null, acBase: 0, seekBase: 0, wallBase: 0, pausedAt: 0,
           started: false, playing: false, ended: false, stalled: false, muted: false, done: false,
@@ -4637,7 +4675,7 @@
         c.auds = [];
         const cv = $('#clipCanvas');
         if (cv) hide(cv);
-        if (viewContainer) viewContainer.classList.remove('clipPlaying');
+        if (viewContainer) viewContainer.classList.remove('clipPlaying', 'clipStreaming');
         show($('#stream'));
         setText('#playState', '');
       }

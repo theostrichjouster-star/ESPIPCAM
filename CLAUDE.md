@@ -420,8 +420,13 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   plays. Two traps, both measured: **rAF is not a safe pump** (a visible page where it never fired once
   played the whole soundtrack against a frozen frame), so a 100 ms interval carries the audio, the bar,
   the end/stall checks and a drawing floor while rAF only draws; and the **AudioContext must be opened
-  inside the click**, or it is born suspended and the video clock freezes with it. Clips above 64MB
-  (a 75 s HD30 recording is 126MB) fall back to the board's streamed playback unchanged
+  inside the click**, or it is born suspended and the video clock freezes with it. **What decides
+  whether a clip buffers is the ALLOCATION succeeding, not a size limit** (§38.24): a fixed 64MB cap
+  refused the ordinary case here, where HD recordings run 28-157MB with a 54MB median - and it refused
+  in SILENCE, with no bar, no message and the badge reading LIVE because the playback button was
+  active, so a clip streaming off the board was indistinguishable from a live stream with its controls
+  missing. That was the bug report. A refused clip now says why and keeps the CLIP badge, and
+  buffering reads "Buffering 12% 1:06 left" because a 100MB clip is over a minute of waiting
 - **Gallery** (§38.20, 5 Sep 2026, firmware + page): every Get Still is now FILED on the card as
   `/YYYYMMDD/YYYYMMDD_HHMMSS_<SIZE>.jpg` - before this, stills existed only as a browser response
   and nothing had ever written a `.jpg`. The listing carries them (`listDir` takes a comma list;
