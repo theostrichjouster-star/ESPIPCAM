@@ -509,11 +509,20 @@ State and budgets:
   the pulse alive but handling every packet ~1 s late (TCP body at 35 B/s, its own gateway
   ping failing, the wifi supervisor flapping the link) and only a real power cycle cured it -
   the card and the radio keep their state through EN. Prefer a power cycle after a wedge
+- `fileProbe=1` - **how many of the mount's open-file slots are free.** Opens one file over and
+  over until the mount refuses, reports the count as JSON, closes them all. Read only. Healthy
+  idle is 14 with SD logging on, 15 with it off; take a reading either side of a suspect
+  operation and the difference is the leak, in slots (§38.21)
+- `stillSave=0|1` - whether Get Still is filed on the card as well as previewed. Default on;
+  `assert_campaign_config` turns it off for a bench run and the exit restore puts it back
 - `banding=0|50|60` - the mains banding filter, persisted with `save=1`. 0 (the default) is
   off: the AEC then spends the whole frame on exposure before gain. 50/60 select the manual
   band; `dumpCam` reports the live state on its Exposure line
 
 Destructive or dangerous:
+- `/sustain?download=0` - **DO NOT USE, it wedges the web server** (§38.21, open). Not a control,
+  but it belongs on this list: no abort needed, the first download after a boot has done it, and
+  recovery is a reset. `/file?path=` fetches the same file safely
 - `wdtTest` - **DO NOT RUN.** Wedged the board 3 of 3 times and never fired a watchdog
   reboot (§29). Needs the LOG_WRN heartbeat first
 - `crashTest`, `bodLevel`/`bodDump`, `formatSD` (never)

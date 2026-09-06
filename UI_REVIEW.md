@@ -480,3 +480,9 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
 
 Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
 comparison from C3 is still outstanding.
+
+**And one the page should stop exposing**: the Download button posts to `/sustain?download=0`, which
+wedges the whole web server (BOARD_TESTING §38.21, open and unexplained). It needs no abort - a plain
+completed download has done it on the first try after a boot - and recovery is a reset. The Gallery's
+own `/file?path=` route fetches the same file and is measured safe over 50MB and over aborts, so
+pointing the button at it is the cheap mitigation; the cost is losing the CSV/SRT tarball bundling.
