@@ -53,9 +53,12 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - `/file?path=/20260905/x.avi` - ANY file on the card, behind auth and `pathIsSafe()`. `/web?` only
   reaches `/data`. Add `&thumb=1` for a cached 160x90 tile, generated on first request from the
   clip's MIDDLE frame and refused while capturing. **This is also the playback path now** (§38.22):
-  the page fetches the whole clip through it and plays it in the browser. Measured **1.32 MB/s**,
-  against 1.75 for the frame-at-a-time playback stream - `sendChunks()` moves `CHUNKSIZE` (4KB,
-  `appGlobals.h`) per read and send, and raising it is the obvious unclaimed win here
+  the page fetches the whole clip through it and plays it in the browser. `CHUNKSIZE` is **32KB**
+  since 5 Sep 2026 (was 4KB), worth a measured **+7.5%**: 1.317 -> 1.416 MiB/s (§38.23). That is far
+  less than the third predicted, because `sendChunks` reads through `File::read()` - stdio `fread`
+  with a 4KB `setvbuf` buffer - so a 32KB read is still eight 4KB refills and only the send count
+  fell. **Do not grow it again**: the card does 4.75 MB/s on the playback path, so the link is the
+  constraint, and the next move if any is bypassing stdio, not a bigger buffer
 - `/control?reset=1` - soft restart
 
 ## Bench discipline

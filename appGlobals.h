@@ -124,7 +124,13 @@
 // SD write block for the AVI capture path only - see sdWriteBuf in mjpeg2sd.cpp.
 // Must be a multiple of the SD card sector size (512 or 1024 bytes)
 #define SD_WRITE_SIZE (1024 * 32)
-#define CHUNKSIZE (1024 * 4)
+// HTTP file serving read/send size (sendChunks, and the two log dump paths). Raised from 4KB on
+// 5 Sep 2026: /file measured 1.32 MB/s against the playback stream's 1.75 on the same link, and the
+// difference is per-chunk overhead - the stream writes a whole ~80KB frame per send, this wrote 4KB,
+// so a 20MB clip cost ~5000 sends. That matters now the browser fetches whole clips to play them
+// (BOARD_TESTING 38.22). 32KB matches RAMSIZE, the size the playback path already reads at 4.75MB/s.
+// The buffer is ps_malloc'd (webServer.cpp), so the extra 28KB comes out of PSRAM, not internal RAM
+#define CHUNKSIZE (1024 * 32)
 #define ISCAM // cam specific code in generic cpp files
 
 #define AVI_EXT "avi"
