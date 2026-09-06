@@ -99,11 +99,17 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   reopened, and `remote_log_init()` runs at boot AND on every `logType` / `sdLog` change, so one
   descriptor was abandoned per call, unbounded (measured 12/11/10/9/8). Every boot leaked two -
   the tell was "Opened SD file for logging" appearing TWICE in the boot log.
-- **DO NOT abort a download - it wedges the web server** (§38.21, open, unfixed). Select a file,
-  start `/sustain?download=0`, kill the client, and the board answers ping but no HTTP at all until
-  it is reset. Reproduced twice, once with a 102KB file. An aborted stream and an aborted playback
-  are both safe. Use `/file?path=` to fetch a recording instead - it does not go through a sustain
-  task.
+- **DO NOT use `/sustain?download=0` - it wedges the web server** (§38.21, open, unfixed). It does
+  NOT need an abort: a plain completed download took HTTP down on the first try after a boot, and
+  the board then answers ping and nothing else until it is reset. Four wedges, four peer resets.
+  **Use `/file?path=` instead** - same file, measured safe over 50MB and over aborts, because it
+  runs on the httpd task rather than the async sustain handler. `/sustain?playback=0` and
+  `?stream=0` use that same task and are fine, so it is the download branch specifically.
+  It is NOT the HTTP framing: rebuilding it as a correct fixed-length response wedged it too, and
+  that attempt is reverted. The only build where downloads worked was one whose `LOG_ALT` tracing
+  added ~4 s of `delay()` to the path, so it is a race or a resource exhaustion - note this board
+  carries the custom core's 65535 lwip send buffer.
+  **Never test this on COM3**: it is the peer-reset lever for COM4.
 - **Every file in /data suddenly unopenable? It is the mount's open-file slots, not the card.**
   `utilsFS.cpp` `prepSD_MMC()` passes `maxOpenFiles = 15` (raised from the core's default of 5,
   before 5 Sep 2026 - earlier notes here and in §38.8 / §38.19 say five and are STALE). The SD log
