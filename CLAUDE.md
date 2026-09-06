@@ -411,18 +411,30 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   prediction is genuinely satisfied for that instant. The filter is what makes the measurement
   representative rather than merely favourable, and no prediction can replace it - nothing in a frame
   size says the room is about to go dark again
-- **The governor's 1 s window is load-bearing: a PER-FRAME window is measured broken** (§38.30,
-  6 Sep 2026). The SD write ceiling is a sustained property, a property of a second, and sampling it
-  over one frame period measures frame-arrival JITTER instead - the sensor delivers in bursts. At
-  QSXGA 5 fps, frames 116-128 ms apart against a 200 ms period read 4370-4491 KB/s against the 4012
-  push threshold and the boost went 0-4-0 for nothing. At HD 30 fps a 33 ms sample is almost all
-  jitter: adjacent frames read 2544 and 4660 KB/s where the true sustained figure is 2871, straddling
-  BOTH thresholds, giving **96 quality writes in an 87 s steady lit clip** - and the ease-down made
-  **zero** progress for the whole clip because the churn kept zeroing its counter. Delivery survived
-  (30.0 fps, busy 65%), so the cost is SCCB traffic, quality flickering with frame jitter, and no
-  recovery at all. What DID work is the short DECISION interval alone: at QSXGA the walk finished in
-  11 s against 45 s, same endpoint. **So the fix, if ever wanted, is to decouple the two - a rolling
-  trailing-1 s demand figure with per-frame decisions - never a shorter window**
+- **The governor MEASURES over a rolling window and DECIDES every frame** (§38.30-31, 6 Sep 2026).
+  Those were one thing - a 1 Hz sample-and-reset - until then, which meant the only way to react
+  sooner was to measure over less. And a per-frame MEASUREMENT is broken, because the SD write
+  ceiling is a sustained property: sampling it over one frame period reads frame-arrival JITTER,
+  since the sensor delivers in bursts. Measured at HD 30, adjacent frames read 2544 and 4660 KB/s
+  where the true figure was 2871, straddling both thresholds and giving **96 quality writes in an
+  87 s steady lit clip**, with the ease-down making **zero** progress because the churn kept zeroing
+  its counter. The rolling window on the same scene gives **0 writes** and a frame average steady
+  within 5%. `govWinMs=0` still reproduces the broken case on purpose, as the record
+- **Because the decision is per frame, every governor threshold is a TIME, not a tick count**
+  (`GOV_RELAX_MS` 2000, `govEaseSecs` in real seconds). As tick counts they only meant seconds
+  because of the 1 Hz gate, and at HD 30 they would have become a thirtieth of that - which is
+  exactly the §38.29 flicker fault. Boost steps are additionally spaced by one full window, so the
+  ramp cannot outrun the measurement it is judged on. The **onset** of every arm is now immediate,
+  which is the gain; only the repeat rate is gated
+- **The measured span runs one frame period longer than `govWinMs`** (1170-1198 ms at QSXGA 5 fps
+  against a 1000 ask, ~1033 at HD 30) because eviction stops at the newest sample still inside the
+  window and bases the span on the one before it. Deliberate: the alternative is interpolating a
+  partial frame's bytes. Every governor log line reports the span it actually measured
+- **A short ease interval is now SAFE to choose** (§38.31): with the rolling window, `govEaseSecs=2`
+  walked 5MP from q16 all the way to the configured q10 in 22 s with **14 writes and zero churn**,
+  where reaching that speed by shortening the window cost 8 spurious writes at 5MP and broke HD
+  entirely. The flicker tradeoff of §38.29 is unchanged and is still the reason the DEFAULT is 10 -
+  what changed is that speed and measurement accuracy are no longer the same dial
 - **Dark QSXGA steps its own quality and that is correct**: 5MP frames in the dark overrun the 983 KB
   buffer, the driver delivers nothing, and the rescue steps the sensor's quality until they fit -
   settling at q24-28, the range §37 measured. Do not suppress it; it is the reason dark 5MP works
@@ -629,9 +641,10 @@ State and budgets:
 - `govEaseSecs=<1..60>` - the SD governor's ease-down interval in ticks (~seconds) per quality
   step back toward the configured value. Bench knob, RAM only, default 10. **Do not lower it to
   make recovery faster** - measured, see the ease-down entry below
-- `govWinMs=<0..5000>` - the SD governor's measurement window AND decision interval, default 1000,
-  0 = every frame. Bench knob, RAM only. **A per-frame window is measured broken** - see the entry
-  below. `govWrites` in `updateFPS` and the `closeAvi` line are the churn metric
+- `govWinMs=<0..5000>` - the length of the SD governor's rolling measurement window, default 1000.
+  NOT the decision interval any more: a decision is taken on every frame regardless. 0 collapses the
+  window to a single frame, which is measured broken and kept only as the record (§38.30). Bench
+  knob, RAM only. `govWrites` in `updateFPS` and the `closeAvi` line are the churn metric
 - `motionStats=1`, `zoneStats`, `avgZones` - detector counters and the AEC 4x4 zone grid
 - `sdBusClk` / `sdBusDiv`, `battScale` / `sagTest`, `extDVDD`, `lencFhd` (LENC A/B)
 - `peerReset=1` - pulse the OTHER board's RESET through D1 / GPIO 2 for 5 s (`=<ms>` 500-10000,

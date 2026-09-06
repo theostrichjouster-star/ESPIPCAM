@@ -138,12 +138,16 @@ static uint32_t frameInterval; // units of us between frames
                           // the saturation plateau: a backpressured card delivers ~94-98%
                           // of the nominal budget, so 95 made most ticks hover just under
                           // the trigger and the ramp took 15s (Test A, 28 Aug)
-#define GOV_RELAX_PCT 60  // demand below this % for GOV_RELAX_TICKS lowers it. Must sit
+#define GOV_RELAX_PCT 60  // demand below this % for GOV_RELAX_MS lowers it. Must sit
                           // below PUSH/(1 + one step's effect): a quality step at QSXGA
                           // moves demand ~50%, and 75 made the governor flap q10<->q12
                           // every few seconds in the dim Test B (28 Aug) - easing at 74%
                           // landed straight back above 90% and re-boosted
-#define GOV_RELAX_TICKS 2 // consecutive quiet ticks before easing off
+#define GOV_RELAX_MS 2000 // how long demand must stay under GOV_RELAX_PCT before the boost eases.
+                          // WAS a count of 2 ticks, which only meant 2 seconds because the whole
+                          // function was gated to 1Hz. Now that a decision is taken on every frame
+                          // (see the rolling window below) every threshold here has to be a TIME,
+                          // or it would scale with the frame rate: 2 ticks at HD 30 is 66ms
 // Easing the BASE back down, which is a different job from unwinding the boost above. The
 // no-frame rescue raises the base for good (govDegradeBase), so a clip recorded in the dark
 // that had its frames walked up stays there after someone turns the light on - and so does
@@ -221,11 +225,38 @@ static uint8_t govUserQ;      // the CONFIGURED quality, and the floor the ease-
 static uint8_t govMaxBoost;   // clip peak, for the closeAvi stats
 static uint8_t govOpenQ;      // the base this clip opened on, so closeAvi can say whether an
                               // inherited degradation was walked off during it
-static uint8_t govLowTicks;   // consecutive under-GOV_RELAX_PCT ticks
-static uint8_t govEaseTicks;  // consecutive ticks with room for a step back down
-static uint32_t govWindowMs;  // start of the current 1s measurement window
+// Time-based hysteresis. Each of these is "when did this condition first start holding", 0 when it
+// is not holding, so a step fires once the condition has held for its own interval and the clock is
+// restarted from there. Rate-independent by construction, which counting ticks was not.
+static uint32_t govLowSince;    // demand has been under GOV_RELAX_PCT since
+static uint32_t govEaseSince;   // a step back down has looked safe since
+static uint32_t govLastStepMs;  // the governor's last quality write, spacing the boost ramp
 static uint32_t govLastVidSize;
-static uint16_t govLastFrameCnt;
+
+// The rolling trailing window. Per-frame samples aged out by govWinMs, so demand is a true average
+// over the last govWinMs while a DECISION is taken on every frame. §38.30 is why those two have to
+// be separate: a per-frame MEASUREMENT reads frame-arrival jitter rather than the card's sustained
+// ceiling (adjacent frames read 2544 and 4660 KB/s where the truth was 2871), while a per-frame
+// DECISION was the half that worked - it cut a 5MP recovery walk from 45s to 11s with no churn.
+#define GOV_RING 64   // samples held. 64 covers a full second at any rate this firmware reaches
+                      // (HD's ceiling is 52). A longer govWinMs at a high rate simply averages over
+                      // fewer ms than asked, which is still a true average - winMs reports what it
+                      // actually got, and nothing here assumes it equals govWinMs
+static uint32_t govRingMs[GOV_RING];
+static uint32_t govRingBytes[GOV_RING];
+static uint8_t govRingHead;    // next slot to write
+static uint8_t govRingCount;   // samples currently held
+static uint32_t govRingSum;    // bytes currently held - kept incrementally, never re-summed
+static uint32_t govRingBase;   // timestamp of the last sample let go of: the window's start. The
+                               // span is always "since the last eviction" and the sum is always
+                               // "everything still held", so the two can never describe
+                               // different intervals. Consequence: the span runs one frame period
+                               // LONGER than govWinMs, because eviction stops at the newest sample
+                               // still inside the window and bases the span on the one before it.
+                               // Measured 1170-1198ms at QSXGA 5fps against a 1000 ask, ~1033 at
+                               // HD 30. Deliberate - the alternative is interpolating a partial
+                               // frame's bytes, which is inventing data - and every log line
+                               // reports the span it actually measured rather than the one asked for
 // no-frame watchdog state (see noFrameRescue above processFrame)
 static uint32_t lastGoodFrameMs = 0;
 static uint16_t rescueClipCnt = 0; // rescues during the open recording, for closeAvi
@@ -457,7 +488,7 @@ void govRebaseQuality(int q) {
   // the user, or the boot config replay, set quality. This is the governor's base AND the
   // floor the ease-down walks back to. Any active boost reapplies on top at the next tick
   govBaseQ = govUserQ = q;
-  govEaseTicks = 0;
+  govEaseSince = 0;
   sdGovEase = 0;
 }
 
@@ -466,37 +497,60 @@ static void govDegradeBase(int q) {
   // works from the new value, but the user's floor is untouched, so the ease-down in
   // sdGovernor() can give it back once the scene allows
   govBaseQ = q;
-  govEaseTicks = 0;
+  govEaseSince = 0;
   // Kept live HERE and not only in sdGovernor(), which runs while recording. The rescue fires
   // whenever frames stop arriving, recording or not - measured in the dark on 6 Sep 2026, where
   // it walked q10 to q16 with nothing recording and the badge went on reading level
   sdGovEase = (govUserQ && govBaseQ > govUserQ) ? govBaseQ - govUserQ : 0;
 }
 
+static void govRingAdd(uint32_t ms, uint32_t bytes) {
+  if (govRingCount == GOV_RING) {
+    // full, so the oldest has to go whatever its age - it becomes the window's start
+    uint8_t tail = (govRingHead + GOV_RING - govRingCount) % GOV_RING;
+    govRingBase = govRingMs[tail];
+    govRingSum -= govRingBytes[tail];
+    govRingCount--;
+  }
+  govRingMs[govRingHead] = ms;
+  govRingBytes[govRingHead] = bytes;
+  govRingHead = (govRingHead + 1) % GOV_RING;
+  govRingCount++;
+  govRingSum += bytes;
+}
+
+static void govRingAge(uint32_t now) {
+  // Drop everything older than the window, always keeping the newest so there is something to
+  // measure. govWinMs 0 therefore evicts down to a single sample and reproduces §38.30's broken
+  // per-frame MEASUREMENT exactly, deliberately - it is the record of why this window exists
+  while (govRingCount > 1) {
+    uint8_t tail = (govRingHead + GOV_RING - govRingCount) % GOV_RING;
+    if (now - govRingMs[tail] <= govWinMs) break;
+    govRingBase = govRingMs[tail];
+    govRingSum -= govRingBytes[tail];
+    govRingCount--;
+  }
+}
+
 static void sdGovernor() {
-  // Called once per saved frame and self-gated to govWinMs (1Hz by default): compare the
-  // window's write demand to the SD ceiling and trade JPEG quality for frame delivery when
-  // frames outgrow it. A saturated card delivers ~100% of budget by definition, so sustained
-  // saturation keeps raising the boost until frames shrink below the ceiling - the recovery path
+  // Called once per saved frame, and it DECIDES on every one of them: compare the trailing
+  // window's write demand to the SD ceiling and trade JPEG quality for frame delivery when frames
+  // outgrow it. A saturated card delivers ~100% of budget by definition, so sustained saturation
+  // keeps raising the boost until frames shrink below the ceiling - which is the recovery path.
+  //
+  // The measurement is a rolling average over govWinMs and the decision is per frame. Those were
+  // one thing (a 1Hz sample-and-reset) until 6 Sep 2026, which meant the only way to react sooner
+  // was to measure over less - and measuring a sustained property over one frame period reads
+  // jitter (§38.30). Onset is now immediate; how fast each arm may REPEAT is a time below.
   uint32_t now = millis();
-  uint32_t winMs = now - govWindowMs;
-  // govWinMs 0 decides on EVERY frame. Note what that does to the rest of this function: every
-  // threshold below is a TICK count (GOV_RELAX_TICKS, govEaseSecs), so shortening the window
-  // speeds all of them up in proportion - at 30fps a 10-tick filter becomes a third of a second.
-  // It also changes what is being measured: sdGovFrameKB stops being an average and becomes one
-  // frame's size, and demandKBs is derived from a millis() interval of a single frame period
-  if (winMs < govWinMs) return;
-  // Two frames inside the same millisecond would divide by zero. Impossible under the 1000ms
-  // default, reachable per-frame, and returning WITHOUT advancing govWindowMs is what makes the
-  // next frame's interval measurable instead of losing the sample
-  if (!winMs) return;
-  uint32_t winBytes = vidSize - govLastVidSize;
-  uint16_t winFrames = frameCnt - govLastFrameCnt;
-  uint32_t demandKBs = (uint32_t)(((uint64_t)winBytes * 1000) / winMs) / 1024;
-  sdGovFrameKB = winFrames ? winBytes / winFrames / 1024 : 0;
+  uint32_t thisBytes = vidSize - govLastVidSize;
   govLastVidSize = vidSize;
-  govLastFrameCnt = frameCnt;
-  govWindowMs = now;
+  govRingAdd(now, thisBytes);
+  govRingAge(now);
+  uint32_t winMs = now - govRingBase;
+  if (!winMs) return; // the whole window inside one millisecond: nothing to divide by
+  uint32_t demandKBs = (uint32_t)(((uint64_t)govRingSum * 1000) / winMs) / 1024;
+  sdGovFrameKB = govRingSum / govRingCount / 1024;
   // persist the directory entry and FAT chain so an abrupt loss costs at most this
   // interval rather than the whole clip (see AVI_FLUSH_SECS)
   if (now - lastFlushMs >= AVI_FLUSH_SECS * 1000) {
@@ -513,31 +567,38 @@ static void sdGovernor() {
   uint16_t capKB = frameWindowKB(fsizePtr);
   bool windowNear = capKB && sdGovFrameKB > (uint32_t)capKB * GOV_WINDOW_PCT / 100;
   if (windowNear || demandKBs > (uint32_t)budget * GOV_PUSH_PCT / 100) {
-    govLowTicks = govEaseTicks = 0;
-    if (sdGovBoost < GOV_MAX_BOOST) {
+    govLowSince = govEaseSince = 0;
+    // Spaced by the full window since the last write. The onset is immediate now, which is the
+    // gain - protection starts on the frame that crosses rather than up to a second later - but a
+    // step must not be repeated until the measurement it is judged on has actually refreshed,
+    // or the ramp runs to its ceiling before the first step has shown up in the average
+    if (sdGovBoost < GOV_MAX_BOOST && (!govLastStepMs || now - govLastStepMs >= govWinMs)) {
       sdGovBoost++;
       if (sdGovBoost > govMaxBoost) govMaxBoost = sdGovBoost;
       int q = govBaseQ + sdGovBoost;
       if (q > 63) q = 63;
       s->set_quality(s, q);
       govWrites++;
-      LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u", q, sdGovBoost, demandKBs, budget);
+      govLastStepMs = now;
+      LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u over %lums", q, sdGovBoost, demandKBs, budget, winMs);
     }
   } else if (demandKBs < (uint32_t)budget * GOV_RELAX_PCT / 100 && sdGovBoost && !windowNear) {
     // !windowNear: at low fps the SD demand can be tiny while frames sit just under
     // the frame window - easing the boost there would grow them straight over it
-    govEaseTicks = 0; // unwind the whole boost before the base is allowed to move
-    if (++govLowTicks >= GOV_RELAX_TICKS) {
-      govLowTicks = 0;
+    govEaseSince = 0; // unwind the whole boost before the base is allowed to move
+    if (!govLowSince) govLowSince = now;
+    else if (now - govLowSince >= GOV_RELAX_MS) {
+      govLowSince = now;
       sdGovBoost--;
       int q = govBaseQ + sdGovBoost;
       if (q > 63) q = 63;
       s->set_quality(s, q);
       govWrites++;
-      LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u", q, sdGovBoost, demandKBs, budget);
+      govLastStepMs = now;
+      LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u over %lums", q, sdGovBoost, demandKBs, budget, winMs);
     }
   } else {
-    govLowTicks = 0;
+    govLowSince = 0;
     // Ease the BASE back toward the user's quality once there is nothing left to defend.
     // Ordering matters: this is the third arm, so a push beats a relax beats an ease, and
     // the boost is fully unwound before the base moves - which is also the cooldown after
@@ -556,19 +617,24 @@ static void sdGovernor() {
       uint32_t stepFrameKB = (uint32_t)sdGovFrameKB * GOV_STEP_GROWTH_NUM / GOV_STEP_GROWTH_DEN;
       // sdGovFrameKB != 0 first: a window with no measurable frame in it reads as limitless
       // headroom, and this is the one branch where acting on that makes things WORSE. It cannot
-      // happen today (saveFrame increments frameCnt immediately before this call, so every tick
-      // covers at least one frame) but the cost of being sure is a single term
+      // happen today (the ring always holds at least the frame that triggered this call) but the
+      // cost of being sure is a single term
       bool safe = sdGovFrameKB
                && stepDemand < (uint32_t)budget * GOV_PUSH_PCT / 100
                && (!capKB || stepFrameKB < (uint32_t)capKB * GOV_WINDOW_PCT / 100);
-      if (!safe) govEaseTicks = 0;
-      else if (++govEaseTicks >= govEaseSecs) {
-        govEaseTicks = 0;
+      // govEaseSecs is now genuinely SECONDS rather than a count of 1Hz ticks that happened to be
+      // seconds. The distinction matters because the decision is per frame: as a tick count this
+      // would have become a third of a second at HD 30, which is the flicker fault of §38.29
+      if (!safe) govEaseSince = 0;
+      else if (!govEaseSince) govEaseSince = now;
+      else if (now - govEaseSince >= (uint32_t)govEaseSecs * 1000) {
+        govEaseSince = now;
         govBaseQ--;
         s->set_quality(s, govBaseQ);
         govWrites++;
-        LOG_INF("SD governor: quality eased to %u toward the configured %u - frames %u KB, demand %lu KB/s of %u",
-          govBaseQ, govUserQ, sdGovFrameKB, demandKBs, budget);
+        govLastStepMs = now;
+        LOG_INF("SD governor: quality eased to %u toward the configured %u - frames %u KB, demand %lu KB/s of %u over %lums",
+          govBaseQ, govUserQ, sdGovFrameKB, demandKBs, budget, winMs);
       }
     }
   }
@@ -614,11 +680,16 @@ static void openAvi() {
   if (!govUserQ) govUserQ = govBaseQ;
   govOpenQ = govBaseQ;
   govWrites = 0;
-  sdGovBoost = govMaxBoost = govLowTicks = govEaseTicks = 0;
+  sdGovBoost = govMaxBoost = 0;
+  govLowSince = govEaseSince = govLastStepMs = 0;
   sdGovEase = (govBaseQ > govUserQ) ? govBaseQ - govUserQ : 0;
   sdGovFrameKB = 0;
-  govLastVidSize = govLastFrameCnt = 0;
-  govWindowMs = millis();
+  govLastVidSize = 0;
+  // the rolling window starts empty, based here: the first frame's span is measured from the file
+  // opening rather than from whatever the previous clip left behind
+  govRingHead = govRingCount = 0;
+  govRingSum = 0;
+  govRingBase = millis();
   rescueClipCnt = 0; // no-frame watchdog steps within this clip, for the stats below
   haveWav = false;
   // Provisional header into the reserved space. Costs no extra write - this block is
