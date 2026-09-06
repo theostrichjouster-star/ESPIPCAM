@@ -17,3 +17,10 @@ print("sdKBs=" + g(r"Average SD write speed: (\d+) kB/s"))
 print("boost=" + g(r"max quality boost (\d+)", "0"))
 print("rescues=" + g(r"No-frame rescue fired (\d+)", "0"))
 print("busy=" + g(r"Busy: (\d+)%"))
+# SD governor, 6 Sep 2026. govWrites is the churn metric: one write per quality step the clip
+# actually needed is healthy, a count far above that means the governor is flapping. easeLeft and
+# easeFrom are the ease-down's two closing lines - at most one of them appears in a block
+print("govWrites=" + g(r"SD governor: (\d+) quality write", "0"))
+print("govWin=" + g(r"quality write\(s\) this clip at a (\d+)ms window"))
+print("easeLeft=" + g(r"quality still \d+ against the configured \d+ - (\d+) step", "0"))
+print("easeFrom=" + g(r"eased all the way back to the configured \d+ from (\d+)", "0"))
