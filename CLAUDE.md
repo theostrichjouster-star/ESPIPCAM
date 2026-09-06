@@ -116,6 +116,9 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   added ~4 s of `delay()` to the path, so it is a race or a resource exhaustion - note this board
   carries the custom core's 65535 lwip send buffer.
   **Never test this on COM3**: it is the peer-reset lever for COM4.
+  **Nothing in the page reaches it any more** since 6 Sep 2026 (§38.25): the Download button fetches
+  `/file?path=` per file. The handler is still compiled and still wedges; only the way an ordinary
+  user got there is gone.
 - **Every file in /data suddenly unopenable? It is the mount's open-file slots, not the card.**
   `utilsFS.cpp` `prepSD_MMC()` passes `maxOpenFiles = 15` (raised from the core's default of 5,
   before 5 Sep 2026 - earlier notes here and in §38.8 / §38.19 say five and are STALE). The SD log
@@ -441,6 +444,25 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   refused while capturing. `.thm` is invisible to `listDir`, the FTP filter and the tarball, and
   `deleteOthers()` strips it. **The bench opts out of saving** (`stillSave=0` in
   `assert_campaign_config`, restored via `CAM_KEYS`) - a full run is 214 stills
+- **The gallery is SELECT then play** (§38.25, 6 Sep 2026, page only): a tap on a tile selects, and
+  Start Playback opens the selection through `openFile` (buffered, stills too) and closes the sheet.
+  A tap used to fetch and play, so a mis-tap started a 100MB download and nothing could be picked
+  without opening it - and the two controls disagreed, the button taking the board's paced stream
+  while a tile took the buffered player. **Long press (500ms, cancelled by a 10px drag) or ctrl/cmd
+  click ticks tiles** for Download and Delete, which then act on the set one file at a time with a
+  gap; Start Playback and File Upload are disabled while a set is ticked because both act on one
+  file. Folders are tiles with a folder glyph, the listing's own `/` row is the go-up tile, and every
+  file tile carries its byte count. Two traps found here: **selecting a file answers `{}`** (the
+  board records the name and lists nothing), so rebuilding the grid from that empty answer wiped the
+  tiles just tapped - `getFiles` now keeps the grid when a listing is empty; and the action row must
+  NOT be `id="buttons"`, the id `addButtons()` injects above it, or `placePlaybackButton` drops Start
+  Playback among Save Settings and Reboot ESP. That pair is hidden in the Gallery sheet on a phone
+- **The page's Download button now uses `/file?path=`, not `/sustain?download=0`** (§38.25). That
+  closes the one route by which an ordinary user could wedge the web server. It is also the only
+  route that can serve a SET - the sustain download is stateful, one selected file. **What is lost:
+  the tarball** `downloadFile()` builds from the clip plus its `.csv` and `.srt`; a file fetched now
+  is the file itself, and the others are on the card and fetch the same way. The wedge itself is
+  still unexplained and `/sustain?download=0` is still not to be called
 - **Phone layout** (§38.19, 5 Sep 2026, page only): below `48rem` the page is a column of cards - app
   header, Device Controls, a live "viewfinder" card, Camera Tools, System Status - driven from ONE
   `@media (max-width: 48rem)` block on the same DOM, because `updateStatus()` matches a status key to
