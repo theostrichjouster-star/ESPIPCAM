@@ -476,7 +476,18 @@ uint16_t frameWindowKB(int fs) {
       // frame size a few percent run to run, and the cliff sits inside that spread. Understating
       // is the safe direction here: the badge warns and the governor pre-arms at 80% of this,
       // so a figure that is too HIGH arms too late. Fully dead by 2 quality steps further down
-      return 800;
+      if (fs == FRAMESIZE_QHD) return 800;
+      // Unmeasured: no prediction, which both callers already handle - the badge shows none
+      // (frameCapKB > 0 in updateBudget) and the governor's window pre-arm and its ease-down
+      // safety gate both stand down (capKB && / !capKB ||).
+      //
+      // QHD's 800 was returned UNGUARDED here until 6 Sep 2026, so every size the branches
+      // above do not name was told its cliff was 800 and pre-armed at 640KB. Harmless for the
+      // small sizes, whose frames cannot reach that, but wrong in the dangerous direction for
+      // the mid-size ones - SXGA, UXGA and QXGA all emit MORE than 1280X960, whose measured
+      // cliff is 383KB, so the pre-arm sat above their real cliff instead of below it and
+      // frames crossed it with only the no-frame rescue left to act
+      return 0;
   }
 }
 
