@@ -43,6 +43,12 @@
             '<symbol id="icon-chart" viewBox="0 0 24 24"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="5"/><line x1="18" y1="20" x2="18" y2="9"/></symbol>' +
             '<symbol id="icon-wifi" viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0"/><path d="M6 12.5a9 9 0 0 1 12 0"/><path d="M9.5 16a4 4 0 0 1 5 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor" stroke="none"/></symbol>' +
             '<symbol id="icon-chevron" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6"/></symbol>' +
+            // gallery set: a folder tile, the go-up tile, the delete action and the multi-select
+            // tick. The tick is deliberately bare - it is drawn inside its own round chip
+            '<symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3.5 7a2 2 0 0 1 2-2h3.4l2 2.5h7.6a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7Z"/></symbol>' +
+            '<symbol id="icon-up" viewBox="0 0 24 24"><path d="M12 20V5.5M5.5 12 12 5.5 18.5 12"/></symbol>' +
+            '<symbol id="icon-trash" viewBox="0 0 24 24"><path d="M4 6.5h16M9.5 6.5V4.5h5v2M10 10.5v7M14 10.5v7"/><path d="M6 6.5l.9 13a1.6 1.6 0 0 0 1.6 1.5h7a1.6 1.6 0 0 0 1.6-1.5l.9-13"/></symbol>' +
+            '<symbol id="icon-check" viewBox="0 0 24 24"><path d="M5 12.5 9.5 17 19 7.5"/></symbol>' +
             '</svg>';
           document.body.insertAdjacentHTML('afterbegin', sprite);
         })();

@@ -708,6 +708,37 @@
         justify-content: center;
       }
 
+      /* the gallery's own action row. It wraps, unlike section#buttons: the desktop panel is 400px
+         and this row carries three buttons there, four on a phone where it becomes a tile grid */
+      section#fileActions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      /* the upload / OTA progress bar. It carried a fixed 15rem width, which on a phone left it
+         short of the panel with a stray % hanging off the end - see the phone screenshot that
+         asked for this. Now it fills its row and keeps a margin either side at every width */
+      #progressRow {
+        display: flex;
+        align-items: center;
+        gap: var(--buttonQuart);
+        padding: var(--buttonHalf) var(--buttonHalf) 0;
+      }
+      #progressRow #progressBar {
+        flex: 1 1 auto;
+        width: auto;
+        min-width: 0;
+      }
+
+      /* --itemInactive would fail the contrast rule on the card ground (about 2:1), so the
+         selection count is page text one step down in size, not a greyed line */
+      #fileSelInfo {
+        padding: var(--buttonHalf);
+        font-size: var(--footerSize);
+        color: var(--pageText);
+      }
+
       #foot-spacer {
         height: calc(var(--buttonSize) * 4);
       }
@@ -1152,6 +1183,7 @@
         overflow-y: auto;
       }
       .fileTile {
+        position: relative;
         display: flex;
         flex-direction: column;
         margin: 0;
@@ -1166,6 +1198,11 @@
         text-align: center;
         cursor: pointer;
         touch-action: manipulation;
+        /* a long press is the multi-select gesture, so the platform's own long-press behaviour
+           (text selection, the iOS callout) has to be out of the way or it fires instead */
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
       }
       /* the tap has to reach the tile, not its picture or its caption */
       .fileTile > * {
@@ -1189,9 +1226,73 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      /* the byte count, under the time and frame size. Same string the list view shows, so a
+         clip's cost is visible before it is chosen - a 157MB one is a minute of buffering */
+      .fileTile .tileSize {
+        padding-top: 0;
+        padding-bottom: 4px;
+        font-size: calc(var(--footerSize) * 0.88);
+        color: var(--buttonReady);
+      }
+      /* A folder is a tile like any other, with the same picture box replaced by a glyph, so the
+         grid keeps one rhythm whether it lists days or recordings. The first entry of any folder
+         listing is the board's own "/" row - that is the go-up tile, and it says so */
       .fileTile.folderTile {
-        padding: var(--buttonHalf) 0;
         background: var(--buttonReady);
+        color: var(--buttonText);
+        justify-content: center;
+      }
+      .fileTile .tileGlyph {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        padding: var(--buttonQuart) 0;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.6;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      /* ---- multi-select: long press, or ctrl/cmd click ---- */
+      .fileTile .tileCheck {
+        display: none;
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        width: 1.375rem;
+        height: 1.375rem;
+        padding: 0;
+        border-radius: 50%;
+        border: 2px solid var(--buttonText);
+        background: rgba(18, 22, 28, 0.55);
+      }
+      #fileGrid.pickMode .fileTile[data-kind="file"] .tileCheck {
+        display: block;
+      }
+      .fileTile .tileCheck .icon {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        stroke-width: 3;
+        visibility: hidden;
+      }
+      .fileTile.picked .tileCheck {
+        background: var(--buttonActive);
+        border-color: var(--buttonActive);
+      }
+      .fileTile.picked .tileCheck .icon {
+        visibility: visible;
+        color: var(--buttonLabel);
+      }
+      /* ticked, and separately: the one tile Start Playback will open */
+      .fileTile.picked {
+        border-color: var(--buttonActive);
+        box-shadow: inset 0 0 0 2px var(--buttonActive);
+      }
+      .fileTile.current {
+        border-color: var(--buttonReady);
+        box-shadow: inset 0 0 0 2px var(--buttonReady);
       }
 
       /* ============ pieces shared with the phone card layout ============
@@ -1873,6 +1974,61 @@
           min-height: 3rem;
           padding-left: var(--buttonHalf);
           padding-right: var(--buttonHalf);
+        }
+
+        /* --- the Gallery sheet ---
+           Save Settings and Reboot ESP belong to the settings panels. Nothing in this sheet is a
+           config value, so the pair sat above the file list doing nothing except offering a reboot
+           one thumb-width from Delete. They stay on the settings sheets and on the desktop. */
+        #playback-transfers .addButtons {
+          display: none;
+        }
+        /* the four file actions become tool tiles, the same shape and grid as Camera Tools, so a
+           thumb finds them in the same place on both cards. Start Playback is MOVED in here by
+           placePlaybackButton, which is why the row is four wide */
+        section#fileActions {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: var(--buttonHalf);
+          /* no padding of its own: the row then shares its left and right edges with the tile
+             grid above it, which is what makes the two read as one card rather than two */
+        }
+        section#fileActions button {
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 0.3rem;
+          width: 100%;
+          min-height: 4.5rem;
+          margin: 0;
+          padding: var(--buttonHalf) 0.25rem;
+          float: none;
+          border: none;
+          border-radius: 0.6rem;
+          background: var(--buttonReady);
+          color: var(--buttonText);
+          font-size: calc(var(--bodySize) * 0.75);
+          line-height: 1.15;
+          text-align: center;
+        }
+        section#fileActions .tile-icon {
+          display: block;
+          width: calc(var(--buttonSize) * 1.5);
+          height: calc(var(--buttonSize) * 1.5);
+          margin: 0;
+          vertical-align: baseline;
+        }
+        /* Start Playback is one of the four now, so the grey disabled fill made it read as a
+           different kind of control. It keeps the row's blue and dims instead - still visibly
+           unavailable, still the same button */
+        section#fileActions button.disabled, section#fileActions button:disabled {
+          background: var(--buttonReady);
+          opacity: 0.5;
+        }
+        section#fileActions button:active {
+          background: var(--buttonHover);
         }
         .switch .slider {
           width: 3.5rem;
@@ -2658,14 +2814,21 @@
                     </select>
                   </div>
                   <div id="fileGrid" class="hidden" style="display:none"></div>
-                  <div>
-                    <progress id="progressBar" value='0' max='100' class="info"></progress>%
+                  <!-- how many tiles are ticked, and how to untick them. Shown only while a
+                       multi-selection exists; a DIV with no status key of its own, so
+                       updateStatus() never writes into it -->
+                  <div id="fileSelInfo" class="hidden"></div>
+                  <div id="progressRow">
+                    <progress id="progressBar" value='0' max='100' class="info"></progress><span>%</span>
                   </div>
-                  <br>
-                  <section id="buttons">
-                    <button class="local" title="Download selected file from SD card" id="download" style="float:right" value="1">Download</button>
-                    <button class="local" title="Upload selected file/folder to Fileserver" id="upload" style="float:left" value="1">File Upload</button>
-                    <button class="local" title="Delete selected file/folder from SD card" id="delete" style="float:right" value="1">Delete</button>
+                  <!-- NOT id="buttons": addButtons() injects a second section carrying that id
+                       into the .addButtons div ABOVE this one, so placePlaybackButton's lookup
+                       would find that one instead and drop Start Playback among Save Settings and
+                       Reboot ESP. Its own id makes the target unambiguous whenever it runs -->
+                  <section id="fileActions">
+                    <button class="local" title="Download the selected file, or every ticked file" id="download" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-download"></use></svg><span class="tile-label">Download</span></button>
+                    <button class="local" title="Upload selected file/folder to Fileserver" id="upload" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span class="tile-label">File Upload</span></button>
+                    <button class="local" title="Delete the selected file, or every ticked file" id="delete" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-trash"></use></svg><span class="tile-label">Delete</span></button>
                   </section>
   <!--
                   <div class="input-group auth-group">
@@ -3163,7 +3326,7 @@
            element and deactivatePlaybackButton enables it by reference. Event handling is
            document-level delegation, so the move costs nothing. */
         const btn = $('#forcePlayback');
-        const sheetHome = document.querySelector('#playback-transfers section#buttons');
+        const sheetHome = document.querySelector('#playback-transfers section#fileActions');
         const deskHome = document.querySelector('#maintoolbar li.noMobile');
         if (!btn || !sheetHome || !deskHome) return;
         if (isMobile()) { if (btn.parentElement !== sheetHome) sheetHome.insertBefore(btn, sheetHome.firstChild); }
@@ -3400,7 +3563,9 @@
           else if (key == "frameCapKB") { frameCapKB = Number(value); updateBudget(); return; }
           else if (key == "zoneMask") { if (!fromUser) { setZoneMask(value); return; } }
           else if (key == "get-still") getStill();
-          else if (key == "download" && $("#download").value.includes('.')) doDownload();
+          // the guard used to live here, on the single selection's value, which refused a download
+          // whenever a set was ticked but no one file was. doDownload decides now
+          else if (key == "download") { doDownload(); return; }
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
           else if (key == "galleryTiles") { setGalleryView(isOn(value)); return; }
           // the buffered clip player's own controls. Both are "local", so nothing is sent
@@ -3638,10 +3803,32 @@
       }
 
       async function doDownload() {
+        /* Downloads go through /file?path=, not /sustain?download=0. That route takes the whole
+           web server down - no abort needed, a plain completed download has done it on a freshly
+           booted board, and only a reset recovers - while /file is measured safe over 50MB and
+           over aborts because it runs on the httpd task. It is also the only route that can serve
+           a set: the sustain download is stateful, one selected file at a time.
+           What is lost: /sustain bundles the clip's .csv and .srt into a tarball. A file fetched
+           here is the file itself. Both are still on the card and can be fetched the same way.
+           The gap between requests is deliberate - this board is not given back-to-back HTTP. */
+        const paths = pickedList();
+        if (!paths.length) {
+          const one = $('#download').value;
+          // the button carries value="1" until something is chosen. Say so rather than doing
+          // nothing: a control that silently declines is the fault that produced this work
+          if (!one || one[0] != '/' || !one.includes('.')) return selNote('Select a file first, then Download');
+          paths.push(one);
+        }
         stopAll("doDownload");
-        try {
-          if (await checkTask('/sustain?download=0')) window.location.href = webServer + '/sustain?download=0';
-        } catch (error) {alert("doDownload - " + error);}
+        for (const p of paths) {
+          const a = document.createElement('a');
+          a.href = webServer + '/file?path=' + encodeURIComponent(p);
+          a.download = p.split('/').pop();
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          if (paths.length > 1) await sleep(1500);
+        }
       }
 
       function getStill() {
@@ -3657,7 +3844,14 @@
       }
 
       function playbackAction(key) {
-        isActive($('#'+key)) ? deactivatePlaybackButton() : activatePlaybackButton();
+        if (isActive($('#'+key))) { deactivatePlaybackButton(); return; }
+        // Start Playback is what opens a selection now, and it opens it the way a tile tap used
+        // to: buffered in the browser, with the board's own paced stream as openFile's fallback.
+        // Without this the button took the streamed route while the tiles took the buffered one,
+        // so the same clip played differently depending on which control started it
+        const path = selPath || ($('#sfile') ? $('#sfile').value : '');
+        if (isPlayablePath(path)) openFile(path);
+        else activatePlaybackButton();
       }
 
       function streamAction(key) {
@@ -3919,7 +4113,13 @@
           pathDir = filePath.substring(0, filePath.lastIndexOf("/"));
         }
         if (pathDir == "") $$('#sfile option:not(:first-child)').forEach(el => { el.remove()});
-        if (filePath.substr(-4) === '.avi' && !isActive(playbackButton)) enable(playbackButton);
+        // stills are listed here too and Start Playback is now the one way to open a selection,
+        // so it has to activate for a .jpg as well - openFile() shows it without going near the
+        // board's playback task, which only an AVI can use
+        if (isPlayablePath(filePath) && !isActive(playbackButton)) {
+          selPath = filePath;
+          if (!pickMode) enable(playbackButton);
+        }
         if (fromUser) getFiles(filePath);
         return false;
       }
@@ -3944,7 +4144,11 @@
               if (bytes) fileSizes[key] = bytes;
             }
           });
-          buildFileGrid(rows); // the same listing, drawn as tiles - no second request
+          // Selecting a FILE answers {} - the board records the name and lists nothing - so
+          // rebuilding on an empty answer wiped the grid the user had just tapped in. A folder is
+          // never empty in this sense: listDir answers an empty one with its own three-row
+          // "List folders / today / yesterday" fallback
+          if (rows.length) buildFileGrid(rows); // the same listing, drawn as tiles - no second request
         } else alert("getFiles - " + response.status + ": " + response.statusText);
         await sleep(500);
         $$('*').forEach(el => { el.style.cursor = ("default")});
@@ -3986,6 +4190,25 @@
         return base;
       }
 
+      function folderCaption(label, isUp) {
+        // A folder's label carries no size and may carry spaces (".. [ Up ]", "Go to current
+        // (today)"), so the file rule's split(' ')[0] would truncate it to "Go". Day folders are
+        // bare dates - shown as 2026-09-05, which is what a person reads
+        if (isUp) return 'Up';
+        const m = String(label).match(/^(\d{4})(\d{2})(\d{2})$/);
+        return m ? m[1] + '-' + m[2] + '-' + m[3] : String(label);
+      }
+
+      function sizeTextFromLabel(label) {
+        // fmtSize()'s own string, straight off the listing - "54.3MB", "912KB", "3 bytes"
+        const m = String(label).match(/([\d.]+\s*(?:bytes|KB|MB|GB))\s*$/);
+        return m ? m[1] : '';
+      }
+
+      function isPlayablePath(path) {
+        return /\.(avi|jpg)$/i.test(String(path));
+      }
+
       function buildFileGrid(rows) {
         const grid = $('#fileGrid');
         if (!grid) return;
@@ -3993,36 +4216,134 @@
         thumbQueue = [];
         thumbActive = 0;
         grid.innerHTML = '';
+        // a new listing invalidates any ticked set - those paths may not even be in this folder
+        pickedPaths.clear();
         const run = thumbRun;
         rows.forEach(([path, label]) => {
-          const isAvi = path.substr(-4) === '.avi';
-          const isJpg = path.substr(-4) === '.jpg';
+          const isFile = isPlayablePath(path);
+          const isUp = path === '/';   // listDir puts its own "/" row first in every file listing
           const tile = document.createElement('button');
           tile.type = 'button';
-          tile.className = 'fileTile local' + (isAvi || isJpg ? '' : ' folderTile');
+          tile.className = 'fileTile local' + (isFile ? '' : (isUp ? ' folderTile upTile' : ' folderTile'));
           tile.dataset.path = path;
+          tile.dataset.kind = isFile ? 'file' : 'folder';
           tile.title = label;
-          if (isAvi || isJpg) {
+          if (isFile) {
             const img = document.createElement('img');
             img.alt = '';
             img.dataset.src = webServer + '/file?path=' + encodeURIComponent(path) + '&thumb=1';
             tile.appendChild(img);
             thumbQueue.push(img);
+          } else {
+            // same box the thumbnail would fill, so folder and file tiles line up
+            tile.insertAdjacentHTML('beforeend',
+              '<svg class="tileGlyph" aria-hidden="true"><use href="#icon-' + (isUp ? 'up' : 'folder') + '"></use></svg>');
           }
           const cap = document.createElement('span');
-          cap.textContent = tileCaption(label);
+          cap.className = 'tileCap';
+          cap.textContent = isFile ? tileCaption(label) : folderCaption(label, isUp);
           tile.appendChild(cap);
+          if (isFile) {
+            const size = document.createElement('span');
+            size.className = 'tileSize';
+            size.textContent = sizeTextFromLabel(label);
+            tile.appendChild(size);
+            tile.insertAdjacentHTML('beforeend',
+              '<span class="tileCheck"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg></span>');
+          }
           grid.appendChild(tile);
         });
         thumbNext(run);
+        applyPickState();
+      }
+
+      /* Selection and opening are two steps now, not one. A tap used to fetch and play the clip
+         it landed on, which on a phone meant a mis-tap started a 100MB download; and there was no
+         way to pick a file without opening it, so multi-select had nowhere to live. A tap now
+         SELECTS - the same thing choosing it in the list does - and Start Playback opens whatever
+         is selected. */
+
+      let pickedPaths = new Set(); // the ticked set, for Download and Delete
+      let pickMode = false;        // ticks are only drawn once there is something ticked
+      let selPath = '';            // the single selection Start Playback will open
+
+      function pickedList() {
+        return Array.from(pickedPaths);
+      }
+
+      function selNote(text) {
+        // the selection line doubles as the gallery's one message area. The next selection change
+        // replaces it, so nothing has to clear it
+        const info = $('#fileSelInfo');
+        if (!info) return;
+        info.textContent = text;
+        show(info);
+      }
+
+      function clearPicked() {
+        pickedPaths.clear();
+        applyPickState();
+      }
+
+      function togglePick(tile) {
+        if (!tile || tile.dataset.kind != 'file') return;
+        const p = tile.dataset.path;
+        pickedPaths.has(p) ? pickedPaths.delete(p) : pickedPaths.add(p);
+        applyPickState();
+      }
+
+      function applyPickState() {
+        pickMode = pickedPaths.size > 0;
+        const grid = $('#fileGrid');
+        if (grid) {
+          grid.classList.toggle('pickMode', pickMode);
+          $$('#fileGrid .fileTile').forEach(t => {
+            t.classList.toggle('picked', pickedPaths.has(t.dataset.path));
+            t.classList.toggle('current', !pickMode && t.dataset.path === selPath);
+          });
+        }
+        const info = $('#fileSelInfo');
+        if (info) {
+          info.textContent = pickedPaths.size + (pickedPaths.size == 1 ? ' file selected' : ' files selected')
+                           + ' - tap to add or remove, Download or Delete acts on all of them';
+          pickMode ? show(info) : hide(info);
+        }
+        // Both of these act on ONE file - playback plays a clip, upload sends a file to the
+        // fileserver one at a time - so neither has a meaning while a set is ticked
+        const up = $('#upload');
+        if (up) {
+          pickMode ? disable(up) : enable(up);
+          up.title = pickMode ? 'Upload sends one file at a time - clear the selection first'
+                              : 'Upload selected file/folder to Fileserver';
+        }
+        if (playbackButton && !isActive(playbackButton)) {
+          if (pickMode) {
+            disable(playbackButton);
+            playbackButton.title = 'Playback is one clip at a time - clear the selection first';
+          } else if (isPlayablePath(selPath)) {
+            enable(playbackButton);
+            playbackButton.title = 'Play the selected recording';
+          }
+        }
+      }
+
+      function tileSelect(tile) {
+        const path = tile.dataset.path;
+        if (tile.dataset.kind == 'folder') { selectFileOrFolder(path, true); return; } // navigate
+        selPath = path;
+        const sel = $('#sfile');
+        if (sel) sel.value = path;
+        // the same call the list's change event makes: it records the selection on the board (the
+        // streamed fallback and the upload both read it there) and fills Download / Delete / Upload
+        selectFileOrFolder(path, true);
+        applyPickState();
       }
 
       async function openFile(path) {
-        // tap a tile: make it the selection the way the select does, so Download / Delete /
-        // Upload still act on it, then show it
+        // open what is selected. The board already knows the selection - tileSelect and the list
+        // both send it - so there is no listing request here
         const sel = $('#sfile');
         if (sel) sel.value = path;
-        await getFiles(path); // records the selection on the board, and lists a folder
         if (path.substr(-4) === '.jpg') {
           stopAll("openFile", false);
           view.src = webServer + '/file?path=' + encodeURIComponent(path);
@@ -4053,6 +4374,19 @@
         if (t) navigation(t.id);
       }
 
+      /* Long press to start a multi-selection, ctrl / cmd click on a desktop. Both go through one
+         set of delegated listeners on the grid: a 500ms timer armed on pointerdown, cancelled by
+         a pointerup or a 10px drag (a scroll must not tick a tile). lpFired is what stops the
+         click that follows the press from also acting - it is cleared on the next pointerdown, so
+         a press that produces no click cannot swallow a later tap. */
+      const LONG_PRESS_MS = 500;
+      const LONG_PRESS_SLOP = 10;
+      let lpTimer = null, lpTile = null, lpFired = false, lpX = 0, lpY = 0;
+
+      function lpCancel() {
+        if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+      }
+
       function galleryInit() {
         const grid = $('#fileGrid');
         if (!grid) return;
@@ -4062,7 +4396,28 @@
           const tile = ev.target.closest ? ev.target.closest('.fileTile') : null;
           if (!tile) return;
           ev.stopPropagation();
-          openFile(tile.dataset.path);
+          if (lpFired) { lpFired = false; return; } // the long press has already acted on this tile
+          if (tile.dataset.kind == 'file' && (ev.ctrlKey || ev.metaKey || pickMode)) { togglePick(tile); return; }
+          tileSelect(tile);
+        });
+        grid.addEventListener('pointerdown', ev => {
+          lpCancel();
+          lpFired = false;
+          const tile = ev.target.closest ? ev.target.closest('.fileTile') : null;
+          if (!tile || tile.dataset.kind != 'file') return;
+          lpTile = tile;
+          lpX = ev.clientX;
+          lpY = ev.clientY;
+          lpTimer = setTimeout(() => { lpTimer = null; lpFired = true; togglePick(lpTile); }, LONG_PRESS_MS);
+        });
+        grid.addEventListener('pointermove', ev => {
+          if (lpTimer && (Math.abs(ev.clientX - lpX) > LONG_PRESS_SLOP
+                       || Math.abs(ev.clientY - lpY) > LONG_PRESS_SLOP)) lpCancel();
+        });
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => grid.addEventListener(t, lpCancel));
+        // the platform's own long-press menu would land on top of the selection gesture
+        grid.addEventListener('contextmenu', ev => {
+          if (ev.target.closest && ev.target.closest('.fileTile')) ev.preventDefault();
         });
         let tiles = false;
         try { tiles = localStorage.getItem('galleryTiles') == '1'; } catch (e) {}
@@ -5040,8 +5395,25 @@
         isOn(value) ? show(banner) : hide(banner);
       }
 
-      function sdFile(key, value) {
+      async function sdFile(key, value) {
         if (key == "delete") {
+          const paths = pickedList();
+          if (paths.length) {
+            if (!confirm("Delete these " + paths.length + " files from the SD card?\n\n"
+                       + paths.map(p => p.split('/').pop()).join('\n'))) return false;
+            // one at a time with a gap: this board is never given back-to-back HTTP, and each
+            // delete also removes the clip's csv, srt and cached thumbnail on the card
+            for (const p of paths) {
+              await sendControl('delete', p);
+              await sleep(1200);
+            }
+            clearPicked();
+            selectFileOrFolder("/~reset", true);
+            return;
+          }
+          // value is the button's, which is "1" until a file or folder has been chosen. Deleting
+          // that is meaningless and the confirm text made it look deliberate
+          if (!value || value[0] != '/') return selNote('Select a file or folder first, then Delete');
           if (!confirm("Are you sure you want to delete " + value + " from the SD card?")) return false;
         }
         sendControl(key, value);
