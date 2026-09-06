@@ -384,6 +384,33 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   channels** in R, G, B order since §38.15 - green was held at 1024 on the theory that it is the
   reference channel, which is true of the ratio and unhelpful to a user: lowering green is the direct
   cure for a green cast, and the only one that does not also brighten the frame
+- **The SD governor now walks quality BACK DOWN too** (§38.29, 6 Sep 2026, firmware + page). The
+  no-frame rescue used to overwrite the user's quality for good: it called `govRebaseQuality`, so a
+  dark clip that had frames walked from q10 to q16 stayed at q16 after the light came on, and so did
+  every clip after it, while `/status` went on reporting q10 and only a reboot or a manual write
+  cured it. `govRebaseQuality` (user/config, moves the floor) and `govDegradeBase` (rescue and the
+  night seed, working base only) are now separate, and `sdGovernor`'s third arm eases the base back
+  one step at a time. **Measured on a real lamp**: q16 to q12 in 45 s, and the `govEase` field plus
+  two new `closeAvi` lines say where a walk got to. Three things it will not do - move while a boost
+  is still unwound, run during a night session, or move at all before the config replay has set the
+  floor (a zero floor would walk quality off the bottom of its range)
+- **The ease-down stops SHORT of the configured quality, and that is the gate working.** A step down
+  grows frames ~1.5x, so it only steps when the frame that step would produce still clears the
+  governor's own arming gates - which reduces to `GOV_RELAX_PCT` on the SD side and two thirds of
+  `GOV_WINDOW_PCT` on the frame window, with no new constant to tune. At 5MP in the lit bench room it
+  settles at q12, because q10 there predicts ~790 KB against a 756 KB pre-arm and the push arm would
+  fire immediately. **q10 is simply not sustainable at 5MP in that room**; stopping at the best
+  quality that holds is the answer, not a shortfall
+- **`GOV_EASE_TICKS` is 10 and lowering it to speed recovery is a MEASURED mistake** (`govEaseSecs`
+  exists to sweep it, not to change it). In a steady scene 1 tick is strictly better: same settling
+  quality in 14 s against 45 s, no overshoot, because a 1 s window at 5 fps already holds five frames
+  at the new quality. Against a FLICKERING lamp it failed - the walk reached the configured quality,
+  the next dark phase did not fit at it, and the rescue fired to recover at a cost of **~4.2 s of no
+  frames each time, twice in one 2.5 min clip**. The flicker does not fool the filter, it fools the
+  SAMPLE: a 1 s window caught during a bright flash genuinely holds small frames, so the safety
+  prediction is genuinely satisfied for that instant. The filter is what makes the measurement
+  representative rather than merely favourable, and no prediction can replace it - nothing in a frame
+  size says the room is about to go dark again
 - **Dark QSXGA steps its own quality and that is correct**: 5MP frames in the dark overrun the 983 KB
   buffer, the driver delivers nothing, and the rescue steps the sensor's quality until they fit -
   settling at q24-28, the range §37 measured. Do not suppress it; it is the reason dark 5MP works
@@ -586,7 +613,10 @@ Registers and timing:
   kept as the record of a dead end (§31)
 
 State and budgets:
-- `updateFPS=1` - fpsCeil, aecMax, budgetKBs, live frameKB, govBoost, frameCapKB
+- `updateFPS=1` - fpsCeil, aecMax, budgetKBs, live frameKB, govBoost, govEase, frameCapKB
+- `govEaseSecs=<1..60>` - the SD governor's ease-down interval in ticks (~seconds) per quality
+  step back toward the configured value. Bench knob, RAM only, default 10. **Do not lower it to
+  make recovery faster** - measured, see the ease-down entry below
 - `motionStats=1`, `zoneStats`, `avgZones` - detector counters and the AEC 4x4 zone grid
 - `sdBusClk` / `sdBusDiv`, `battScale` / `sagTest`, `extDVDD`, `lencFhd` (LENC A/B)
 - `peerReset=1` - pulse the OTHER board's RESET through D1 / GPIO 2 for 5 s (`=<ms>` 500-10000,

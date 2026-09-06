@@ -487,9 +487,12 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     // clamped captureFPS to the new ceiling before the UI asks, and on a plain page load
     // the device's actual rate is the truth - a default would overwrite it in the browser.
     // frameKB / govBoost: live SD-governor telemetry, both 0 outside a recording, so the
-    // badge falls back to its static estimate exactly when there is nothing better
-    sprintf(jsonBuff, "{\"fps\":\"%u\",\"fpsCeil\":\"%u\",\"aecMax\":\"%d\",\"budgetKBs\":\"%u\",\"frameKB\":\"%u\",\"govBoost\":\"%u\",\"frameCapKB\":\"%u\"}",
-      captureFPS, fpsCeiling((framesize_t)fsizePtr), aecMax, sdBudgetKBs(), sdGovFrameKB, sdGovBoost, frameWindowKB(fsizePtr));
+    // badge falls back to its static estimate exactly when there is nothing better.
+    // govEase is the one field that OUTLIVES a recording: a no-frame rescue leaves the
+    // governor's base above the configured quality, and this says by how much until the
+    // ease-down has walked it off. It is the only place the divergence is visible as a number
+    sprintf(jsonBuff, "{\"fps\":\"%u\",\"fpsCeil\":\"%u\",\"aecMax\":\"%d\",\"budgetKBs\":\"%u\",\"frameKB\":\"%u\",\"govBoost\":\"%u\",\"govEase\":\"%u\",\"frameCapKB\":\"%u\"}",
+      captureFPS, fpsCeiling((framesize_t)fsizePtr), aecMax, sdBudgetKBs(), sdGovFrameKB, sdGovBoost, sdGovEase, frameWindowKB(fsizePtr));
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   }
@@ -548,6 +551,17 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
       alertBufferSize = 0;
     } else LOG_WRN("Failed to get still");
   } 
+  else if (!strcmp(variable, "govEaseSecs")) {
+    // How many consecutive safe ticks the SD governor's ease-down needs per step back toward the
+    // configured quality. Bench knob, RAM only, so a walk rate can be swept without a reflash.
+    // 1 removes the persistence filter and leaves only the per-step safety prediction - which is
+    // the whole point of being able to set it, so it is allowed rather than clamped away
+    govEaseSecs = constrain(atoi(value), 1, 60);
+    LOG_INF("SD governor: ease-down interval %u tick(s) per quality step", govEaseSecs);
+    sprintf(jsonBuff, "{\"govEaseSecs\":\"%u\"}", govEaseSecs);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, jsonBuff);
+  }
   else if (!strcmp(variable, "fileProbe")) {
     // Open-file slot probe. The mount is created with maxOpenFiles, and when that budget is
     // exhausted EVERY open fails - reads and writes, any file - while the card is perfectly

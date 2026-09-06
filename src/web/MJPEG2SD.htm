@@ -3673,6 +3673,7 @@
           else if (key == "budgetKBs") { budgetKBs = Number(value); updateBudget(); return; }
           else if (key == "frameKB") { liveFrameKB = Number(value); updateBudget(); return; }
           else if (key == "govBoost") { govBoost = Number(value); updateBudget(); return; }
+          else if (key == "govEase") { govEase = Number(value); updateBudget(); return; }
           else if (key == "frameCapKB") { frameCapKB = Number(value); updateBudget(); return; }
           else if (key == "zoneMask") { if (!fromUser) { setZoneMask(value); return; } }
           else if (key == "get-still") getStill();
@@ -5466,6 +5467,10 @@
       let budgetKBs = 4420; // measured SD ceiling in KB/s, refreshed by updateFPS responses
       let liveFrameKB = 0; // firmware's last-second average frame KB while recording, else 0
       let govBoost = 0; // SD governor's active quality boost steps, 0 outside recordings
+      let govEase = 0; // steps the governor's base still owes the configured quality after a
+                       // no-frame rescue, 0 = level. Unlike govBoost this OUTLIVES a recording:
+                       // the quality slider keeps reading the config value while the sensor
+                       // compresses harder, and this is the only number that says so
       let frameCapKB = 0; // measured JPEG frame-window cliff for the current size, 0 = none
       // the fps slider's range comes from updateFPS's fpsCeil response, handled in
       // processStatus - the firmware delivers any integer rate from 1 to that ceiling
@@ -5537,17 +5542,24 @@
         if (!m) { el.innerHTML = '-'; return; }
         // prefer the firmware's live per-frame figure (recording only) over the static
         // scene-independent estimate - dim high-gain frames run ~2x the lit estimate
-        const perFrame = liveFrameKB > 0 ? liveFrameKB : estFrameKB(m[1] * m[2], Number($('#quality').value));
+        // the sensor's real distance from the configured quality: the governor's live boost plus
+        // whatever a no-frame rescue left on the base and the ease-down has yet to walk off. The
+        // static estimate has to use the effective figure or it predicts frames the sensor is no
+        // longer producing - liveFrameKB is 0 outside a recording, which is exactly when a
+        // lingering govEase matters most
+        const qOver = govBoost + govEase;
+        const perFrame = liveFrameKB > 0 ? liveFrameKB : estFrameKB(m[1] * m[2], Number($('#quality').value) + qOver);
         const kbs = Number($('#fps').value) * perFrame;
         const over = kbs > budgetKBs;
         // the sensor's JPEG frame window is a harder limit than the SD budget: a frame
         // past it is truncated in flight and never arrives at all
         const windowNear = frameCapKB > 0 && perFrame > frameCapKB * 0.8;
         el.innerHTML = (kbs / 1024).toFixed(2) + ' of ' + (budgetKBs / 1024).toFixed(2) + ' MB/s'
-                     + (govBoost ? ' (q+' + govBoost + ')' : '');
+                     + (qOver ? ' (q+' + qOver + ')' : '');
         el.style.color = over ? '#e05a4e' : (windowNear ? '#e0a24e' : '');
         el.title = over ? 'Estimated rate exceeds the measured SD ceiling - expect dropped frames'
                  : windowNear ? 'Frames are nearing the sensor JPEG window (' + frameCapKB + 'KB) - past it they vanish; raise the quality number'
+                 : govEase ? 'A no-frame rescue raised the quality number by ' + govEase + '; the governor eases it back a step at a time while recording'
                  : (govBoost ? 'SD governor is compressing harder to hold the frame rate'
                              : 'Within the measured SD ceiling');
       }

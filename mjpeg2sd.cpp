@@ -144,11 +144,59 @@ static uint32_t frameInterval; // units of us between frames
                           // every few seconds in the dim Test B (28 Aug) - easing at 74%
                           // landed straight back above 90% and re-boosted
 #define GOV_RELAX_TICKS 2 // consecutive quiet ticks before easing off
+// Easing the BASE back down, which is a different job from unwinding the boost above. The
+// no-frame rescue raises the base for good (govDegradeBase), so a clip recorded in the dark
+// that had its frames walked up stays there after someone turns the light on - and so does
+// every clip after it, until a reboot or a manual quality write. This is the way back.
+#define GOV_STEP_GROWTH_NUM 3   // a step DOWN grows frames ~1.5x - the same measured step
+#define GOV_STEP_GROWTH_DEN 2   // effect that put GOV_RELAX_PCT at GOV_PUSH_PCT / 1.5.
+                                // MEASURED AT QSXGA ONLY (28 Aug), and overstating growth is
+                                // the safe direction, so raise it if a size ever moves more
+#define GOV_EASE_TICKS 10 // DEFAULT for govEaseSecs below - the compiled-in starting value.
+                          // Consecutive safe ticks per step back toward the user's quality.
+                          // Push takes 1 tick, relax 2, this 10: losing ground stays cheaper
+                          // than gaining it. Swept in isolation against a scene alternating
+                          // dark/lit every N ticks (6 Sep 2026): the response is BINARY, not
+                          // partial - a lamp that holds for fewer ticks than this is rejected
+                          // outright (zero steps) and one that holds for this many or more
+                          // takes the whole walk. So the number is how many seconds a change
+                          // has to persist before it is believed.
+                          //
+                          // DO NOT LOWER IT TO GO FASTER. Measured on the bench at 5MP/5fps
+                          // against a real lamp (6 Sep 2026, BOARD_TESTING 38.29). In a STEADY
+                          // scene 1 tick is strictly better - it reached the same settling
+                          // quality in 14s where this took 45s, with no overshoot, because a
+                          // 1s window at 5fps holds five frames and so already reflects the
+                          // previous write in full. Against a FLICKERING lamp it failed: the
+                          // walk reached the configured quality, the next dark phase would not
+                          // fit at it, and the no-frame rescue fired to get frames back at a
+                          // cost of ~4.2s of NO FRAMES each time - twice in one 2.5 min clip.
+                          //
+                          // The mechanism is worth understanding before touching this. The
+                          // flicker does not fool the filter, it fools the SAMPLE: a 1s window
+                          // caught during a bright flash genuinely holds small frames, so the
+                          // per-step safety prediction below is genuinely satisfied - for that
+                          // instant. This filter is what requires the measurement to be
+                          // REPRESENTATIVE rather than merely favourable, and no amount of
+                          // prediction can replace it, because nothing in the frame size says
+                          // the room is about to go dark again
 uint8_t sdGovBoost = 0;    // current boost, 0 = user quality untouched (reported by updateFPS)
 uint16_t sdGovFrameKB = 0; // last-second average frame KB while recording, else 0 (updateFPS)
-static uint8_t govBaseQ;      // the user's quality, captured at clip open / user change
+uint8_t sdGovEase = 0;     // steps the base still owes the user's quality, 0 = level (updateFPS)
+uint8_t govEaseSecs = GOV_EASE_TICKS; // the ease-down's persistence filter in ticks (~seconds),
+                          // settable at the bench with /control?govEaseSecs=<1..60> so the walk
+                          // rate can be swept without a reflash. 1 = a step every tick, which
+                          // removes the filter entirely and leaves only the per-step safety
+                          // prediction standing between the walk and the frame window
+static uint8_t govBaseQ;      // the governor's working quality: the user's, or whatever the
+                              // rescue / a night seed left behind. Captured at clip open
+static uint8_t govUserQ;      // the CONFIGURED quality, and the floor the ease-down walks back
+                              // to. Only a user or config write moves it, never the rescue
 static uint8_t govMaxBoost;   // clip peak, for the closeAvi stats
+static uint8_t govOpenQ;      // the base this clip opened on, so closeAvi can say whether an
+                              // inherited degradation was walked off during it
 static uint8_t govLowTicks;   // consecutive under-GOV_RELAX_PCT ticks
+static uint8_t govEaseTicks;  // consecutive ticks with room for a step back down
 static uint32_t govWindowMs;  // start of the current 1s measurement window
 static uint32_t govLastVidSize;
 static uint16_t govLastFrameCnt;
@@ -375,10 +423,28 @@ uint16_t frameWindowKB(int fs) {
   }
 }
 
+// The two ways the governor's base can move, kept apart BECAUSE THEY MEAN DIFFERENT THINGS.
+// One function did both jobs until 6 Sep 2026, and since the rescue called it, a rescue
+// silently overwrote the user's setting for good: /status went on reporting the configured
+// quality while the sensor sat several steps above it, with no path back but a reboot.
 void govRebaseQuality(int q) {
-  // a user quality change mid-recording re-bases the governor; any active boost
-  // reapplies on top of the new base at the next tick
+  // the user, or the boot config replay, set quality. This is the governor's base AND the
+  // floor the ease-down walks back to. Any active boost reapplies on top at the next tick
+  govBaseQ = govUserQ = q;
+  govEaseTicks = 0;
+  sdGovEase = 0;
+}
+
+static void govDegradeBase(int q) {
+  // the no-frame rescue or a night seed stepped quality for its own reasons. The governor
+  // works from the new value, but the user's floor is untouched, so the ease-down in
+  // sdGovernor() can give it back once the scene allows
   govBaseQ = q;
+  govEaseTicks = 0;
+  // Kept live HERE and not only in sdGovernor(), which runs while recording. The rescue fires
+  // whenever frames stop arriving, recording or not - measured in the dark on 6 Sep 2026, where
+  // it walked q10 to q16 with nothing recording and the badge went on reading level
+  sdGovEase = (govUserQ && govBaseQ > govUserQ) ? govBaseQ - govUserQ : 0;
 }
 
 static void sdGovernor() {
@@ -411,7 +477,7 @@ static void sdGovernor() {
   uint16_t capKB = frameWindowKB(fsizePtr);
   bool windowNear = capKB && sdGovFrameKB > (uint32_t)capKB * GOV_WINDOW_PCT / 100;
   if (windowNear || demandKBs > (uint32_t)budget * GOV_PUSH_PCT / 100) {
-    govLowTicks = 0;
+    govLowTicks = govEaseTicks = 0;
     if (sdGovBoost < GOV_MAX_BOOST) {
       sdGovBoost++;
       if (sdGovBoost > govMaxBoost) govMaxBoost = sdGovBoost;
@@ -423,6 +489,7 @@ static void sdGovernor() {
   } else if (demandKBs < (uint32_t)budget * GOV_RELAX_PCT / 100 && sdGovBoost && !windowNear) {
     // !windowNear: at low fps the SD demand can be tiny while frames sit just under
     // the frame window - easing the boost there would grow them straight over it
+    govEaseTicks = 0; // unwind the whole boost before the base is allowed to move
     if (++govLowTicks >= GOV_RELAX_TICKS) {
       govLowTicks = 0;
       sdGovBoost--;
@@ -431,7 +498,42 @@ static void sdGovernor() {
       s->set_quality(s, q);
       LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u", q, sdGovBoost, demandKBs, budget);
     }
-  } else govLowTicks = 0;
+  } else {
+    govLowTicks = 0;
+    // Ease the BASE back toward the user's quality once there is nothing left to defend.
+    // Ordering matters: this is the third arm, so a push beats a relax beats an ease, and
+    // the boost is fully unwound before the base moves - which is also the cooldown after
+    // a push, with no extra state to hold it.
+    // !nightFrameMs: a long-exposure session's quality seed is deliberate, and its own
+    // nightPrevQ restores it on the way out (applyNightQuality)
+    // govUserQ != 0: the floor is only known once the config replay has reached the sensor
+    // (reloadConfigs -> updateAppStatus "quality"). Without it there is nothing to walk TO,
+    // and a zero floor would walk the quality off the bottom of its range
+    if (!sdGovBoost && govUserQ && govBaseQ > govUserQ && !nightFrameMs) {
+      // A step down GROWS frames, which is the direction that ends in no frames at all, so
+      // the test is whether the frame this step would produce still clears both of the
+      // governor's own arming gates. Nothing new to tune: with the measured 1.5x the SD half
+      // reduces to exactly GOV_RELAX_PCT and the window half to two thirds of GOV_WINDOW_PCT
+      uint32_t stepDemand = demandKBs * GOV_STEP_GROWTH_NUM / GOV_STEP_GROWTH_DEN;
+      uint32_t stepFrameKB = (uint32_t)sdGovFrameKB * GOV_STEP_GROWTH_NUM / GOV_STEP_GROWTH_DEN;
+      // sdGovFrameKB != 0 first: a window with no measurable frame in it reads as limitless
+      // headroom, and this is the one branch where acting on that makes things WORSE. It cannot
+      // happen today (saveFrame increments frameCnt immediately before this call, so every tick
+      // covers at least one frame) but the cost of being sure is a single term
+      bool safe = sdGovFrameKB
+               && stepDemand < (uint32_t)budget * GOV_PUSH_PCT / 100
+               && (!capKB || stepFrameKB < (uint32_t)capKB * GOV_WINDOW_PCT / 100);
+      if (!safe) govEaseTicks = 0;
+      else if (++govEaseTicks >= govEaseSecs) {
+        govEaseTicks = 0;
+        govBaseQ--;
+        s->set_quality(s, govBaseQ);
+        LOG_INF("SD governor: quality eased to %u toward the configured %u - frames %u KB, demand %lu KB/s of %u",
+          govBaseQ, govUserQ, sdGovFrameKB, demandKBs, budget);
+      }
+    }
+  }
+  sdGovEase = (govBaseQ > govUserQ) ? govBaseQ - govUserQ : 0;
 }
 
 // true from AVITEMP open until closeAvi() has fully landed the file. OTAprereq() waits on
@@ -465,7 +567,15 @@ static void openAvi() {
   // the previous file was renamed - a dashcam chain re-boosts within a tick or two
   sensor_t* govSensor = esp_camera_sensor_get();
   govBaseQ = (govSensor != NULL) ? govSensor->status.quality : 10;
-  sdGovBoost = govMaxBoost = govLowTicks = 0;
+  // The base deliberately carries a rescue's degradation INTO this clip - that is what lets the
+  // ease-down finish a walk the previous clip started, and it is also the only recovery a rescue
+  // that fired outside a recording ever gets. The floor does not come from the sensor; it comes
+  // from the config replay. Backfilled here only if that never ran, which leaves the two level
+  // and the ease-down idle rather than aiming at 0
+  if (!govUserQ) govUserQ = govBaseQ;
+  govOpenQ = govBaseQ;
+  sdGovBoost = govMaxBoost = govLowTicks = govEaseTicks = 0;
+  sdGovEase = (govBaseQ > govUserQ) ? govBaseQ - govUserQ : 0;
   sdGovFrameKB = 0;
   govLastVidSize = govLastFrameCnt = 0;
   govWindowMs = millis();
@@ -1621,7 +1731,9 @@ static bool closeAvi() {
   // closes the recorded file
   recordingCamMode(false); // unfreeze AWB, restore continuous AF
   if (sdGovBoost) {
-    // hand the sensor back at the user's quality; the boost only ever lives inside a clip
+    // hand the sensor back at the base; the boost only ever lives inside a clip. The base may
+    // itself be mid-walk back to the user's quality, which is correct - the next clip's
+    // ease-down continues from wherever this one got to
     sensor_t* govSensor = esp_camera_sensor_get();
     if (govSensor != NULL) govSensor->set_quality(govSensor, govBaseQ);
   }
@@ -1696,6 +1808,12 @@ static bool closeAvi() {
       }
       LOG_INF("Average SD write speed: %lu kB/s", ((vidSize / wTimeTot) * 1000) / 1024);
       if (govMaxBoost) LOG_INF("SD governor: max quality boost %u (quality %u of base %u)", govMaxBoost, govBaseQ + govMaxBoost, govBaseQ);
+      // The durable record of an unfinished walk. The ease-down logs each step at INF, which may
+      // sit in the stdio buffer, while the rescue that caused it forced a sync as a WRN - so
+      // without this line the log reads as though quality was raised and never given back
+      if (govBaseQ > govUserQ) LOG_INF("SD governor: quality still %u against the configured %u - %u step(s) of the ease-down left to run",
+        govBaseQ, govUserQ, govBaseQ - govUserQ);
+      else if (govOpenQ > govUserQ) LOG_INF("SD governor: quality eased all the way back to the configured %u from %u", govUserQ, govOpenQ);
       if (rescueClipCnt) LOG_WRN("No-frame rescue fired %u times during this clip - frames exceeded the sensor's JPEG window", rescueClipCnt);
       LOG_INF("File open / completion times: %lu ms / %lu ms", oTime, cTime);
       LOG_INF("Busy: %lu%%", std::min(100 * (wTimeTot + fTimeTot + dTimeTot + oTime + cTime) / vidDuration, (uint32_t)100));
@@ -2151,7 +2269,9 @@ static void noFrameRescue(bool oversize) {
   if (q > 63) q = 63;
   if (q == s->status.quality) { lastGoodFrameMs = now; return; } // already at the cap
   s->set_quality(s, q);
-  govRebaseQuality(q); // sticky: the rescue is the governor's new base, closeAvi keeps it
+  // sticky: the rescue is the governor's new base and closeAvi keeps it, but NOT the user's
+  // floor - once the scene allows, sdGovernor()'s ease-down walks this back (6 Sep 2026)
+  govDegradeBase(q);
   if (isCapturing) rescueClipCnt++;
   if (rescueStreak < 255) rescueStreak++;
   LOG_WRN("%s for %lums - quality %d rescue%s", oversize ? "Frames too big" : "No frames",
@@ -3187,7 +3307,9 @@ static void applyNightQuality(sensor_t* s) {
     LOG_WRN("Night quality %d refused", want);
     return;
   }
-  govRebaseQuality(want); // the governor's new base, exactly as the rescue treats its own steps
+  govDegradeBase(want); // the governor's new base, exactly as the rescue treats its own steps -
+                        // and like the rescue it leaves the user's floor alone. The ease-down is
+                        // gated off for the length of the session; nightPrevQ restores it after
   LOG_INF("Night quality %d (sensor reads q%d)", want, camReg(s, 0x4407) & 0x3F);
 }
 
