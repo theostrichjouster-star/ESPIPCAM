@@ -57,12 +57,15 @@ static bool wgetFile(const char* filePath) {
 }
 
 bool checkDataFiles() {
-  // Download any missing data files
+  // Download any missing data files.
+  // The web files are stored pre-compressed and served with Content-Encoding: gzip, so the .gz is
+  // what gets fetched. The repo carries the uncompressed forms too, for a board still running
+  // firmware from before this change - that one asks for the plain names and must still find them.
   bool res = false;
   if (strlen(GITHUB_PATH)) {
-    res = wgetFile(COMMON_JS_PATH); 
-    if (res) res = wgetFile(INDEX_PAGE_PATH); 
-    if (res) res = appDataFiles(); 
+    res = wgetFile(COMMON_JS_PATH GZ_EXT);
+    if (res) res = wgetFile(INDEX_PAGE_PATH GZ_EXT);
+    if (res) res = appDataFiles();
   } else res = true; // no download needed
   return res;
 }

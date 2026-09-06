@@ -1,0 +1,15 @@
+{
+  "name": "espipcam-web-build",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Build step for the camera's web UI: minify src/web into data/, and pre-gzip it. The board serves data/ and re-downloads it from this repo when it goes missing, so data/ is a committed artefact - see tools/web/README.md.",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/web/build.mjs",
+    "check": "node tools/web/build.mjs --check"
+  },
+  "devDependencies": {
+    "html-minifier-terser": "^7.2.0",
+    "terser": "^5.36.0"
+  }
+}

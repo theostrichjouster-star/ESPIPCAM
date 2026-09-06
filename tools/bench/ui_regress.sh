@@ -2,7 +2,7 @@
 # Web UI camera-control regression (4 Sep 2026): does any /control key the page can send
 # disturb the tuner's registers, the frame rate, the sensor's JPEG quality, or fail to restore?
 #
-# Every picture control in data/MJPEG2SD.htm maps to one driver set_* call (esp32-camera
+# Every picture control in src/web/MJPEG2SD.htm maps to one driver set_* call (esp32-camera
 # 4335c93e, the pin in tools/core/README.md), and each of those writes a known register set -
 # the prediction table in prediction.txt. The tuner (applySensorTuning) owns the clock, the
 # window, HTS/VTS and the AEC limits, and runs only after set_framesize and on a retime, so a

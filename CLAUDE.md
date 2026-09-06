@@ -11,11 +11,17 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 
 ## Build and flash
 
+- **THE WEB UI IS BUILT. Edit `src/web/`, never `data/`** (6 Sep 2026, §38.28). `data/` holds the
+  minified and pre-gzipped output of `tools/web/build.mjs`, and it is COMMITTED because
+  `setupAssist.cpp` `checkDataFiles()` re-downloads those exact paths from this repo whenever a card
+  loses them - which is what a `CFG_VER` bump does. 342KB became 42KB on the wire.
+  `node tools/web/build.mjs` after any web change, `--check` before committing or uploading one
+  (it fails on a stale `data/`, and on a hand edit of it). Full detail in `tools/web/README.md`
 - Compile: `arduino-cli compile -e --fqbn "esp32:esp32:XIAO_ESP32S3:PSRAM=opi" .`
 - OTA (preferred): arm with `/control?startOTA=<name.bin>`, then POST the RAW body:
   `curl --data-binary "@build/esp32.esp32.XIAO_ESP32S3/ESP32-CAM_MJPEG2SD.ino.bin" http://<board>/upload`
-  Never `-F`/multipart. UI/data files (.htm) go through the same startOTA gate and
-  land in /data.
+  Never `-F`/multipart. UI/data files go through the same startOTA gate and land in /data - and the
+  names to send are now `MJPEG2SD.htm.gz` and `common.js.gz`, not the plain ones.
 - Rollback ladder: a fresh image boots PENDING_VERIFY and is confirmed only after
   camera + storage + wifi validate (otaConfirm); unconfirmed image + any reset =
   automatic revert. After a failed-looking deployment, check WHICH image is actually
@@ -304,7 +310,7 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   be sent either (`isInert()`) - a hidden select still reached the sensor. The repeating section
   markers are CLASSES, not repeated ids: `hideBuiltOut` matches class or id, and breaking that makes
   compiled-out sections silently reappear on the builds that need them hidden (5 Sep 2026, §38.11).
-- **In `data/MJPEG2SD.htm` the static markup is OV2640's - read the sensor branch, never the HTML.**
+- **In `src/web/MJPEG2SD.htm` the static markup is OV2640's - read the sensor branch, never the HTML.**
   On load the page re-ranges every slider for the detected model (`changeRange` in the
   `OV3660 || OV5640` branch) and relabels `aec2` to "Night Mode", `awb_gain` to "Manual AWB" and
   `dcw` to "Advanced AWB". Reading the markup alone produced two wrong findings and a wrong

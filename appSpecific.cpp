@@ -560,8 +560,14 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     const int probeMax = 32;
     File probe[probeMax];
     int got = 0;
+    // the page is stored compressed, so open whichever form is actually there - probing a name
+    // that does not exist reports 0 free slots and reads as total exhaustion
+    char probePath[IN_FILE_NAME_LEN];
+    strncpy(probePath, INDEX_PAGE_PATH, sizeof(probePath) - 1);
+    probePath[sizeof(probePath) - 1] = 0;
+    gzipResolve(NULL, probePath, sizeof(probePath));
     for (; got < probeMax; got++) {
-      probe[got] = STORAGE.open(INDEX_PAGE_PATH, FILE_READ);
+      probe[got] = STORAGE.open(probePath, FILE_READ);
       if (!probe[got]) break;
     }
     for (int i = 0; i < got; i++) probe[i].close();

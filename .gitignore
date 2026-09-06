@@ -17,3 +17,7 @@ OV5640_datasheet.md
 esp32_s3_datasheet_en-*.md
 __pycache__/
 *.pyc
+# Web UI build tooling. The BUILT files in data/ are committed on purpose - the board
+# re-downloads them from this repo when they go missing - and so is package-lock.json, because
+# a different terser version produces different bytes and would make --check fail for no reason.
+node_modules/

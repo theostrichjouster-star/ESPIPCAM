@@ -73,6 +73,10 @@
 #define ICO_EXT ".ico"
 #define SVG_EXT ".svg"
 #define JPG_EXT ".jpg"
+// Web files are stored pre-compressed: data/MJPEG2SD.htm.gz and data/common.js.gz, built by
+// tools/web/build.mjs from src/web. The logical names below are unchanged - gzipResolve() swaps
+// the .gz in at serve time - so nothing that references a data file had to move.
+#define GZ_EXT ".gz"
 #define CONFIG_FILE_PATH DATA_DIR "/configs" TEXT_EXT
 #define LOG_FILE_PATH DATA_DIR "/log" TEXT_EXT
 #define OTA_FILE_PATH DATA_DIR "/OTA" HTML_EXT
@@ -141,7 +145,8 @@ const char* espErrMsg(esp_err_t errCode);
 void externalAlert(const char* subject, const char* message);
 esp_err_t extractHeaderVal(httpd_req_t *req, const char* variable, char* value);
 esp_err_t extractQueryKeyVal(httpd_req_t *req, char* variable, char* value);
-esp_err_t fileHandler(httpd_req_t* req, bool download = false);
+esp_err_t fileHandler(httpd_req_t* req, bool download = false, bool gzipped = false);
+bool gzipResolve(httpd_req_t* req, char* path, size_t pathLen);
 void flush_log(bool andClose = false);
 char* fmtSize (uint64_t sizeVal);
 void formatElapsedTime(char* timeStr, uint32_t timeVal, bool noDays = false);

@@ -326,7 +326,7 @@ it drives it badly.
 
 ## C1-C5 as built (5 Sep 2026)
 
-All five are in `data/MJPEG2SD.htm`, with two supporting fields added to the firmware's status JSON.
+All five are in `src/web/MJPEG2SD.htm`, with two supporting fields added to the firmware's status JSON.
 Verified first against the local stub (before and after, the committed page served beside the new
 one), then on COM4 itself after deployment.
 

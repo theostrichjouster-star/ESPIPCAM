@@ -48,9 +48,43 @@ esp_err_t sendChunks(File df, httpd_req_t *req, bool endChunking) {
   return res;
 }
 
-esp_err_t fileHandler(httpd_req_t* req, bool download) {
+static bool clientRefusesGzip(httpd_req_t* req) {
+  /* No Accept-Encoding at all means any coding is acceptable (RFC 7231 5.3.4), which covers curl
+     and every bench script. Only a client that sends the header AND leaves gzip out of it is
+     actually refusing. */
+  if (req == NULL) return false;
+  size_t len = httpd_req_get_hdr_value_len(req, "Accept-Encoding");
+  if (!len || len > 255) return false;
+  char accept[256];
+  if (httpd_req_get_hdr_value_str(req, "Accept-Encoding", accept, sizeof(accept)) != ESP_OK) return false;
+  return strstr(accept, "gzip") == NULL && strstr(accept, "*") == NULL;
+}
+
+bool gzipResolve(httpd_req_t* req, char* path, size_t pathLen) {
+  /* The web files are stored pre-compressed - data/MJPEG2SD.htm.gz, data/common.js.gz - built by
+     tools/web/build.mjs. Callers keep using the logical name; this rewrites it to the .gz when
+     one is there and the client can take it, and the caller then passes gzipped=true.
+     THE COMPRESSED FORM WINS. An uncompressed leftover of the same name would otherwise shadow a
+     freshly uploaded .gz for ever, with no way to tell from the outside which one was being sent -
+     the same class of trap as an OTA that looks like it landed and did not.
+     Pass req = NULL to resolve without an Accept-Encoding test (fileProbe does).
+     Only the /data routes call this. /file?path= serves recordings off the card and must not:
+     a recording that happens to end .gz is a file, not an encoding. */
+  size_t len = strlen(path);
+  if (len + strlen(GZ_EXT) < pathLen && !clientRefusesGzip(req)) {
+    strcat(path, GZ_EXT);
+    if (STORAGE.exists(path)) return true;
+    path[len] = 0;    // no compressed form - fall back to the name as given
+  }
+  return false;
+}
+
+esp_err_t fileHandler(httpd_req_t* req, bool download, bool gzipped) {
   // send file contents to browser
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  // the Content-Type was set by the caller from the LOGICAL name, so it still describes the
+  // decoded body - which is what Content-Type means alongside a Content-Encoding
+  if (gzipped) httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
   if (!strcmp(inFileName, LOG_FILE_PATH)) flush_log(false);
   File df = STORAGE.open(inFileName);
   if (!df) {
@@ -171,14 +205,18 @@ static esp_err_t indexHandler(httpd_req_t* req) {
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
   } 
-  // Show wifi wizard if not setup, using access point mode
-  if (!STORAGE.exists(INDEX_PAGE_PATH) && WiFi.status() != WL_CONNECTED) {
+  // Show wifi wizard if not setup, using access point mode. The compressed page counts as the
+  // page being present: test only the uncompressed name and a board holding just the .gz shows
+  // the setup wizard instead of its own web UI
+  if (!STORAGE.exists(INDEX_PAGE_PATH) && !STORAGE.exists(INDEX_PAGE_PATH GZ_EXT)
+      && WiFi.status() != WL_CONNECTED) {
     // Open a basic wifi setup page
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_sendstr(req, setupPage_html);
   } else if (!checkAuth(req)) return ESP_OK; // check if authentication required & passed
 
-  return fileHandler(req);
+  bool gzipped = gzipResolve(req, inFileName, IN_FILE_NAME_LEN);
+  return fileHandler(req, false, gzipped);
 }
 
 esp_err_t extractHeaderVal(httpd_req_t *req, const char* variable, char* value) {
@@ -263,9 +301,12 @@ static esp_err_t webHandler(httpd_req_t* req) {
     // any svg file
     httpd_resp_set_type(req, "image/svg+xml");
   } else LOG_WRN("Unknown file type %s", variable);  
-  int dlen = snprintf(inFileName, IN_FILE_NAME_LEN - 1, "%s/%s", DATA_DIR, variable);               
+  int dlen = snprintf(inFileName, IN_FILE_NAME_LEN - 1, "%s/%s", DATA_DIR, variable);
   if (dlen >= IN_FILE_NAME_LEN) LOG_WRN("file name truncated");
-  return fileHandler(req);
+  // resolve AFTER the extension dispatch above: the Content-Type has to come from the logical
+  // name, so /web?common.js still answers text/javascript while the bytes come from common.js.gz
+  bool gzipped = gzipResolve(req, inFileName, IN_FILE_NAME_LEN);
+  return fileHandler(req, false, gzipped);
 }
 
 static esp_err_t cardFileHandler(httpd_req_t* req) {
