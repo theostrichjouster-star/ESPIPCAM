@@ -421,7 +421,12 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   played the whole soundtrack against a frozen frame), so a 100 ms interval carries the audio, the bar,
   the end/stall checks and a drawing floor while rAF only draws; and the **AudioContext must be opened
   inside the click**, or it is born suspended and the video clock freezes with it. **What decides
-  whether a clip buffers is the ALLOCATION succeeding, not a size limit** (§38.24): a fixed 64MB cap
+  whether a clip buffers is the ALLOCATION succeeding, with a 256MB ceiling kept behind it as a
+  backstop** - `CLIP_MAX_BYTES`, and the user asked for it to stay (6 Sep 2026), so do not quietly
+  remove it: a successful allocation is not proof of survival, and a very large array can be granted
+  and then kill the TAB when it is written, which is uncatchable where a refusal is clean. It never
+  binds today - `maxFrames` 3600 at ~80KB per HD frame caps a recording near 290MB and the largest on
+  the card is 157MB. What it replaced (§38.24): a fixed 64MB cap
   refused the ordinary case here, where HD recordings run 28-157MB with a 54MB median - and it refused
   in SILENCE, with no bar, no message and the badge reading LIVE because the playback button was
   active, so a clip streaming off the board was indistinguishable from a live stream with its controls
