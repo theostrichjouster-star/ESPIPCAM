@@ -38,6 +38,9 @@
            screen outdoors. Measured against --pageText: 13.9:1, well past the 4.5:1 text rule */
         --cardBackground: #1A1F27;
         --cardBorder: #2A323C;
+        /* the phone sheet's bottom padding, shared: the gallery's sticky footer cancels exactly
+           this to reach the screen's bottom edge, so the two must never be written separately */
+        --sheetPadBottom: calc(env(safe-area-inset-bottom) + 2rem);
         --focusRing: #5AA9E6;      /* never remove an outline, replace it - see .focusable below */
 
         /* Two local stacks, no webfont link. The board sits on a LAN and is often offline, so a
@@ -1191,7 +1194,7 @@
         width: 2rem;
         height: 2rem;
         min-height: 0;
-        margin: 0 auto 0 0;   /* the auto is what pushes the Tile view pair to the right */
+        margin: 0;
         padding: 0;
       }
       #galleryTiles-group > #folderUp .icon {
@@ -1208,6 +1211,18 @@
         bottom: -0.375rem;
         left: -0.375rem;
         right: -0.375rem;
+      }
+      /* the day being listed, beside the Up button. Empty and zero-width at the root */
+      #galleryTiles-group > #folderName {
+        flex: 0 1 auto;
+        min-width: 0;
+        /* the auto margin is what pushes the Tile view pair to the right. It lives here rather
+           than on the Up button because that button is hidden at the root and in list view, and a
+           hidden element's auto margin pushes nothing. This div is always in flow, just empty */
+        margin: 0 auto 0 var(--buttonHalf);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       /* beats the phone rule that stretches a switch row's label across the row */
       #galleryTiles-group > label {
@@ -1653,7 +1668,7 @@
           /* the top used to clear the whole close button (3.25rem), leaving a band of empty page
              above every sheet title. The title now sits ON that line instead - see .nav-toggle
              below, which reserves the button's width on its right rather than its height above */
-          padding: calc(env(safe-area-inset-top) + 0.5rem) 0.75rem calc(env(safe-area-inset-bottom) + 2rem);
+          padding: calc(env(safe-area-inset-top) + 0.5rem) 0.75rem var(--sheetPadBottom);
         }
         #menu-container .pin-menu {
           display: none; /* pinning means nothing when the panel is the whole screen */
@@ -2060,9 +2075,14 @@
         }
         /* the bar and the buttons never leave the screen. However many tiles are above them they
            stay on the bottom edge of the sheet, and settle into place at the end of the scroll */
+        /* MEASURED: Chrome sticks a sticky element to the scroll container's CONTENT box, not its
+           padding box, so bottom:0 parked the footer exactly the panel's padding-bottom above the
+           screen - 32px of grid showing underneath it, which is the gap in the phone screenshot.
+           Cancelling that padding with a negative offset is what closes it, and the two are tied
+           to one custom property so they cannot drift apart. */
         #fileFooter {
           position: sticky;
-          bottom: 0;   /* sticky sticks to the SCROLLPORT, so this is the screen's bottom edge */
+          bottom: calc(var(--sheetPadBottom) * -1);
           z-index: 5;
           margin: 0 -0.75rem;   /* the sheet's own side padding, so the band spans the full width */
           padding: var(--buttonQuart) 0.75rem calc(env(safe-area-inset-bottom) + var(--buttonHalf));
@@ -2273,7 +2293,7 @@
             <li><button id="forceStream" class="local" style="float:right;"><svg class="tile-icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg><span class="tile-label">Start Stream</span></button></li>
             <li><button id="get-still" class="local" style="float:right;"><svg class="tile-icon" aria-hidden="true"><use href="#icon-image"></use></svg><span class="tile-label">Get Still</span></button></li>
             <li class="sep-item"><div class="sep"></div></li>
-            <li class="noMobile"><button id="forcePlayback" class="local disabled" style="float:right;" title="Select a video in 'Playback &amp; File Transfers' to activate playback."><svg class="tile-icon" aria-hidden="true"><use href="#icon-play"></use></svg><span class="tile-label">Start Playback</span></button></li>
+            <li class="noMobile"><button id="forcePlayback" class="local disabled" style="float:right;" title="Select a video in 'Playback &amp; Download' to activate playback."><svg class="tile-icon" aria-hidden="true"><use href="#icon-play"></use></svg><span class="tile-label">Start Playback</span></button></li>
           </ul>
         </nav>
       </section>
@@ -2303,7 +2323,7 @@
                 <nav class="quick-nav" id="camControl" name="camera-control" role="button" tabindex="0" aria-expanded="false" title="Camera Control - resolution, rate, quality"><svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg><span class="tile-label">Camera</span></nav>
                 <nav class="quick-nav" id="nightControl" name="night-control" role="button" tabindex="0" aria-expanded="false" title="Long exposure - stills and video below 1 fps"><svg class="icon" aria-hidden="true"><use href="#icon-moon"></use></svg><span class="tile-label">Night Mode</span></nav>
                 <nav class="quick-nav" id="motionRec" name="motion-record" role="button" tabindex="0" aria-expanded="false" title="Motion detection and recording"><svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg><span class="tile-label">Motion</span></nav>
-                <nav class="quick-nav" id="fileControl" name="playback-transfers" role="button" tabindex="0" aria-expanded="false" title="Gallery - recordings, playback and file transfers"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg><span class="tile-label">Gallery</span></nav>
+                <nav class="quick-nav" id="fileControl" name="playback-transfers" role="button" tabindex="0" aria-expanded="false" title="Gallery - recordings, playback and download"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg><span class="tile-label">Gallery</span></nav>
                 <nav class="quick-nav" id="picSettings" name="picture-settings" role="button" tabindex="0" aria-expanded="false" title="Image settings - exposure, colour, geometry"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg><span class="tile-label">Image Settings</span></nav>
                 <nav class="quick-nav" id="accSettings" name="access-settings" role="button" tabindex="0" aria-expanded="false" title="System - access, storage and maintenance"><svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg><span class="tile-label">System</span></nav>
                 <!-- must stay a <button>: common.js dispatches BUTTON by id (giving key
@@ -2867,7 +2887,7 @@
               <nav class="menu panel" id="playback-transfers">
                 <input type="checkbox" id="files-cb" class="menu-action local">
                 <div class="pin-menu" title="Pin / unpin menu"><svg class="icon" aria-hidden="true"><use href="#icon-pin"></use></svg></div>
-                <label for="files-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-film"></use></svg>Playback & File Transfers</label>
+                <label for="files-cb" class="nav-toggle"><svg class="icon-inline" aria-hidden="true"><use href="#icon-film"></use></svg>Playback &amp; Download</label>
                 <div class='addButtons'></div>
                 <div>
                   <!-- Tiles and list are two views of the SAME listing: getFiles() fills both from
@@ -2880,6 +2900,9 @@
                        the root) -->
                   <div class="input-group" id="galleryTiles-group">
                     <button class="local hidden" id="folderUp" title="Back to the folder list" aria-label="Back to the folder list"><svg class="icon" aria-hidden="true"><use href="#icon-up"></use></svg></button>
+                    <!-- which day you are looking at. A DIV with no matching status key, so
+                         updateStatus never writes into it -->
+                    <div id="folderName"></div>
                     <label for="galleryTiles">Tile view</label>
                     <div class="switch">
                       <input id="galleryTiles" type="checkbox" class="local">
@@ -2913,7 +2936,10 @@
                          Reboot ESP. Its own id makes the target unambiguous whenever it runs -->
                     <section id="fileActions">
                       <button class="local" title="Download the selected file, or every ticked file" id="download" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-download"></use></svg><span class="tile-label">Download</span></button>
-                      <button class="local" title="Upload selected file/folder to Fileserver" id="upload" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span class="tile-label">File Upload</span></button>
+                      <!-- was File Upload, which needs INCLUDE_FTP_HFS and does nothing in this
+                           build. Select All ticks every recording and still in the folder on
+                           screen, and reads Select None once anything is ticked -->
+                      <button class="local" title="Tick every recording and still in this folder" id="selectAll" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-check-square"></use></svg><span class="tile-label">Select All</span></button>
                       <button class="local" title="Delete the selected file, or every ticked file" id="delete" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-trash"></use></svg><span class="tile-label">Delete</span></button>
                     </section>
                   </div>
@@ -3656,6 +3682,7 @@
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
           else if (key == "galleryTiles") { setGalleryView(isOn(value)); return; }
           else if (key == "folderUp") { if (upTarget) selectFileOrFolder(upTarget, true); return; }
+          else if (key == "selectAll") { selectAllFiles(); return; }
           // the board's own FTP upload percent. It has never reached this bar: updateStatus writes
           // into text, DIV.displayonly, INPUT, TD and SELECT, and a PROGRESS element is none of
           // those, so the value arrived every poll and was dropped. Page-driven transfers own the
@@ -3916,6 +3943,20 @@
         xferBusy = true;
         setProgress(0);
         try {
+          // more than one file arrives as a single zip. If that cannot be built - the browser
+          // cannot hold them all, or the archive would pass the format's 4GB limit - say why and
+          // fall back to one file at a time, which always works
+          if (paths.length > 1) {
+            try {
+              await downloadZip(paths);
+              selNote(paths.length + ' files downloaded as ' + zipName(paths));
+              return;
+            } catch (e) {
+              selNote('Could not build the zip (' + e.message + ') - fetching them one at a time');
+              setProgress(0);
+              await sleep(1500);
+            }
+          }
           for (let i = 0; i < paths.length; i++) {
             await fetchToDisk(paths[i], i, paths.length);
             if (i < paths.length - 1) await sleep(1200);
@@ -3977,6 +4018,150 @@
           saveBlobAs(url, name);
           await sleep(1200);
         }
+      }
+
+      /************** a STORE zip, written by hand **************/
+      /* Several files chosen at once arrive as ONE zip. Nothing is compressed: every file here is
+         already-compressed JPEG, or an AVI that is a container full of them, so deflate would cost
+         CPU and save nothing. Written here rather than pulled from a library because this board
+         sits on a LAN that is often offline - a CDN script would be a dependency the page cannot
+         count on, and the format below is a few dozen bytes of header per file.
+         32-bit fields throughout: past 4GB a zip needs the ZIP64 extensions, which are not here, so
+         the writer refuses rather than emitting an archive that unpacks wrongly. */
+
+      const CRC_TABLE = (function () {
+        const t = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) {
+          let c = n;
+          for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+          t[n] = c >>> 0;
+        }
+        return t;
+      })();
+
+      // running value, not the finished checksum: start at 0xFFFFFFFF and XOR that back out at the
+      // end, so a file can be summed chunk by chunk as it arrives off the wire
+      function crc32Update(buf, crc) {
+        let c = crc;
+        for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+        return c >>> 0;
+      }
+
+      function asciiBytes(s) {
+        const b = new Uint8Array(s.length);
+        for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0x7F;
+        return b;
+      }
+
+      function dosDateTime(name) {
+        // recordings are named YYYYMMDD_HHMMSS..., so the archive can carry the real capture time
+        // rather than the epoch every unpacker shows for a zero timestamp
+        const m = String(name).match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+        if (!m) return {t: 0, d: 0};
+        const y = Math.max(1980, Number(m[1]));
+        return {d: ((y - 1980) << 9) | (Number(m[2]) << 5) | Number(m[3]),
+                t: (Number(m[4]) << 11) | (Number(m[5]) << 5) | (Number(m[6]) >> 1)};
+      }
+
+      const ZIP_MAX = 0xFFFFFFFF;
+
+      function zipWriter() {
+        const parts = [], entries = [];
+        let offset = 0;
+        const push = u8 => { parts.push(u8); offset += u8.length; };
+        return {
+          size: () => offset,
+          add(name, chunks, size, crc, dt) {
+            const nm = asciiBytes(name);
+            if (offset + 30 + nm.length + size > ZIP_MAX) throw new Error('over 4GB, needs ZIP64');
+            const h = new DataView(new ArrayBuffer(30));
+            h.setUint32(0, 0x04034b50, true);  // local file header
+            h.setUint16(4, 20, true);          // version needed
+            h.setUint16(6, 0, true);           // flags
+            h.setUint16(8, 0, true);           // method 0 = store
+            h.setUint16(10, dt.t, true);
+            h.setUint16(12, dt.d, true);
+            h.setUint32(14, crc, true);
+            h.setUint32(18, size, true);       // compressed == uncompressed
+            h.setUint32(22, size, true);
+            h.setUint16(26, nm.length, true);
+            h.setUint16(28, 0, true);          // no extra field
+            entries.push({nm: nm, crc: crc, size: size, dt: dt, off: offset});
+            push(new Uint8Array(h.buffer));
+            push(nm);
+            chunks.forEach(push);
+          },
+          finish() {
+            const cdOff = offset;
+            entries.forEach(e => {
+              const c = new DataView(new ArrayBuffer(46));
+              c.setUint32(0, 0x02014b50, true); // central directory header
+              c.setUint16(4, 20, true);         // version made by
+              c.setUint16(6, 20, true);         // version needed
+              c.setUint16(8, 0, true);
+              c.setUint16(10, 0, true);
+              c.setUint16(12, e.dt.t, true);
+              c.setUint16(14, e.dt.d, true);
+              c.setUint32(16, e.crc, true);
+              c.setUint32(20, e.size, true);
+              c.setUint32(24, e.size, true);
+              c.setUint16(28, e.nm.length, true);
+              c.setUint32(30, 0, true);         // extra len + comment len
+              c.setUint16(34, 0, true);         // disk number
+              c.setUint16(36, 0, true);         // internal attributes
+              c.setUint32(38, 0, true);         // external attributes
+              c.setUint32(42, e.off, true);
+              push(new Uint8Array(c.buffer));
+              push(e.nm);
+            });
+            const eocd = new DataView(new ArrayBuffer(22));
+            eocd.setUint32(0, 0x06054b50, true); // end of central directory
+            eocd.setUint16(8, entries.length, true);
+            eocd.setUint16(10, entries.length, true);
+            eocd.setUint32(12, offset - cdOff, true);
+            eocd.setUint32(16, cdOff, true);
+            push(new Uint8Array(eocd.buffer));
+            return parts;
+          }
+        };
+      }
+
+      function zipName(paths) {
+        const day = curFolder ? curFolder.replace(/^\//, '') : 'recordings';
+        return day + '_' + paths.length + 'files.zip';
+      }
+
+      async function downloadZip(paths) {
+        const zip = zipWriter();
+        const total = paths.reduce((a, p) => a + (fileSizes[p] || 0), 0);
+        let done = 0;
+        for (let i = 0; i < paths.length; i++) {
+          const name = paths[i].split('/').pop();
+          const resp = await fetch(webServer + '/file?path=' + encodeURIComponent(paths[i]));
+          if (!resp.ok) throw new Error(name + ' - ' + resp.status);
+          if (!resp.body) throw new Error('no streaming body');
+          const reader = resp.body.getReader();
+          const chunks = [];
+          let size = 0, crc = 0xFFFFFFFF;
+          for (;;) {
+            const r = await reader.read();
+            if (r.done) break;
+            chunks.push(r.value);
+            size += r.value.length;
+            crc = crc32Update(r.value, crc); // summed as it arrives, so it costs no second pass
+            done += r.value.length;
+            if (total) setProgress(done * 100 / total);
+            selNote('Zipping ' + name + ' (' + (i + 1) + ' of ' + paths.length + ') - '
+                  + fmtBytes(done) + (total ? ' of ' + fmtBytes(total) : ''));
+          }
+          zip.add(name, chunks, size, (crc ^ 0xFFFFFFFF) >>> 0, dosDateTime(name));
+          chunks.length = 0;
+          if (i < paths.length - 1) await sleep(1200); // never back to back at the board
+        }
+        selNote('Building the zip file');
+        const blob = new Blob(zip.finish(), {type: 'application/zip'});
+        setProgress(100);
+        saveBlobAs(blob, zipName(paths));
       }
 
       function fmtBytes(n) {
@@ -4261,9 +4446,10 @@
         // build folder / file option list from json
         let pathDir = "";
         if (filePath != '/~reset') {
+          // #upload used to be set here too. That button is gone - Select All has its place, and
+          // the FTP upload it drove needs INCLUDE_FTP_HFS, which is false in this build
           $('#download').value = filePath; //Store file path for download
           $('#delete').value = filePath; //Store file path for delete
-          $('#upload').value = filePath; //Store file path for file server upload
           pathDir = filePath.substring(0, filePath.lastIndexOf("/"));
         }
         if (pathDir == "") $$('#sfile option:not(:first-child)').forEach(el => { el.remove()});
@@ -4412,6 +4598,10 @@
             '<span class="tileCheck"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg></span>');
           grid.appendChild(tile);
         });
+        // which day this is, taken from the rows rather than tracked separately: inside a folder
+        // every path is <folder>/<file>, and at the root a row's parent is empty
+        const first = grid.querySelector('.fileTile');
+        curFolder = upTarget && first ? first.dataset.path.substring(0, first.dataset.path.lastIndexOf('/')) : '';
         thumbNext(run);
         applyUpButton();
         applyPickState();
@@ -4420,9 +4610,10 @@
       function applyUpButton() {
         // only in tile view (the list has its own ".. [ Up ]" option), and only where there is
         // somewhere to go: the root listing carries no "/" row
-        const btn = $('#folderUp');
-        if (!btn) return;
-        upTarget && galleryTilesOn() ? show(btn) : hide(btn);
+        const btn = $('#folderUp'), name = $('#folderName');
+        const on = galleryTilesOn();
+        if (btn) upTarget && on ? show(btn) : hide(btn);
+        if (name) name.textContent = on && curFolder ? folderCaption(curFolder.replace('/', '')) : '';
       }
 
       function galleryTilesOn() {
@@ -4441,6 +4632,7 @@
       let pickKind = '';           // 'file' or 'folder' - a set is one or the other, never both
       let selPath = '';            // the single selection Start Playback will open
       let upTarget = '';           // where the Up button goes, or '' at the root
+      let curFolder = '';          // the day being listed, shown beside the Up button
 
       function pickedList() {
         return Array.from(pickedPaths);
@@ -4473,6 +4665,17 @@
       function clearPicked() {
         pickedPaths.clear();
         pickKind = '';
+        applyPickState();
+      }
+
+      function selectAllFiles() {
+        // Select All / Select None over THIS listing only - recordings and stills alike, folders
+        // never (a "select every day folder" button is two taps from an empty card). The tick set
+        // is cleared on every new listing anyway, so it can never span folders
+        if (pickMode) { clearPicked(); return; }
+        pickedPaths.clear();
+        $$('#fileGrid .fileTile[data-kind="file"]').forEach(t => pickedPaths.add(t.dataset.path));
+        pickKind = pickedPaths.size ? 'file' : '';
         applyPickState();
       }
 
@@ -4509,13 +4712,16 @@
                                       : 'Download or Delete acts on all of them');
           pickMode ? show(info) : hide(info);
         }
-        // Both of these act on ONE file - playback plays a clip, upload sends a file to the
-        // fileserver one at a time - so neither has a meaning while a set is ticked
-        const up = $('#upload');
-        if (up) {
-          pickMode ? disable(up) : enable(up);
-          up.title = pickMode ? 'Upload sends one file at a time - clear the selection first'
-                              : 'Upload selected file/folder to Fileserver';
+        // Select All / Select None, over the FILES in this listing. The root lists day folders and
+        // has no files, so there is nothing there for it to do
+        const sa = $('#selectAll');
+        if (sa) {
+          const files = $$('#fileGrid .fileTile[data-kind="file"]');
+          setActionLabel(sa, null, pickMode ? 'Select None' : 'Select All');
+          files.length ? enable(sa) : disable(sa);
+          sa.title = !files.length ? 'Nothing to select here - open a day folder'
+                   : pickMode ? 'Clear the selection'
+                   : 'Tick every recording and still in this folder';
         }
         // /file?path= serves a file, so a folder selection is for Delete only
         const dl = $('#download');
@@ -5643,7 +5849,7 @@
           clearPicked();
           selPath = '';
           // the three buttons still hold a path that no longer exists
-          ['#download', '#delete', '#upload'].forEach(s => { const e = $(s); if (e) e.value = '1'; });
+          ['#download', '#delete'].forEach(s => { const e = $(s); if (e) e.value = '1'; });
           // stay where the user was. Deleting files used to drop back to the folder list, which is
           // wrong when the point of ticking several was to prune one day's recordings; deleting
           // folders has nowhere to stay, so that one does go back

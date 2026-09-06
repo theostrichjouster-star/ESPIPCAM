@@ -49,6 +49,7 @@
             '<symbol id="icon-up" viewBox="0 0 24 24"><path d="M12 20V5.5M5.5 12 12 5.5 18.5 12"/></symbol>' +
             '<symbol id="icon-trash" viewBox="0 0 24 24"><path d="M4 6.5h16M9.5 6.5V4.5h5v2M10 10.5v7M14 10.5v7"/><path d="M6 6.5l.9 13a1.6 1.6 0 0 0 1.6 1.5h7a1.6 1.6 0 0 0 1.6-1.5l.9-13"/></symbol>' +
             '<symbol id="icon-check" viewBox="0 0 24 24"><path d="M5 12.5 9.5 17 19 7.5"/></symbol>' +
+            '<symbol id="icon-check-square" viewBox="0 0 24 24"><path d="M20.5 12v6.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2H16"/><path d="M8 11.5 11.5 15 21 5"/></symbol>' +
             '</svg>';
           document.body.insertAdjacentHTML('afterbegin', sprite);
         })();
