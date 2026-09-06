@@ -140,6 +140,19 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - Board acts possessed? Check SD free space first (a full card wedges as a fake wifi
   failure), then audit the host PC for orphaned automation from earlier sessions.
   All host-side polling loops must be bounded.
+- **THERE IS ONE BOARD PER ADDRESS AND ONLY ONE SESSION MAY DRIVE IT.** A second session on the same
+  board silently corrupts both runs, and it does not look like contention - it looks like a firmware
+  bug. Measured 6 Sep 2026 (§38.32): a size-regression sweep read back framesizes it never asked
+  for, the log showed the size walking through SXGA / UXGA / QXGA on its own, and a deferred "frame
+  size takes effect when the recording stops" appeared that no local script had sent. Two clips in
+  that sweep also showed ~25 ms of *monitoring* wait - time inside `esp_camera_fb_get`, not the card
+  and not the governor - which read as a 22% rate loss at FHDNARROW and a 12% loss at QVGA. **Both
+  were artefacts and neither reproduced once the board was free.** The tell to reach for first is
+  the monitoring time in the closeAvi block, then `arp -a` and the host process list.
+  **This includes a spawned background task**: one that verifies on hardware WILL contend, so hand
+  the board over deliberately and stay off it until that session is finished. Retrospective
+  diagnosis is barely possible - the RTC ring holds only ~2 minutes at recording chatter, so by the
+  time a sweep finishes the evidence of who did what is already gone
 - **Close every orphaned task before any pause** (user's rule, 5 Sep 2026, after two crashes in
   one campaign). Before a compaction, a handoff, a context pause or the end of a session, stop
   what this session started and SAY so in the pause message: background tasks and monitors
@@ -740,6 +753,16 @@ Destructive or dangerous:
   4 Sep 2026 - the driver's own init is manual 50 Hz, which held the AEC at two bands plus
   gain near the ceiling. Both decide how bright a still looks before the tuning does
   (BOARD_TESTING §37)
+- `gov_size_regress.sh` - **the SD governor across frame sizes, lit room** (§38.32). A 30 s clip at
+  each size's ceiling, gated against the 2-3 Sep lit q10 figures in `frameData`. **It gates the
+  governor only** - rescues, `govWrites` against the boost taken, and a boost above the recorded one
+  only when the demand did not justify it. **Delivered fps is reported, never gated**: at these
+  ceilings it is storage-time bound, storage time follows frame size, frame size follows the room,
+  so gating it reports the scene as a code regression (my first version did, and flagged four sizes
+  on a governor that was clean at all seven). `SIZES_LIST` overrides the set, `GOVWIN` the window for
+  an A/B, `DUR` the clip length. The restore is on an **EXIT trap**, because `bench_lib`'s `preflight`
+  and `ctl` call `exit` directly and an abort otherwise leaves `micGain` and `stillSave` at 0 - which
+  then becomes the NEXT run's captured restore point. Measured clean at 8 sizes twice, 6 Sep 2026
 - `ui_regress.sh` - the web UI's camera controls, every `/control` key the page can send, one at
   a time at the three mainstays (HD 30, 1280X960 41, FHDNARROW 1): min / max / the live default,
   each with a register snapshot diffed against the size's baseline (`regsnap.py`: the tuner

@@ -55,6 +55,30 @@ log "SD governor size regression: ${#SIZES[@]} sizes, ${DUR}s clips at q$Q -> $C
 MIC0=$(status_field micGain); SAVE0=$(status_field stillSave); FS0=$(status_field framesize)
 FPS0=$(status_field fps); IDLE0=$(status_field idleFps)
 log "restore point: framesize=$FS0 fps=$FPS0 idleFps=$IDLE0 micGain=$MIC0 stillSave=$SAVE0"
+
+# On an EXIT trap, not inline at the end. bench_lib's preflight and ctl call exit DIRECTLY, so an
+# abort skipped the restore entirely: on 6 Sep 2026 a run aborted on the 240 s settle rule AFTER
+# assert_campaign_config had zeroed micGain and stillSave, left them zero, and the NEXT run then
+# captured those zeros as its own restore point and faithfully put them back. Capturing state is
+# worthless if the abort paths do not go through the restore
+GOV_RESTORED=0
+gov_restore() {
+  [ "$GOV_RESTORED" = "1" ] && return 0
+  GOV_RESTORED=1
+  log "restoring the start-of-run state: framesize=$FS0 fps=$FPS0 idleFps=$IDLE0 micGain=$MIC0 stillSave=$SAVE0"
+  # plain curl, not ctl: ctl aborts the run on a failure and this may already BE the abort path,
+  # which would recurse. A board that cannot answer gets logged, not retried into a loop
+  local kv
+  for kv in "framesize=$FS0" "fps=$FPS0" "quality=$Q" "micGain=$MIC0" "stillSave=$SAVE0" "idleFps=$IDLE0"; do
+    http_gap
+    curl -s -m 20 "$B/control?$kv" > /dev/null || log "restore: $kv did not answer"
+    case "$kv" in framesize=*) sleep 6 ;; esac
+  done
+  sleep 2
+  log "restored: framesize=$(status_field framesize) fps=$(status_field fps) idleFps=$(status_field idleFps) micGain=$(status_field micGain) stillSave=$(status_field stillSave)"
+}
+trap gov_restore EXIT
+
 assert_campaign_config "$Q"
 preflight
 # The governor's own settings must be the shipped defaults or the run measures something else.
@@ -117,10 +141,5 @@ done
 
 log "done: $FAIL of ${#SIZES[@]} sizes flagged on the GOVERNOR gates (rate is reported, not gated)"
 column -s, -t "$CSV" 2>/dev/null || cat "$CSV"
-log "restoring the start-of-run state: framesize=$FS0 fps=$FPS0 idleFps=$IDLE0 micGain=$MIC0 stillSave=$SAVE0"
-ctl "framesize=$FS0" > /dev/null; sleep 6
-ctl "fps=$FPS0" > /dev/null; ctl "quality=$Q" > /dev/null
-ctl "micGain=$MIC0" > /dev/null; ctl "stillSave=$SAVE0" > /dev/null; ctl "idleFps=$IDLE0" > /dev/null
-sleep 2
-log "restored: framesize=$(status_field framesize) fps=$(status_field fps) idleFps=$(status_field idleFps) micGain=$(status_field micGain) stillSave=$(status_field stillSave)"
+gov_restore   # the EXIT trap would do this anyway; explicit here so it lands before the exit status
 exit $(( FAIL > 0 ? 1 : 0 ))
