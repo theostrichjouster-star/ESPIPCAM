@@ -899,6 +899,191 @@
         border: 1px solid var(--itemBorder);
       }
 
+      /* ---- buffered clip player ----
+         The canvas replaces #stream for a clip the browser fetched and is playing itself, so it
+         has to obey the same sizing sizeView() writes onto the img. The bar sits over the bottom
+         of the picture, above the phone's sensor rail. */
+      /* matches "figure img" above, because sizeView() sizes the CONTAINER and lets the display
+         element fill it - the canvas has to behave the same way or a clip ignores every size icon */
+      #clipCanvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background: #000;
+        border-radius: var(--buttonQuart);
+      }
+
+      #clipCanvas.hidden {
+        display: none;
+      }
+
+      /* Visibility is driven by the container's .clipPlaying class, never by an inline display -
+         on a phone this bar is the viewer's permanent control strip (it holds the fullscreen and
+         screenshot buttons for the live view too), and hide() would take those with it */
+      #playBar {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 6;
+        display: none;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--buttonQuart);
+        padding: var(--buttonQuart) var(--buttonHalf);
+        background: linear-gradient(to top, rgba(0,0,0,0.82), rgba(0,0,0,0.45) 70%, transparent);
+        color: var(--pageText);
+      }
+
+      #stream-container.clipPlaying #playBar {
+        display: flex;
+      }
+
+      /* Deliberately NOT var(--buttonSize): that token is 1rem, which is why .iconSize renders as a
+         16px mouse target. These are 2rem on desktop and 2.75rem on a phone, set in the 48rem block */
+      button.playCtl {
+        flex: 0 0 auto;
+        width: 2rem;
+        height: 2rem;
+        min-width: 0;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        border-radius: 50%;
+        color: var(--pageText);
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+
+      button.playCtl:hover {
+        background: rgba(255,255,255,0.14);
+      }
+
+      button.playCtl.muted {
+        opacity: 0.55;
+      }
+
+      #playElapsed, #playState {
+        flex: 0 0 auto;
+        font-size: calc(var(--bodySize) * 0.76);
+        white-space: nowrap;
+        opacity: 0.9;
+      }
+
+      #playState:empty {
+        display: none;
+      }
+
+      /* A div, not <input type=range>: addRangeData() would hang min/value/max labels off a range
+         input, the document change handler reads those labels back and throws without them, and
+         updateStatus() re-initialises every range input on every status poll. The 44px hit area
+         comes from padding while the visible track stays thin */
+      #playTrack {
+        position: relative;
+        flex: 1 1 auto;
+        height: 4px;
+        margin: 0 var(--buttonQuart);
+        background: rgba(255,255,255,0.22);
+        border-radius: 2px;
+        cursor: pointer;
+        touch-action: none;
+      }
+
+      #playTrack::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: -20px;
+        bottom: -20px;
+      }
+
+      #playBuffered, #playProgress {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 0;
+        border-radius: 2px;
+        pointer-events: none;
+      }
+
+      #playBuffered {
+        background: rgba(255,255,255,0.34);
+      }
+
+      #playProgress {
+        background: var(--buttonActive);
+      }
+
+      #playHandle {
+        position: absolute;
+        top: 50%;
+        left: 0;
+        width: 12px;
+        height: 12px;
+        margin: -6px 0 0 -6px;
+        border-radius: 50%;
+        background: var(--buttonActive);
+        pointer-events: none;
+      }
+
+      #playTrack.noSeek {
+        cursor: default;
+      }
+
+      #playTrack.noSeek #playHandle {
+        display: none;
+      }
+
+      /* the rail carries what the SENSOR is doing now, which says nothing about a recording made
+         earlier - and the bar sits exactly where it does. Hide it while a clip is up */
+      #stream-container.clipPlaying #streamRail {
+        display: none;
+      }
+
+      /* ---- fullscreen ----
+         The container becomes the screen, so the picture takes whatever the chrome leaves and the
+         controls stay where they are rather than scrolling out of reach. object-fit keeps the aspect
+         without any arithmetic, which is why nothing is written inline for this any more.
+         :fullscreen and :-webkit-full-screen must be SEPARATE rules - one unknown pseudo-class in a
+         selector list invalidates the whole list. */
+      #liveCard #stream-container:fullscreen {
+        width: 100vw !important;
+        height: 100vh !important;
+        max-width: none;
+        margin: 0;
+        padding-top: env(safe-area-inset-top);
+        background: #000;
+        grid-template-rows: auto 1fr auto auto;
+      }
+      #liveCard #stream-container:fullscreen #stream,
+      #liveCard #stream-container:fullscreen #clipCanvas {
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        object-fit: contain;
+      }
+      #liveCard #stream-container:-webkit-full-screen {
+        width: 100vw !important;
+        height: 100vh !important;
+        max-width: none;
+        margin: 0;
+        background: #000;
+        grid-template-rows: auto 1fr auto auto;
+      }
+      #liveCard #stream-container:-webkit-full-screen #stream,
+      #liveCard #stream-container:-webkit-full-screen #clipCanvas {
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        object-fit: contain;
+      }
+
       .iconSize{
         position: absolute;
         top: var(--buttonQuart);
@@ -1387,14 +1572,38 @@
         #liveCard.live-on #streamPlaceholder {
           display: none;
         }
+        /* THE CHROME SITS OUTSIDE THE PICTURE on a phone. Overlaid badges, a close button, a scrub
+           bar and a data rail are fine for a glance and poor for watching - five things covering the
+           corners of a 349px-wide frame. So the container is a grid with a strip above the picture
+           and a strip below it, and nothing at all is drawn over the video. Every child that used to
+           be absolutely positioned is returned to the flow and placed by area below. */
         #liveCard #stream-container {
           width: 100% !important;   /* sizeView() writes a pixel width inline; on a phone the card is the size */
           height: auto !important;
           margin: 0;
           border: none;
           border-radius: 0;
+          display: grid;
+          grid-template-columns: auto 1fr auto;
+          grid-template-areas:
+            "badge size  close"
+            "media media media"
+            "bar   bar   bar"
+            "rail  rail  rail";
+          align-items: center;
+          column-gap: var(--buttonHalf);
+          row-gap: var(--buttonQuart);
+          /* no horizontal padding: the picture stays edge to edge and the strips inset themselves,
+             so the video is the widest thing in the card rather than the chrome */
+          padding: var(--buttonHalf) 0 0;
         }
-        #liveCard figure img, #liveCard #stream {
+        #liveCard #stream-container.hidden {
+          display: none;
+        }
+        #liveCard #stream, #liveCard #clipCanvas {
+          grid-area: media;
+        }
+        #liveCard figure img, #liveCard #stream, #liveCard #clipCanvas {
           border-radius: 0;
         }
         /* the signature: viewfinder corner brackets over the frame */
@@ -1413,7 +1622,9 @@
           border-left: 2px solid var(--buttonActive);
         }
         #liveCard.live-on::after {
-          bottom: 2.4rem; /* clear of the data rail, which is ~1.9rem tall */
+          /* the rail used to be overlaid on the picture and this cleared it. The chrome is outside
+             the picture now, so the brackets frame the whole viewer block instead */
+          bottom: 0.6rem;
           right: 0.6rem;
           border-bottom: 2px solid var(--buttonActive);
           border-right: 2px solid var(--buttonActive);
@@ -1423,8 +1634,7 @@
           margin: 0.75rem 0 0 0;
         }
         .stream-badge {
-          position: absolute;
-          top: 0.6rem;
+          position: static;
           z-index: 4;
           display: flex;
           align-items: center;
@@ -1437,10 +1647,16 @@
           pointer-events: none;
         }
         #liveBadge {
-          left: 2.2rem;
+          grid-area: badge;
+          justify-self: start;
+          margin-left: var(--buttonHalf);
         }
         #sizeBadge {
-          right: 0.6rem;
+          grid-area: size;
+          justify-self: end;
+        }
+        #closeStream {
+          margin-right: var(--buttonHalf);
         }
         #liveDot {
           width: 0.5rem;
@@ -1452,42 +1668,98 @@
           background: var(--buttonActive);
         }
         #streamRail {
-          position: absolute;
-          left: 0;
-          right: 0;
-          bottom: 0;
+          grid-area: rail;
+          position: static;
           z-index: 4;
           display: flex;
           align-items: center;
           gap: 0.75rem;
-          padding: 0.4rem 6rem 0.4rem 0.75rem;
-          background: rgba(18, 22, 28, 0.72);
+          padding: 0.2rem var(--buttonHalf) calc(0.4rem + env(safe-area-inset-bottom));
+          background: none; /* it is below the picture now, not over it */
           color: var(--pageText);
           font-size: calc(var(--bodySize) * 0.72);
           white-space: nowrap;
           overflow: hidden;
         }
-        /* only two of the seven overlay controls make sense on a phone; the window is the size it
-           is, and Stop Stream is the way out. sizeView() also writes an inline right: for each -
-           it skips that on mobile so these two can sit in the rail */
-        #closeStream, #rotate, #actualSize, #maxFit, #fullSize {
+        /* three of the seven overlay controls make sense on a phone; the window is the size it is.
+           sizeView() also writes an inline right: for each - it skips that on mobile so these can
+           sit where the stylesheet puts them. Close is one of the three: it used to be hidden here,
+           which left a clip or a stream with no way out except reopening the sheet it was started
+           from */
+        #rotate, #actualSize, #maxFit, #fullSize {
           display: none !important;
         }
+        /* close takes the top strip's right cell; fullscreen and screenshot are moved into the bar
+           by mobileInit(), so they are laid out by it rather than positioned here */
+        #closeStream {
+          grid-area: close;
+          position: static;
+          width: 2.75rem;
+          height: 2.75rem;
+          border-radius: 50%;
+          background: rgba(255,255,255,0.08);
+          touch-action: manipulation;
+        }
         #fullAspect, #saveImage {
+          position: static;
           top: auto;
-          bottom: 0;
+          right: auto;
+          bottom: auto;
           width: 2.75rem;
           height: 2.75rem;
           border-radius: 0;
           background: transparent;
-          z-index: 5;
           touch-action: manipulation;
         }
-        #fullAspect {
-          right: 2.75rem;
+        /* on a phone the bar is always present - it is where fullscreen and screenshot live for the
+           live view as well - and only the clip controls come and go with .clipPlaying */
+        #playBar {
+          grid-area: bar;
+          position: static;
+          display: flex;
+          background: none; /* below the picture now, so it needs no scrim to stay legible */
+          padding: 0 var(--buttonHalf) var(--buttonQuart);
+          gap: var(--buttonHalf);
         }
-        #saveImage {
-          right: 0;
+        #playBar #playToggle, #playBar #playElapsed, #playBar #playTrack, #playBar #playSound {
+          display: none;
+        }
+        #stream-container.clipPlaying #playBar #playToggle,
+        #stream-container.clipPlaying #playBar #playSound {
+          display: flex;
+        }
+        #stream-container.clipPlaying #playBar #playElapsed {
+          display: inline;
+        }
+        #stream-container.clipPlaying #playBar #playTrack {
+          display: block;
+        }
+        /* the size controls sit at the far end of the button row, away from play/pause */
+        #playBar #fullAspect {
+          margin-left: auto;
+        }
+        /* the track takes a row of its own, ahead of the buttons. Sharing one row left it 143px on a
+           375px phone - 14px per second of a 10s clip, which is not a thumb target. Full width is
+           33px per second */
+        #playTrack {
+          order: -1;
+          flex: 1 0 100%;
+          margin: 0 0 var(--buttonQuart);
+        }
+        button.playCtl {
+          width: 2.75rem;
+          height: 2.75rem;
+        }
+        #playTrack {
+          height: 6px;
+        }
+        #playHandle {
+          width: 16px;
+          height: 16px;
+          margin: -8px 0 0 -8px;
+        }
+        #playElapsed, #playState {
+          font-size: calc(var(--bodySize) * 0.72);
         }
 
         /* --- system status card --- */
@@ -2636,6 +2908,29 @@
             <div class="iconSize" id="fullSize" title="Full screen"><svg class="icon" aria-hidden="true"><use href="#icon-fullscreen"></use></svg></div>
             <div class="iconSize" id="saveImage" title="Download screenshot"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></div>
             <img id="stream" src="" crossorigin>
+            <!-- Buffered clip playback draws here instead of into #stream. Exactly one of the two
+                 is ever visible: the img carries the live stream and stills, the canvas carries a
+                 clip the browser has fetched and is playing itself. Neither id may match a status
+                 key, or updateStatus() would write the raw value into it -->
+            <canvas id="clipCanvas" class="hidden"></canvas>
+            <!-- The clip player's controls. One bar for phone and desktop, because updateStatus()
+                 matches a status key to the element whose id equals it and a value can therefore
+                 exist only once. Every control is "local": none of this reaches the board -->
+            <div id="playBar">
+              <button id="playToggle" class="local playCtl" type="button" title="Pause" aria-label="Pause">
+                <svg class="icon" aria-hidden="true"><use href="#icon-pause"></use></svg>
+              </button>
+              <span id="playElapsed" class="measure">0:00 / 0:00</span>
+              <div id="playTrack" title="Seek within the buffered part of the clip">
+                <div id="playBuffered"></div>
+                <div id="playProgress"></div>
+                <div id="playHandle"></div>
+              </div>
+              <span id="playState" class="measure"></span>
+              <button id="playSound" class="local playCtl" type="button" title="Sound on" aria-label="Sound on">
+                <svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg>
+              </button>
+            </div>
             <div id="streamRail" class="measure mobileOnly">
               <span id="railRate">&nbsp;</span>
               <span id="railSignal">&nbsp;</span>
@@ -2821,6 +3116,11 @@
         hideBuiltOut();
         mobileInit(); // the phone card layout - see the block below
         galleryInit(); // tile view, the thumbnail queue and the tap-to-view listener
+        clipTrackInit(); // the scrub track's own pointer handlers
+        // Esc and the system back gesture leave fullscreen without touching our button, so the
+        // label has to follow the state rather than the click
+        document.addEventListener('fullscreenchange', fullscreenLabel);
+        document.addEventListener('webkitfullscreenchange', fullscreenLabel);
         nightInit(); // sync the long exposure panel with whatever the board is actually doing
       }
 
@@ -2841,7 +3141,8 @@
 
       function mobileInit() {
         placePlaybackButton();
-        mobileMQ.addEventListener('change', () => { placePlaybackButton(); sheetApply(false); });
+        placeViewControls();
+        mobileMQ.addEventListener('change', () => { placePlaybackButton(); placeViewControls(); sheetApply(false); });
         // the phone's Back gesture must close the sheet, not leave the page. Without this, backing
         // out of a settings sheet is the quickest way for a user to lose the whole page
         window.addEventListener('popstate', () => {
@@ -2866,6 +3167,20 @@
         if (!btn || !sheetHome || !deskHome) return;
         if (isMobile()) { if (btn.parentElement !== sheetHome) sheetHome.insertBefore(btn, sheetHome.firstChild); }
         else if (btn.parentElement !== deskHome) deskHome.appendChild(btn);
+      }
+
+      function placeViewControls() {
+        /* Same one-element-two-homes rule as placePlaybackButton. On a phone every piece of the
+           viewer's chrome sits OUTSIDE the picture, so the two size controls that survive there move
+           from their absolute corners into the bottom bar. Moved, never cloned: sizeView() and the
+           class dispatch both find them by id wherever they are, and .iconSize keeps working. */
+        const bar = $('#playBar'), cont = $('#stream-container');
+        if (!bar || !cont) return;
+        const home = isMobile() ? bar : cont;
+        ['#fullAspect', '#saveImage'].forEach(sel => {
+          const el = $(sel);
+          if (el && el.parentElement !== home) home.appendChild(el);
+        });
       }
 
       function sheetApply(open, opener) {
@@ -2918,7 +3233,43 @@
         card.classList.toggle('live-on', mode !== 'off');
         const badge = $('#liveBadge'), state = $('#liveState');
         if (badge) badge.classList.toggle('streaming', mode === 'live');
-        if (state) state.textContent = mode === 'live' ? 'LIVE' : 'STILL';
+        // a buffered clip is neither: sizeView() calls this on every resize, so the label has to be
+        // decided here or it reverts to STILL the moment the view is sized
+        if (state) state.textContent = clip ? 'CLIP' : (mode === 'live' ? 'LIVE' : 'STILL');
+      }
+
+      function isFullscreen() {
+        const el = document.fullscreenElement || document.webkitFullscreenElement;
+        return !!el && el === viewContainer;
+      }
+
+      function enterFullscreen() {
+        // returns false when the element cannot go fullscreen at all - iOS Safari allows it for
+        // <video> only, and calling a method that is not there used to throw out of the click
+        const el = viewContainer;
+        const req = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (!req) return false;
+        try { req.call(el); } catch (e) { console.warn('fullscreen refused: ' + e.message); return false; }
+        return true;
+      }
+
+      function exitFullscreen() {
+        if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+      }
+
+      function fullscreenLabel() {
+        // the same button leaves as entered it, so it has to say which
+        const b = $('#fullAspect');
+        if (!b) return;
+        b.title = isFullscreen() ? 'Leave full screen' : 'Full screen with aspect';
+        b.setAttribute('aria-label', b.title);
+      }
+
+      function viewEl() {
+        // what is actually on screen: the canvas while a clip is buffered, otherwise the img. The
+        // size icons, rotate and the screenshot all have to act on whichever it is
+        return clip ? $('#clipCanvas') : view;
       }
 
       function railFromCamLive(v) {
@@ -3046,6 +3397,9 @@
           else if (key == "download" && $("#download").value.includes('.')) doDownload();
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
           else if (key == "galleryTiles") { setGalleryView(isOn(value)); return; }
+          // the buffered clip player's own controls. Both are "local", so nothing is sent
+          else if (key == "playToggle") { clip && clip.playing ? clipPause() : clipPlay(); return; }
+          else if (key == "playSound") { clipSound(); return; }
           // UI_REVIEW C1 and C4: one gate for every control whose owner decides whether it can
           // act at all. These keys do not return - the value still goes to the board below
           else if (key == "aec" || key == "agc" || key == "awb" || key == "awb_gain"
@@ -3389,6 +3743,7 @@
       async function stopAll(caller, sendStop = true) {
         closeSpkr(wsInd);
         deactivateButton($('#spkrRem'));
+        stopClip(); // aborts the fetch too, or it keeps pulling megabytes off the card
         if (!isHidden(viewContainer)) {
           if (isSecure) await sleep(1000); // otherwise TLS crash
           window.stop();
@@ -3460,8 +3815,11 @@
         // v download still image
 
         if (selectedSize == 'closeStream') {
+          // stopAll() already sends the stop that applies - stopPlaying for a playback, stopStream
+          // for a stream, neither for a buffered clip or a still. The unconditional sendAll that
+          // used to follow it put two control requests on the wire back to back, which is what took
+          // a board off the network on 4 Sep, and this button is now the way out on a phone
           stopAll("closeStream");
-          sendAll("stopStream", "0");
         }
         else {
           if (selectedSize == 'maxFit') {
@@ -3481,22 +3839,29 @@
             viewContainer.style.cssText = 'width:'+imgSize.width+'px; height:'+imgSize.height+'px';
           }
           else if (selectedSize == 'fullAspect') {
-            if (viewContainer.requestFullscreen) viewContainer.requestFullscreen();
-            else viewContainer.webkitRequestFullscreen();
-            const r = calculateAspectRatioFit(imgSize.width, imgSize.height, window.screen.availWidth, window.screen.availHeight)
-            viewContainer.style.cssText = 'width:'+r.width+'px; height:'+r.height+'px';
-            view.style.cssText = "width: 100%; height:auto";
+            // a TOGGLE, because on a phone this is the only fullscreen control that is not hidden -
+            // entering with no way back out but the system gesture is a trap. The :fullscreen CSS
+            // does the sizing, so nothing is written inline here
+            if (isFullscreen()) exitFullscreen();
+            else if (!enterFullscreen()) {
+              // no fullscreen API on this element (iOS Safari allows it for <video> only): fall back
+              // to filling the window rather than doing nothing at all
+              const r = calculateAspectRatioFit(imgSize.width, imgSize.height, window.innerWidth, window.innerHeight);
+              viewContainer.style.cssText = 'width:'+r.width+'px; height:'+r.height+'px';
+              viewEl().style.cssText = "width: 100%; height:auto";
+            }
           }
           else if (selectedSize == 'fullSize') {
-            if (viewContainer.requestFullscreen) viewContainer.requestFullscreen();
-            else viewContainer.webkitRequestFullscreen();
-            viewContainer.style.cssText = 'width:'+window.screen.availWidth+'px; height:'+window.screen.availHeight+'px';
-            view.style.cssText = "width: 100%; height: 100%";
+            if (isFullscreen()) exitFullscreen();
+            else if (!enterFullscreen()) {
+              viewContainer.style.cssText = 'width:'+window.innerWidth+'px; height:'+window.innerHeight+'px';
+              viewEl().style.cssText = "width: 100%; height: 100%";
+            }
           }
           else if (selectedSize == 'rotate') {
             rotateAngle = rotateAngle == 270 ? 0 : rotateAngle + 90;
             const scale = (rotateAngle == 90 || rotateAngle == 270) ? imgSize.height / imgSize.width : 1.0;
-            view.style.transform = 'rotate('+rotateAngle+'deg) scale(' + scale + ')';
+            viewEl().style.transform = 'rotate('+rotateAngle+'deg) scale(' + scale + ')';
           }
           if ((selectedSize == 'actualSize' || selectedSize == 'maxFit') && document.fullscreenElement !== null) {
             if (document.exitFullscreen) document.exitFullscreen();
@@ -3526,7 +3891,7 @@
         canvas.width = imgSize.width;
         canvas.height = imgSize.height;
         document.body.appendChild(canvas);
-        canvas.getContext('2d').drawImage(view,0,0);
+        canvas.getContext('2d').drawImage(viewEl(),0,0); // the canvas while a clip is up, or the img
         let anchor = document.createElement("a");
         anchor.download = $('#clock').innerHTML+".jpg";
         anchor.href = canvas.toDataURL("image/jpeg");
@@ -3567,6 +3932,10 @@
               option.value = key;
               $('#sfile').add(option);
               rows.push([key, value]);
+              // the buffered player needs the byte count up front: it allocates one buffer and
+              // works out when it is safe to start playing from how much is still to come
+              const bytes = sizeFromLabel(value);
+              if (bytes) fileSizes[key] = bytes;
             }
           });
           buildFileGrid(rows); // the same listing, drawn as tiles - no second request
@@ -3656,7 +4025,13 @@
           if (isMobile()) closeSheetForViewer();
         } else if (path.substr(-4) === '.avi') {
           if (isMobile()) closeSheetForViewer();
-          if (!isActive(playbackButton)) activatePlaybackButton();
+          // Buffered playback first: the browser fetches the clip and plays it at the recorded rate
+          // with its sound. It falls back to the board's own paced stream for a clip too large to
+          // hold in memory, which is start-and-stop only and silent
+          stopAll("openFile", false);
+          if (!playClip(path)) {
+            if (!isActive(playbackButton)) activatePlaybackButton();
+          }
         }
       }
 
@@ -3690,6 +4065,581 @@
         if (tiles) grid.style.display = 'grid';
         list.style.display = tiles ? 'none' : 'grid';
         try { localStorage.setItem('galleryTiles', tiles ? '1' : '0'); } catch (e) {}
+      }
+
+      /************** buffered clip playback **************/
+      /* The board cannot play a clip at full speed and cannot send its sound. It paces frames onto
+         the wire and measured 21.9fps for a 30fps clip, silent, while stepping over every audio
+         chunk in the file. So a clip is FETCHED and played here instead. The container makes that
+         cheap: a fixed 310 byte header, then '00dc' or '01wb' plus a 4 byte length plus the
+         payload, repeated, then an idx1 footer. Parsing it is a forward walk, and the video
+         payloads are ordinary JPEGs.
+
+         THE AUDIO IS THE CLOCK. Each '01wb' chunk is 16 bit mono PCM at the header's sample rate,
+         scheduled on an AudioContext at its content time; the video frame drawn is chosen from
+         audioContext.currentTime. That is what makes picture and sound agree rather than merely
+         start together, and pause, seek and rate all fall out of it. Verified against real files:
+         10.55s of PCM against 10.49s of video on an HD30 clip, 3.50 against 3.45 on a QHD one.
+
+         MEASURED, and the whole reason for the start rule below: the link delivers a clip more
+         slowly than it plays. An HD30 clip is 80KB per frame - 26MB for 10.5s - fetched at
+         1.19MB/s, which is 0.48x real time. Playback therefore cannot start on a fixed lead or it
+         runs into the end of the buffer. It starts when the remaining download is no longer slower
+         than the remaining playback, computed from the throughput actually observed, and
+         re-buffers if that estimate proves optimistic. Buffering does not make a clip arrive any
+         faster. It converts a stuttering silent 21.9fps into a smooth 30fps with sound, for about
+         the same wall clock. */
+
+      const CLIP_MAX_BYTES = 64 * 1024 * 1024; // above this, fall back to the board's own playback
+      const CLIP_MIN_LEAD = 1.5;   // seconds of content before the start rule is even considered
+      const CLIP_AUD_AHEAD = 2.0;  // seconds of audio scheduled ahead of the playhead
+      const CLIP_SAFETY = 0.95;    // shave the download estimate rather than start a shade too early
+      const AVI_HDR = 310;         // AVI_HEADER_LEN, appGlobals.h
+      const AVI_CHUNK_HDR = 8;     // CHUNK_HDR - fourcc plus a 4 byte length
+
+      let clip = null;             // the one active session, or null
+      let fileSizes = {};          // path -> bytes, harvested from the listing
+
+      function sizeFromLabel(label) {
+        // the listing carries fmtSize()'s string: "N bytes", "NKB", "N.NMB", "N.NGB"
+        const m = String(label).match(/([\d.]+)\s*(bytes|KB|MB|GB)\s*$/);
+        if (!m) return 0;
+        const mult = {bytes: 1, KB: 1024, MB: 1048576, GB: 1073741824}[m[2]];
+        return Math.round(parseFloat(m[1]) * mult);
+      }
+
+      function clipFmt(secs) {
+        if (!isFinite(secs) || secs < 0) secs = 0;
+        const m = Math.floor(secs / 60), s = Math.floor(secs % 60);
+        return m + ':' + (s < 10 ? '0' : '') + s;
+      }
+
+      function clipHeader(b) {
+        // read the geometry and the rate the firmware wrote, rather than guessing from the filename.
+        // buildAviHdr() writes the rate as a rational (dwScale = duration ms, dwRate = frames x 1000)
+        // deliberately, so a capture that ran at 9.7fps is not rounded to 10 and left to drift
+        const dv = new DataView(b.buffer, b.byteOffset, AVI_HDR);
+        const scale = dv.getUint32(0x80, true), rate = dv.getUint32(0x84, true);
+        const usecs = dv.getUint32(0x20, true);
+        let fps = scale ? rate / scale : 0;
+        if (!fps || !isFinite(fps)) fps = usecs ? 1000000 / usecs : 0;
+        return {
+          frames: dv.getUint16(0x30, true),
+          streams: b[0x38],
+          w: dv.getUint16(0x40, true),
+          h: dv.getUint16(0x44, true),
+          fps: fps,
+          audRate: dv.getUint32(0xF8, true)
+        };
+      }
+
+      function clipDuration() {
+        const c = clip;
+        if (!c || !c.hdr || !c.hdr.fps) return 0;
+        // the header's count is authoritative once closeAvi() has rewritten it; a file that was
+        // never closed cleanly carries 0, so fall back to what the walk has actually found
+        const n = c.hdr.frames || c.frames.length;
+        return n / c.hdr.fps;
+      }
+
+      function clipBuffered() {
+        const c = clip;
+        return (c && c.hdr && c.hdr.fps) ? c.frames.length / c.hdr.fps : 0;
+      }
+
+      function clipTime() {
+        const c = clip;
+        if (!c || !c.started) return 0;
+        if (!c.playing) return c.pausedAt;
+        // an AudioContext's currentTime does not advance while it is suspended, so this is the one
+        // clock that pause, resume and the scheduled audio all agree on
+        if (c.ac) return c.seekBase + (c.ac.currentTime - c.acBase);
+        return c.seekBase + (performance.now() - c.wallBase) / 1000;
+      }
+
+      function clipCanStart() {
+        // do not begin until the download will finish before the playhead reaches the end
+        const c = clip;
+        if (!c || !c.hdr) return false;
+        if (c.done) return true;
+        if (clipBuffered() < CLIP_MIN_LEAD) return false;
+        const elapsed = (performance.now() - c.t0) / 1000;
+        if (elapsed <= 0.2) return false;
+        const rate = c.got / elapsed;                      // bytes/sec, as actually observed
+        if (rate <= 0) return false;
+        const remainDl = (c.size - c.got) / rate;
+        const remainPlay = clipDuration() - (c.started ? clipTime() : 0);
+        return remainDl <= remainPlay * CLIP_SAFETY;
+      }
+
+      function clipStopSources() {
+        // a seek or a pause must silence what is already scheduled, or the old position plays on
+        const c = clip;
+        if (!c) return;
+        c.srcs.forEach(s => { try { s.onended = null; s.stop(); s.disconnect(); } catch (e) {} });
+        c.srcs = [];
+      }
+
+      function clipAudIdxFor(t) {
+        const c = clip;
+        let i = 0;
+        while (i < c.auds.length) {
+          const a = c.auds[i];
+          if (a.t + (a.len / 2 / c.hdr.audRate) > t) break;
+          i++;
+        }
+        return i;
+      }
+
+      function clipSchedAudio() {
+        const c = clip;
+        if (!c.ac || c.muted || !c.playing) return;
+        const now = clipTime();
+        while (c.audIdx < c.auds.length) {
+          const a = c.auds[c.audIdx];
+          const dur = a.len / 2 / c.hdr.audRate;
+          if (a.t + dur <= now) { c.audIdx++; continue; }   // already behind the playhead
+          if (a.t > now + CLIP_AUD_AHEAD) break;            // far enough ahead for now
+          c.audIdx++;
+          const n = a.len >> 1;
+          if (!n) continue;
+          const ab = c.ac.createBuffer(1, n, c.hdr.audRate);
+          const ch = ab.getChannelData(0);
+          const dv = new DataView(c.buf.buffer, c.buf.byteOffset + a.off, a.len);
+          for (let i = 0; i < n; i++) ch[i] = dv.getInt16(i * 2, true) / 32768;
+          const src = c.ac.createBufferSource();
+          src.buffer = ab;
+          src.connect(c.ac.destination);
+          // when this chunk starts, on the context's own clock
+          let when = c.acBase + (a.t - c.seekBase), offset = 0;
+          if (when < c.ac.currentTime) { offset = c.ac.currentTime - when; when = c.ac.currentTime; }
+          if (offset < dur) {
+            try { src.start(when, offset); } catch (e) { continue; }
+            c.srcs.push(src);
+            src.onended = () => { const i = c.srcs.indexOf(src); if (i >= 0) c.srcs.splice(i, 1); };
+          }
+        }
+      }
+
+      async function clipDraw(idx) {
+        const c = clip;
+        if (!c || !c.ctx || idx < 0 || idx >= c.frames.length) return;
+        c.drawing = true;
+        const f = c.frames[idx];
+        try {
+          const blob = new Blob([c.buf.subarray(f.off, f.off + f.len)], {type: 'image/jpeg'});
+          const bmp = await createImageBitmap(blob);
+          if (clip === c && c.ctx) {
+            c.ctx.drawImage(bmp, 0, 0, c.cv.width, c.cv.height);
+            c.curFrame = idx;
+          }
+          if (bmp.close) bmp.close();
+        } catch (e) {
+          // one unreadable frame must not stop the clip - claim it and move on
+          c.curFrame = idx;
+        }
+        c.drawing = false;
+      }
+
+      function clipBar() {
+        const c = clip;
+        if (!c) return;
+        const total = clipDuration();
+        const t = Math.min(clipTime(), total);
+        setText('#playElapsed', clipFmt(t) + ' / ' + clipFmt(total));
+        const bufFrac = c.size ? Math.min(1, c.got / c.size) : 0;
+        const posFrac = total ? Math.min(1, t / total) : 0;
+        const bufEl = $('#playBuffered'), posEl = $('#playProgress'), h = $('#playHandle');
+        if (bufEl) bufEl.style.width = (bufFrac * 100).toFixed(2) + '%';
+        if (posEl) posEl.style.width = (posFrac * 100).toFixed(2) + '%';
+        if (h) h.style.left = (posFrac * 100).toFixed(2) + '%';
+      }
+
+      /* The work is split across two loops on purpose.
+
+         clipPump() is a timer, and carries everything with a real-time obligation: scheduling the
+         audio, moving the bar, noticing the end and noticing a stall. clipTick() is
+         requestAnimationFrame and only draws.
+
+         They cannot be one loop, because rAF does not run while the page is hidden - a phone locked
+         mid-clip, or a tab in the background. The clock keeps advancing regardless (an AudioContext
+         is not a page-visibility thing), so an rAF-driven player runs the playhead off the end of a
+         clip while scheduling no sound at all. Measured exactly that on the first run: the playhead
+         reached 69s of a 10.5s clip, silently, with nothing ever queued. Timers are throttled when
+         hidden but still fire about once a second, well inside CLIP_AUD_AHEAD. Drawing is the only
+         part that genuinely does not matter while nobody is looking. */
+      function clipPump() {
+        const c = clip;
+        if (!c) return;
+        clipBar();
+        if (!c.started || !c.playing) return;
+        // The audio clock is the video clock, so a context the browser refuses to run would hold the
+        // picture on one frame. Give it half a second, then drop to the wall clock and play silently
+        if (c.ac && c.ac.state !== 'running') {
+          if (!c.acStuck) c.acStuck = performance.now();
+          c.ac.resume().catch(() => {});
+          if (performance.now() - c.acStuck > 500) {
+            const at = c.pausedAt;
+            try { c.ac.close(); } catch (e) {}
+            c.ac = null;
+            c.hasAudio = false;
+            const sb = $('#playSound');
+            if (sb) disable(sb);
+            clipSoundIcon();
+            setText('#playState', 'Sound blocked');
+            clipAnchor(at);
+          }
+          return;
+        }
+        c.acStuck = 0;
+        clipSchedAudio();
+        const t = clipTime();
+        const total = clipDuration();
+        const want = Math.floor(t * c.hdr.fps);
+        if (want >= c.frames.length) {
+          if (c.done) { if (t >= total) clipEnd(); return; }
+          clipStall();     // ran into the end of the buffer
+          return;
+        }
+        if (t >= total && c.done) { clipEnd(); return; }
+        // draw from here as well as from rAF. rAF gives the smooth 30fps when it is running, but it
+        // is not guaranteed to run at all: measured a host where document.hidden was false, the page
+        // was visible, and rAF never fired once - the clip then played its whole soundtrack against
+        // a frozen first frame. This floor makes that case choppy instead of stuck
+        if (want !== c.curFrame && !c.drawing) clipDraw(want);
+      }
+
+      function clipTick() {
+        const c = clip;
+        if (!c) return;
+        c.raf = requestAnimationFrame(clipTick);
+        if (!c.started || !c.playing || c.drawing) return;
+        const want = Math.floor(clipTime() * c.hdr.fps);
+        if (want >= 0 && want < c.frames.length && want !== c.curFrame) clipDraw(want);
+      }
+
+      function clipStall() {
+        const c = clip;
+        if (!c || c.stalled) return;
+        c.stalled = true;
+        clipPause();
+        setText('#playState', 'Buffering');
+      }
+
+      function clipEnd() {
+        const c = clip;
+        if (!c) return;
+        clipPause();
+        c.pausedAt = clipDuration();
+        c.ended = true;
+        setText('#playState', '');
+        clipToggleIcon();
+        clipBar();
+      }
+
+      function clipPause() {
+        const c = clip;
+        if (!c || !c.playing) return;
+        c.pausedAt = clipTime();
+        c.playing = false;
+        clipStopSources();
+        if (c.ac) c.ac.suspend().catch(() => {});
+        clipToggleIcon();
+      }
+
+      function clipPlay() {
+        const c = clip;
+        if (!c || !c.started) return;
+        if (c.ended) { c.pausedAt = 0; c.ended = false; }
+        c.stalled = false;
+        setText('#playState', '');
+        c.playing = true;
+        if (c.ac) c.ac.resume().catch(() => {});
+        // re-anchor through the seek path rather than trusting suspend() to have stopped the clock
+        // at exactly the right instant: correctness over elegance, and it costs one reschedule
+        clipAnchor(c.pausedAt);
+        clipToggleIcon();
+      }
+
+      function clipAnchor(t) {
+        // point every clock and the audio schedule at content time t
+        const c = clip;
+        clipStopSources();
+        const maxT = c.frames.length ? (c.frames.length - 1) / c.hdr.fps : 0;
+        if (t > maxT) t = maxT;
+        if (t < 0) t = 0;
+        c.seekBase = t;
+        c.pausedAt = t;
+        c.audIdx = clipAudIdxFor(t);
+        if (c.ac) c.acBase = c.ac.currentTime;
+        c.wallBase = performance.now();
+        const want = Math.min(c.frames.length - 1, Math.floor(t * c.hdr.fps));
+        if (want >= 0 && want !== c.curFrame) { c.curFrame = -1; clipDraw(want); }
+      }
+
+      function clipSeek(frac) {
+        const c = clip;
+        if (!c || !c.started) return;
+        const total = clipDuration();
+        if (!total) return;
+        c.ended = false;
+        c.stalled = false;
+        setText('#playState', '');
+        clipAnchor(frac * total);
+        clipBar();
+      }
+
+      function clipToggleIcon() {
+        const c = clip;
+        const b = $('#playToggle');
+        if (!b) return;
+        const playing = !!(c && c.playing);
+        const use = b.querySelector('use');
+        if (use) use.setAttribute('href', playing ? '#icon-pause' : '#icon-play');
+        b.title = playing ? 'Pause' : 'Play';
+        b.setAttribute('aria-label', b.title);
+      }
+
+      function clipSoundIcon() {
+        const c = clip;
+        const b = $('#playSound');
+        if (!b) return;
+        const on = !!(c && c.ac && !c.muted);
+        const use = b.querySelector('use');
+        if (use) use.setAttribute('href', on ? '#icon-speaker' : '#icon-speaker-off');
+        b.classList.toggle('muted', !on);
+        b.title = on ? 'Sound on' : 'Sound off';
+        b.setAttribute('aria-label', b.title);
+      }
+
+      function clipSound() {
+        // the clip's own sound and the Listen button feed the same output; they cannot both run
+        const c = clip;
+        if (!c || !c.hasAudio) return;
+        c.muted = !c.muted;
+        if (c.muted) clipStopSources();
+        else { closeSpkr(wsInd); deactivateButton($('#spkrRem')); clipAnchor(clipTime()); }
+        clipSoundIcon();
+      }
+
+      function clipStart() {
+        const c = clip;
+        if (c.started) return;
+        c.started = true;
+        c.playing = true;
+        c.pausedAt = 0;
+        setText('#playState', '');
+        clipAnchor(0);
+        clipToggleIcon();
+      }
+
+      async function clipFetch() {
+        const c = clip;
+        let res;
+        try {
+          res = await fetch(webServer + '/file?path=' + encodeURIComponent(c.path), {signal: c.abort.signal});
+        } catch (e) {
+          if (clip === c) clipFail('Could not fetch the clip');
+          return;
+        }
+        if (!res.ok) { if (clip === c) clipFail('Clip fetch ' + res.status); return; }
+        const reader = res.body.getReader();
+        for (;;) {
+          let r;
+          try { r = await reader.read(); }
+          catch (e) { return; }                       // aborted, or the connection dropped
+          if (clip !== c) return;                     // a newer session took over
+          if (r.done) break;
+          const chunk = r.value;
+          if (c.got + chunk.length > c.buf.length) {
+            // the listing's size is fmtSize()'s rounded string, so allow for it reading low
+            const grown = new Uint8Array(Math.max(c.got + chunk.length, Math.ceil(c.buf.length * 1.1)));
+            grown.set(c.buf.subarray(0, c.got));
+            c.buf = grown;
+          }
+          c.buf.set(chunk, c.got);
+          c.got += chunk.length;
+          if (!c.hdr && c.got >= AVI_HDR) clipReady();
+          if (c.hdr) {
+            clipParse();
+            if (!c.started && clipCanStart()) clipStart();
+            else if (c.stalled && clipCanStart()) clipPlay();
+          }
+        }
+        c.done = true;
+        if (c.size !== c.got) c.size = c.got;         // trust the bytes over the listing
+        if (c.hdr) {
+          clipParse();
+          if (!c.started) clipStart();
+          else if (c.stalled) clipPlay();
+        } else clipFail('Clip is too short to be a recording');
+      }
+
+      function clipParse() {
+        // forward walk of whatever has arrived. No index and no RIFF parsing: the idx1 footer
+        // arrives last, which is exactly when it stops being useful
+        const c = clip, b = c.buf;
+        while (c.parseOff + AVI_CHUNK_HDR <= c.got) {
+          const o = c.parseOff;
+          const isVid = b[o] == 0x30 && b[o+1] == 0x30 && b[o+2] == 0x64 && b[o+3] == 0x63; // 00dc
+          const isAud = b[o] == 0x30 && b[o+1] == 0x31 && b[o+2] == 0x77 && b[o+3] == 0x62; // 01wb
+          if (!isVid && !isAud) { c.done = true; return; }   // idx1, or the end of valid data
+          const len = (b[o+4] | (b[o+5] << 8) | (b[o+6] << 16) | (b[o+7] << 24)) >>> 0;
+          if (!len || o + AVI_CHUNK_HDR + len > c.buf.length) { c.done = true; return; }
+          if (o + AVI_CHUNK_HDR + len > c.got) return;       // not fully arrived yet
+          if (isVid) c.frames.push({off: o + AVI_CHUNK_HDR, len: len});
+          else {
+            c.auds.push({off: o + AVI_CHUNK_HDR, len: len, t: c.audBytes / 2 / c.hdr.audRate});
+            c.audBytes += len;
+          }
+          c.parseOff = o + AVI_CHUNK_HDR + len;
+        }
+      }
+
+      function clipReady() {
+        // the header has arrived: set the canvas up and decide whether there is sound to play
+        const c = clip;
+        c.hdr = clipHeader(c.buf);
+        if (!c.hdr.w || !c.hdr.h || !c.hdr.fps) { clipFail('Unreadable clip header'); return; }
+        c.cv.width = c.hdr.w;
+        c.cv.height = c.hdr.h;
+        c.ctx = c.cv.getContext('2d');
+        imgSize = {width: c.hdr.w, height: c.hdr.h};
+        setText('#sizeBadge', c.hdr.w + ' × ' + c.hdr.h);
+        sizeView('maxFit');
+        // the context was opened in playClip(), inside the click, because a context created in this
+        // async continuation would be born suspended under the autoplay policy. A silent clip does
+        // not need it, and keeping it would leave the video on a clock that never advances
+        c.hasAudio = c.hdr.streams > 1 && c.hdr.audRate > 0 && !!c.ac;
+        if (!c.hasAudio && c.ac) { try { c.ac.close(); } catch (e) {} c.ac = null; }
+        const sb = $('#playSound');
+        if (sb) c.hasAudio ? enable(sb) : disable(sb);
+        clipSoundIcon();
+      }
+
+      function clipFail(msg) {
+        console.warn('clip: ' + msg);
+        setText('#playState', msg);
+        const c = clip;
+        if (c) { c.playing = false; c.started = false; }
+        clipToggleIcon();
+      }
+
+      function clipTrackInit() {
+        // its own pointer handlers, stopping the event here: the document dispatch routes a DIV by
+        // class into processStatus(CLASS, ...), and this one is not a control
+        const track = $('#playTrack');
+        if (!track) return;
+        let dragging = false;
+        // null, not 0, when the track has no width - a laid-out-to-nothing track must ignore the
+        // gesture, not read every press as a seek to the start
+        const fracAt = ev => {
+          const r = track.getBoundingClientRect();
+          if (!r.width) return null;
+          return Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+        };
+        const clampToBuffered = frac => {
+          const total = clipDuration();
+          if (frac === null || !total) return null;
+          return Math.min(frac, clipBuffered() / total);
+        };
+        const seekTo = ev => {
+          const f = clampToBuffered(fracAt(ev));
+          if (f !== null) clipSeek(f);
+        };
+        track.addEventListener('pointerdown', ev => {
+          ev.stopPropagation();
+          if (!clip || !clip.started) return;
+          dragging = true;
+          try { track.setPointerCapture(ev.pointerId); } catch (e) {}
+          seekTo(ev);
+        });
+        track.addEventListener('pointermove', ev => {
+          if (!dragging) return;
+          ev.stopPropagation();
+          seekTo(ev);
+        });
+        const end = ev => {
+          if (!dragging) return;
+          dragging = false;
+          ev.stopPropagation();
+          try { track.releasePointerCapture(ev.pointerId); } catch (e) {}
+        };
+        track.addEventListener('pointerup', end);
+        track.addEventListener('pointercancel', end);
+        track.addEventListener('click', ev => ev.stopPropagation());
+      }
+
+      function clipCanPlay(path) {
+        const size = fileSizes[path] || 0;
+        return size > 0 && size <= CLIP_MAX_BYTES;
+      }
+
+      function playClip(path) {
+        // returns false if this clip must go to the board's own playback instead
+        if (!clipCanPlay(path)) return false;
+        if (!window.createImageBitmap || !window.AbortController) return false;
+        stopClip();
+        const cv = $('#clipCanvas'), bar = $('#playBar');
+        if (!cv || !bar) return false;
+        // the gallery keeps two thumbnail fetches in flight; a 26MB clip racing them is three
+        // concurrent reads of the same card for no reason
+        thumbRun++;
+        thumbQueue = [];
+        clip = {
+          path: path, size: fileSizes[path], buf: new Uint8Array(fileSizes[path]), got: 0,
+          parseOff: AVI_HDR, frames: [], auds: [], audBytes: 0, hdr: null, hasAudio: false,
+          cv: cv, ctx: null, ac: null, acBase: 0, seekBase: 0, wallBase: 0, pausedAt: 0,
+          started: false, playing: false, ended: false, stalled: false, muted: false, done: false,
+          audIdx: 0, srcs: [], drawing: false, curFrame: -1, raf: 0, pump: 0, acStuck: 0,
+          t0: performance.now(), abort: new AbortController()
+        };
+        // Opened HERE, synchronously in the click, not in clipReady(): a context created in an async
+        // continuation is born suspended by the autoplay policy, and since the audio clock is also
+        // the video clock that would freeze the picture rather than merely silence it. No sampleRate
+        // is requested - the device default is safest, and an AudioBuffer may carry its own rate
+        try {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (AC) {
+            clip.ac = new AC();
+            clip.ac.resume().catch(() => {});
+            clip.acBase = clip.ac.currentTime;
+          }
+        } catch (e) { clip.ac = null; }
+        hide($('#stream'));
+        show(cv);
+        viewContainer.classList.add('clipPlaying');
+        show(viewContainer);
+        setLiveCard('still');
+        setText('#liveState', 'CLIP'); // not LIVE and not a still - say which of the three this is
+        setText('#playState', 'Buffering');
+        setText('#playElapsed', '0:00 / 0:00');
+        clipToggleIcon();
+        clipSoundIcon();
+        clip.raf = requestAnimationFrame(clipTick);
+        clip.pump = setInterval(clipPump, 100); // also the drawing floor when rAF is not running
+        clipFetch();
+        return true;
+      }
+
+      function stopClip() {
+        const c = clip;
+        if (!c) return;
+        clip = null;                          // before the aborts, so in-flight callbacks bail out
+        try { c.abort.abort(); } catch (e) {}
+        if (c.raf) cancelAnimationFrame(c.raf);
+        if (c.pump) clearInterval(c.pump);
+        c.srcs.forEach(s => { try { s.onended = null; s.stop(); s.disconnect(); } catch (e) {} });
+        c.srcs = [];
+        if (c.ac) { try { c.ac.close(); } catch (e) {} }
+        c.buf = null;                         // the megabytes go here
+        c.frames = [];
+        c.auds = [];
+        const cv = $('#clipCanvas');
+        if (cv) hide(cv);
+        if (viewContainer) viewContainer.classList.remove('clipPlaying');
+        show($('#stream'));
+        setText('#playState', '');
       }
 
       function setFrameSize(key, value, fromUser) {

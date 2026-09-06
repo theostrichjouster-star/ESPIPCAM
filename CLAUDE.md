@@ -52,7 +52,10 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   saved stills since §38.20; the cached `.thm` thumbnails never appear)
 - `/file?path=/20260905/x.avi` - ANY file on the card, behind auth and `pathIsSafe()`. `/web?` only
   reaches `/data`. Add `&thumb=1` for a cached 160x90 tile, generated on first request from the
-  clip's MIDDLE frame and refused while capturing
+  clip's MIDDLE frame and refused while capturing. **This is also the playback path now** (§38.22):
+  the page fetches the whole clip through it and plays it in the browser. Measured **1.32 MB/s**,
+  against 1.75 for the frame-at-a-time playback stream - `sendChunks()` moves `CHUNKSIZE` (4KB,
+  `appGlobals.h`) per read and send, and raising it is the obvious unclaimed win here
 - `/control?reset=1` - soft restart
 
 ## Bench discipline
@@ -402,6 +405,20 @@ shows up only on the NEXT boot as a refused camera frame buffer.
   sensor-branch rule above). After any UI change, `DRY=1` on `ui_regress.sh` is the smoke test and
   the full run is the gate. Still owed: the dark-room AWB comparison, the `colorbar` firmware half
   (never persist, clear at boot), the `wb_mode` firmware gate, and the open-file leak audit
+- **Playback is now BUFFERED IN THE BROWSER** (§38.22, 5 Sep 2026, **page only, no firmware**): tapping a
+  clip fetches it with `/file?path=` and plays it locally - a forward walk of the `00dc`/`01wb` chunks,
+  frames drawn to a canvas, and the **audio played at last** (it was always in the file; `getNextFrame`
+  stepped over every `01wb` chunk and threw it away). Full recorded rate with sound, against the board's
+  21.9 fps silent stutter. **The audio is the clock**: chunks are scheduled on an AudioContext at their
+  content time and the frame is chosen from `currentTime`, which is what gives pause, seek and sync for
+  free. Read the rate from the header's rational at `0x80`/`0x84`, never the filename (29.939 vs 30,
+  1.739 vs 2). **Playback starts when the remaining download is no longer slower than the remaining
+  playback**, measured live - a fixed lead stalls, because the link delivers a clip more slowly than it
+  plays. Two traps, both measured: **rAF is not a safe pump** (a visible page where it never fired once
+  played the whole soundtrack against a frozen frame), so a 100 ms interval carries the audio, the bar,
+  the end/stall checks and a drawing floor while rAF only draws; and the **AudioContext must be opened
+  inside the click**, or it is born suspended and the video clock freezes with it. Clips above 64MB
+  (a 75 s HD30 recording is 126MB) fall back to the board's streamed playback unchanged
 - **Gallery** (§38.20, 5 Sep 2026, firmware + page): every Get Still is now FILED on the card as
   `/YYYYMMDD/YYYYMMDD_HHMMSS_<SIZE>.jpg` - before this, stills existed only as a browser response
   and nothing had ever written a `.jpg`. The listing carries them (`listDir` takes a comma list;

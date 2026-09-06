@@ -478,6 +478,20 @@ multi-second frame, holds the lens by hand, and hands the sensor back on the way
   guards that are not tuning: generation is refused while recording, and the page keeps exactly two
   thumbnail fetches in flight - measured at 2, with the SD log still serving 4.9MB straight afterwards.
 
+- **Playback moved into the browser** (§38.22, page only). The board was never able to play a clip
+  properly: it paces frames onto the wire and measured 21.9 fps for a 30 fps recording, silent, while
+  stepping over and discarding every audio chunk in the file. Tapping a clip now fetches it with
+  `/file?path=` and plays it here - a forward walk of the container, frames on a canvas, and the
+  recording's own sound, which had been in the AVI all along. The audio is the clock, so picture and
+  sound actually agree and pause, seek and the scrub bar come for free. Playback starts when the
+  measured download rate says it can finish without running into the end of the buffer: on the real
+  board a 20.2MB clip started at 9 s with 57% fetched and never stalled. The bar carries buffered and
+  played positions on one track, and on a phone every piece of chrome - badges, close, track, buttons,
+  the sensor rail - sits in strips above and below the picture rather than on top of it, so the video
+  is unobstructed. A quality picker is not there and cannot be: rescaling would need a decode and
+  re-encode per frame, and one 1/8-scale decode on this board measures 275-542 ms. Clips over 64MB
+  (a 75 s HD30 recording is 126MB) still use the board's streamed playback.
+
 Still owed here: a long-exposure recording has never been run end to end, and the dark-room AWB
 comparison from C3 is still outstanding.
 

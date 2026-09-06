@@ -15,6 +15,8 @@
             '<symbol id="icon-gear" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M21.5 12 18.467 14.679 18.717 18.717 14.679 18.467 12 21.5 9.321 18.467 5.283 18.717 5.533 14.679 2.5 12 5.533 9.321 5.283 5.283 9.321 5.533 12 2.5 14.679 5.533 18.717 5.283 18.467 9.321Z M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/></symbol>' +
             '<symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></symbol>' +
             '<symbol id="icon-speaker" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4v-5Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></symbol>' +
+            '<symbol id="icon-speaker-off" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4v-5Z"/><path d="M16.5 10l4 4M20.5 10l-4 4"/></symbol>' +
+            '<symbol id="icon-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>' +
             '<symbol id="icon-pin" viewBox="0 0 24 24"><path d="M9 3h6l-.7 6.2L18 12.5v2h-5v6l-1 2-1-2v-6H6v-2l3.7-3.3L9 3Z"/></symbol>' +
             '<symbol id="icon-close" viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></symbol>' +
             // long exposure / night mode. Stroked crescent, same weight as the rest of the set
