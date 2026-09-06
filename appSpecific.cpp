@@ -491,8 +491,8 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
     // govEase is the one field that OUTLIVES a recording: a no-frame rescue leaves the
     // governor's base above the configured quality, and this says by how much until the
     // ease-down has walked it off. It is the only place the divergence is visible as a number
-    sprintf(jsonBuff, "{\"fps\":\"%u\",\"fpsCeil\":\"%u\",\"aecMax\":\"%d\",\"budgetKBs\":\"%u\",\"frameKB\":\"%u\",\"govBoost\":\"%u\",\"govEase\":\"%u\",\"frameCapKB\":\"%u\"}",
-      captureFPS, fpsCeiling((framesize_t)fsizePtr), aecMax, sdBudgetKBs(), sdGovFrameKB, sdGovBoost, sdGovEase, frameWindowKB(fsizePtr));
+    sprintf(jsonBuff, "{\"fps\":\"%u\",\"fpsCeil\":\"%u\",\"aecMax\":\"%d\",\"budgetKBs\":\"%u\",\"frameKB\":\"%u\",\"govBoost\":\"%u\",\"govEase\":\"%u\",\"govWrites\":\"%u\",\"frameCapKB\":\"%u\"}",
+      captureFPS, fpsCeiling((framesize_t)fsizePtr), aecMax, sdBudgetKBs(), sdGovFrameKB, sdGovBoost, sdGovEase, govWrites, frameWindowKB(fsizePtr));
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, jsonBuff);
   }
@@ -551,6 +551,16 @@ esp_err_t appSpecificWebHandler(httpd_req_t *req, const char* variable, const ch
       alertBufferSize = 0;
     } else LOG_WRN("Failed to get still");
   } 
+  else if (!strcmp(variable, "govWinMs")) {
+    // The SD governor's measurement window AND decision interval - one knob for both. 0 decides on
+    // every saved frame, which at 30fps is a tick every ~33ms and turns every tick-counted
+    // threshold in sdGovernor() into a thirtieth of its calibrated time. Bench knob, RAM only
+    govWinMs = constrain(atoi(value), 0, 5000);
+    LOG_INF("SD governor: measurement window %ums%s", govWinMs, govWinMs ? "" : " (every frame)");
+    sprintf(jsonBuff, "{\"govWinMs\":\"%u\"}", govWinMs);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, jsonBuff);
+  }
   else if (!strcmp(variable, "govEaseSecs")) {
     // How many consecutive safe ticks the SD governor's ease-down needs per step back toward the
     // configured quality. Bench knob, RAM only, so a walk rate can be swept without a reflash.

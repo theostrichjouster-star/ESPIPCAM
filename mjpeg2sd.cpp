@@ -183,6 +183,32 @@ static uint32_t frameInterval; // units of us between frames
 uint8_t sdGovBoost = 0;    // current boost, 0 = user quality untouched (reported by updateFPS)
 uint16_t sdGovFrameKB = 0; // last-second average frame KB while recording, else 0 (updateFPS)
 uint8_t sdGovEase = 0;     // steps the base still owes the user's quality, 0 = level (updateFPS)
+#define GOV_WIN_MS 1000 // DEFAULT for govWinMs: the measurement window, and so also the decision
+                        // interval - the two are the same knob here. Every threshold in
+                        // sdGovernor() counts TICKS, so this is what makes a tick a second.
+                        //
+                        // 1000 IS NOT ARBITRARY AND A PER-FRAME WINDOW FAILS. Measured both ways
+                        // on the bench (6 Sep 2026, BOARD_TESTING 38.30). The SD write ceiling is
+                        // a SUSTAINED property - a property of a second - and sampling it over one
+                        // frame period measures frame-arrival JITTER instead. The sensor delivers
+                        // in bursts, so at QSXGA 5fps frames 116-128ms apart against a 200ms period
+                        // read 4370-4491 KB/s against a 4012 push threshold, and the boost went
+                        // 0->4->0 for nothing: 8 spurious writes in a steady lit scene.
+                        // At HD 30fps it is far worse, because a 33ms sample is almost all jitter:
+                        // adjacent frames read 2544 and 4660 KB/s where the true sustained figure
+                        // is 2871 (95.7KB x 30fps), straddling BOTH thresholds, giving 96 quality
+                        // writes in an 87s steady clip - and the ease-down made ZERO progress for
+                        // the whole clip, because the churn kept zeroing govEaseTicks. Delivery
+                        // itself survived (30.0fps, busy 65%), so the cost is SCCB traffic, a
+                        // quality that flickers with frame jitter, and no recovery at all.
+                        //
+                        // What DID work is the short DECISION interval on its own: at QSXGA the
+                        // walk finished in 11s against 45s, same endpoint, correctly spaced. So the
+                        // fix if this is ever wanted is to decouple the two - a rolling trailing-1s
+                        // demand figure with per-frame decisions - not to shorten the window
+uint16_t govWinMs = GOV_WIN_MS; // /control?govWinMs=<0..5000>, 0 = decide on every frame
+uint16_t govWrites = 0;   // quality writes the governor made during this clip, for closeAvi. The
+                          // churn metric, and immune to the RTC ring overflowing at a short window
 uint8_t govEaseSecs = GOV_EASE_TICKS; // the ease-down's persistence filter in ticks (~seconds),
                           // settable at the bench with /control?govEaseSecs=<1..60> so the walk
                           // rate can be swept without a reflash. 1 = a step every tick, which
@@ -448,15 +474,25 @@ static void govDegradeBase(int q) {
 }
 
 static void sdGovernor() {
-  // 1Hz while recording: compare the last second's write demand to the SD ceiling and
-  // trade JPEG quality for frame delivery when frames outgrow it. A saturated card
-  // delivers ~100% of budget by definition, so sustained saturation keeps raising the
-  // boost until frames shrink below the ceiling - which is the recovery path
+  // Called once per saved frame and self-gated to govWinMs (1Hz by default): compare the
+  // window's write demand to the SD ceiling and trade JPEG quality for frame delivery when
+  // frames outgrow it. A saturated card delivers ~100% of budget by definition, so sustained
+  // saturation keeps raising the boost until frames shrink below the ceiling - the recovery path
   uint32_t now = millis();
-  if (now - govWindowMs < 1000) return;
+  uint32_t winMs = now - govWindowMs;
+  // govWinMs 0 decides on EVERY frame. Note what that does to the rest of this function: every
+  // threshold below is a TICK count (GOV_RELAX_TICKS, govEaseSecs), so shortening the window
+  // speeds all of them up in proportion - at 30fps a 10-tick filter becomes a third of a second.
+  // It also changes what is being measured: sdGovFrameKB stops being an average and becomes one
+  // frame's size, and demandKBs is derived from a millis() interval of a single frame period
+  if (winMs < govWinMs) return;
+  // Two frames inside the same millisecond would divide by zero. Impossible under the 1000ms
+  // default, reachable per-frame, and returning WITHOUT advancing govWindowMs is what makes the
+  // next frame's interval measurable instead of losing the sample
+  if (!winMs) return;
   uint32_t winBytes = vidSize - govLastVidSize;
   uint16_t winFrames = frameCnt - govLastFrameCnt;
-  uint32_t demandKBs = (uint32_t)(((uint64_t)winBytes * 1000) / (now - govWindowMs)) / 1024;
+  uint32_t demandKBs = (uint32_t)(((uint64_t)winBytes * 1000) / winMs) / 1024;
   sdGovFrameKB = winFrames ? winBytes / winFrames / 1024 : 0;
   govLastVidSize = vidSize;
   govLastFrameCnt = frameCnt;
@@ -484,6 +520,7 @@ static void sdGovernor() {
       int q = govBaseQ + sdGovBoost;
       if (q > 63) q = 63;
       s->set_quality(s, q);
+      govWrites++;
       LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u", q, sdGovBoost, demandKBs, budget);
     }
   } else if (demandKBs < (uint32_t)budget * GOV_RELAX_PCT / 100 && sdGovBoost && !windowNear) {
@@ -496,6 +533,7 @@ static void sdGovernor() {
       int q = govBaseQ + sdGovBoost;
       if (q > 63) q = 63;
       s->set_quality(s, q);
+      govWrites++;
       LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u", q, sdGovBoost, demandKBs, budget);
     }
   } else {
@@ -528,6 +566,7 @@ static void sdGovernor() {
         govEaseTicks = 0;
         govBaseQ--;
         s->set_quality(s, govBaseQ);
+        govWrites++;
         LOG_INF("SD governor: quality eased to %u toward the configured %u - frames %u KB, demand %lu KB/s of %u",
           govBaseQ, govUserQ, sdGovFrameKB, demandKBs, budget);
       }
@@ -574,6 +613,7 @@ static void openAvi() {
   // and the ease-down idle rather than aiming at 0
   if (!govUserQ) govUserQ = govBaseQ;
   govOpenQ = govBaseQ;
+  govWrites = 0;
   sdGovBoost = govMaxBoost = govLowTicks = govEaseTicks = 0;
   sdGovEase = (govBaseQ > govUserQ) ? govBaseQ - govUserQ : 0;
   sdGovFrameKB = 0;
@@ -1808,6 +1848,10 @@ static bool closeAvi() {
       }
       LOG_INF("Average SD write speed: %lu kB/s", ((vidSize / wTimeTot) * 1000) / 1024);
       if (govMaxBoost) LOG_INF("SD governor: max quality boost %u (quality %u of base %u)", govMaxBoost, govBaseQ + govMaxBoost, govBaseQ);
+      // The churn metric. One write per quality step is healthy; a count far above the number of
+      // steps the clip actually needed means the governor is flapping, which a short govWinMs can
+      // cause and which the RTC ring may be too small to show line by line
+      if (govWrites) LOG_INF("SD governor: %u quality write(s) this clip at a %ums window", govWrites, govWinMs);
       // The durable record of an unfinished walk. The ease-down logs each step at INF, which may
       // sit in the stdio buffer, while the rescue that caused it forced a sync as a WRN - so
       // without this line the log reads as though quality was raised and never given back

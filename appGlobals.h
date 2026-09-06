@@ -386,6 +386,8 @@ extern int battWarnMv;
 extern uint16_t battMv;
 extern uint8_t sdGovBoost; // SD governor's active quality boost steps, 0 outside recordings
 extern uint16_t sdGovFrameKB; // last-second average frame KB while recording, else 0
+extern uint16_t govWinMs;   // SD governor measurement window and decision interval, /control?govWinMs
+extern uint16_t govWrites;  // governor quality writes this clip - the churn metric
 extern uint8_t govEaseSecs; // ease-down persistence filter in ticks (~secs), /control?govEaseSecs
 extern uint8_t sdGovEase; // steps the governor's base still owes the configured quality after a
                           // no-frame rescue, 0 = level. Non-zero means the sensor is compressing
