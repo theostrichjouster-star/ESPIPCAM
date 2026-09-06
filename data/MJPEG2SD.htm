@@ -1174,6 +1174,51 @@
         flex-shrink: 0;
       }
 
+      /* ---- the gallery's own header row: Up on the left, Tile view and its toggle paired on the
+         right. The label used to sit hard left with the toggle hard right, a whole panel apart ---- */
+      /* flex-end, not an auto margin on the label: Up is hidden at the root and in list view, and
+         a hidden element's auto margin pushes nothing, so the pair would fall back to the left */
+      #galleryTiles-group {
+        align-items: center;
+        justify-content: flex-end;
+      }
+      #galleryTiles-group > #folderUp {
+        position: relative;   /* the grown hit area below measures against this, not .input-group */
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        min-height: 0;
+        margin: 0 auto 0 0;   /* the auto is what pushes the Tile view pair to the right */
+        padding: 0;
+      }
+      #galleryTiles-group > #folderUp .icon {
+        width: 70%;
+        height: 70%;
+        margin: 0;
+      }
+      /* 32px keeps it visually smaller than the toggle beside it, which is what it is for, but a
+         thumb needs 44. The switch already solves this the same way: grow the hit box, not the art */
+      #galleryTiles-group > #folderUp::after {
+        content: "";
+        position: absolute;
+        top: -0.375rem;
+        bottom: -0.375rem;
+        left: -0.375rem;
+        right: -0.375rem;
+      }
+      /* beats the phone rule that stretches a switch row's label across the row */
+      #galleryTiles-group > label {
+        flex: 0 0 auto;
+        min-width: 0;
+        padding-right: var(--buttonHalf);
+      }
+      #galleryTiles-group > .switch {
+        margin-left: 0;
+      }
+
       /* ---- gallery tiles: the same listing as the select, drawn as thumbnails ---- */
       #fileGrid {
         grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
@@ -1267,7 +1312,9 @@
         border: 2px solid var(--buttonText);
         background: rgba(18, 22, 28, 0.55);
       }
-      #fileGrid.pickMode .fileTile[data-kind="file"] .tileCheck {
+      /* folders tick too, for deletion. Files and folders are never ticked together - deleting a
+         folder takes everything inside it, which is a different decision from deleting clips */
+      #fileGrid.pickMode .fileTile .tileCheck {
         display: block;
       }
       .fileTile .tileCheck .icon {
@@ -1603,7 +1650,10 @@
           background: var(--pageBackground);
           border: none;
           border-radius: 0;
-          padding: calc(env(safe-area-inset-top) + 3.25rem) 0.75rem calc(env(safe-area-inset-bottom) + 2rem);
+          /* the top used to clear the whole close button (3.25rem), leaving a band of empty page
+             above every sheet title. The title now sits ON that line instead - see .nav-toggle
+             below, which reserves the button's width on its right rather than its height above */
+          padding: calc(env(safe-area-inset-top) + 0.5rem) 0.75rem calc(env(safe-area-inset-bottom) + 2rem);
         }
         #menu-container .pin-menu {
           display: none; /* pinning means nothing when the panel is the whole screen */
@@ -1635,8 +1685,15 @@
         body.sheet-open {
           overflow: hidden;
         }
+        /* the sheet title shares its line with the fixed close button: the button is 2.75rem wide
+           at 0.75rem from the screen edge, and the panel already carries 0.75rem of its own, so
+           2.75rem of padding on the right is exactly enough to keep the text clear of it */
         .nav-toggle {
+          display: flex;
+          align-items: center;
+          min-height: 2.75rem;
           margin-left: 0;
+          padding-right: 2.75rem;
           font-size: calc(var(--bodySize) * 1.15);
         }
 
@@ -1986,12 +2043,31 @@
         /* the four file actions become tool tiles, the same shape and grid as Camera Tools, so a
            thumb finds them in the same place on both cards. Start Playback is MOVED in here by
            placePlaybackButton, which is why the row is four wide */
+        /* One scroller, not two. The grid's own 60vh cap made the sheet a scroll box inside a
+           scroll box, and vh is the LARGE viewport on a phone - taller than what is actually
+           visible under the browser's chrome - so the cap did not stop the four buttons being
+           pushed off the bottom. The sheet scrolls; the grid is as tall as it needs to be. */
+        #fileGrid {
+          max-height: none;
+          overflow: visible;
+        }
         section#fileActions {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
           gap: var(--buttonHalf);
           /* no padding of its own: the row then shares its left and right edges with the tile
              grid above it, which is what makes the two read as one card rather than two */
+        }
+        /* the bar and the buttons never leave the screen. However many tiles are above them they
+           stay on the bottom edge of the sheet, and settle into place at the end of the scroll */
+        #fileFooter {
+          position: sticky;
+          bottom: 0;   /* sticky sticks to the SCROLLPORT, so this is the screen's bottom edge */
+          z-index: 5;
+          margin: 0 -0.75rem;   /* the sheet's own side padding, so the band spans the full width */
+          padding: var(--buttonQuart) 0.75rem calc(env(safe-area-inset-bottom) + var(--buttonHalf));
+          background: var(--pageBackground);
+          border-top: 1px solid var(--itemBorder);
         }
         section#fileActions button {
           box-sizing: border-box;
@@ -2797,7 +2873,13 @@
                   <!-- Tiles and list are two views of the SAME listing: getFiles() fills both from
                        one fetch, and the select stays the thing that holds the selection, so
                        Download, Delete and Upload keep working unchanged -->
+                  <!-- Up sits on the left of this row and the Tile view label pairs with its own
+                       toggle on the right. It replaces the go-up TILE, which cost a whole cell of
+                       the grid; it is shown only in tile view, and only when there is somewhere to
+                       go up to (the board's listing carries a "/" row inside a day folder, none at
+                       the root) -->
                   <div class="input-group" id="galleryTiles-group">
+                    <button class="local hidden" id="folderUp" title="Back to the folder list" aria-label="Back to the folder list"><svg class="icon" aria-hidden="true"><use href="#icon-up"></use></svg></button>
                     <label for="galleryTiles">Tile view</label>
                     <div class="switch">
                       <input id="galleryTiles" type="checkbox" class="local">
@@ -2818,18 +2900,23 @@
                        multi-selection exists; a DIV with no status key of its own, so
                        updateStatus() never writes into it -->
                   <div id="fileSelInfo" class="hidden"></div>
-                  <div id="progressRow">
-                    <progress id="progressBar" value='0' max='100' class="info"></progress><span>%</span>
+                  <!-- the bar and the four actions travel together: on a phone this whole block is
+                       pinned to the bottom of the sheet, so a transfer's progress is beside the
+                       button that started it however far the tile grid has scrolled -->
+                  <div id="fileFooter">
+                    <div id="progressRow">
+                      <progress id="progressBar" value='0' max='100' class="info"></progress><span id="progressPct">0%</span>
+                    </div>
+                    <!-- NOT id="buttons": addButtons() injects a second section carrying that id
+                         into the .addButtons div ABOVE this one, so placePlaybackButton's lookup
+                         would find that one instead and drop Start Playback among Save Settings and
+                         Reboot ESP. Its own id makes the target unambiguous whenever it runs -->
+                    <section id="fileActions">
+                      <button class="local" title="Download the selected file, or every ticked file" id="download" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-download"></use></svg><span class="tile-label">Download</span></button>
+                      <button class="local" title="Upload selected file/folder to Fileserver" id="upload" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span class="tile-label">File Upload</span></button>
+                      <button class="local" title="Delete the selected file, or every ticked file" id="delete" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-trash"></use></svg><span class="tile-label">Delete</span></button>
+                    </section>
                   </div>
-                  <!-- NOT id="buttons": addButtons() injects a second section carrying that id
-                       into the .addButtons div ABOVE this one, so placePlaybackButton's lookup
-                       would find that one instead and drop Start Playback among Save Settings and
-                       Reboot ESP. Its own id makes the target unambiguous whenever it runs -->
-                  <section id="fileActions">
-                    <button class="local" title="Download the selected file, or every ticked file" id="download" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-download"></use></svg><span class="tile-label">Download</span></button>
-                    <button class="local" title="Upload selected file/folder to Fileserver" id="upload" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span class="tile-label">File Upload</span></button>
-                    <button class="local" title="Delete the selected file, or every ticked file" id="delete" value="1"><svg class="tile-icon" aria-hidden="true"><use href="#icon-trash"></use></svg><span class="tile-label">Delete</span></button>
-                  </section>
   <!--
                   <div class="input-group auth-group">
                     <label for="useFtps">Use FTPS</label>
@@ -3568,6 +3655,12 @@
           else if (key == "download") { doDownload(); return; }
           else if (key == "sfile") fromUser = selectFileOrFolder(value, fromUser);
           else if (key == "galleryTiles") { setGalleryView(isOn(value)); return; }
+          else if (key == "folderUp") { if (upTarget) selectFileOrFolder(upTarget, true); return; }
+          // the board's own FTP upload percent. It has never reached this bar: updateStatus writes
+          // into text, DIV.displayonly, INPUT, TD and SELECT, and a PROGRESS element is none of
+          // those, so the value arrived every poll and was dropped. Page-driven transfers own the
+          // bar while they run, so the poll must not fight them for it
+          else if (key == "progressBar") { if (!xferBusy) setProgress(Number(value)); return; }
           // the buffered clip player's own controls. Both are "local", so nothing is sent
           else if (key == "playToggle") { clip && clip.playing ? clipPause() : clipPlay(); return; }
           else if (key == "playSound") { clipSound(); return; }
@@ -3820,15 +3913,76 @@
           paths.push(one);
         }
         stopAll("doDownload");
-        for (const p of paths) {
-          const a = document.createElement('a');
-          a.href = webServer + '/file?path=' + encodeURIComponent(p);
-          a.download = p.split('/').pop();
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          if (paths.length > 1) await sleep(1500);
+        xferBusy = true;
+        setProgress(0);
+        try {
+          for (let i = 0; i < paths.length; i++) {
+            await fetchToDisk(paths[i], i, paths.length);
+            if (i < paths.length - 1) await sleep(1200);
+          }
+          selNote(paths.length > 1 ? paths.length + ' files downloaded' : 'Download complete');
+        } finally {
+          xferBusy = false;
         }
+      }
+
+      function saveBlobAs(blobOrUrl, name) {
+        const url = typeof blobOrUrl === 'string' ? blobOrUrl : URL.createObjectURL(blobOrUrl);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // the browser needs the object URL to outlive the click while it takes its copy
+        if (typeof blobOrUrl !== 'string') setTimeout(() => URL.revokeObjectURL(url), 60000);
+      }
+
+      async function fetchToDisk(path, idx, total) {
+        /* Read the response body ourselves so the bar can move per byte. The browser's own
+           downloader reports nothing back, which is why the bar could never work for a download.
+           NO SIZE LIMIT here, deliberately (the user's decision, 6 Sep 2026): the 256MB ceiling
+           belongs to buffered PLAYBACK, where decoded frames pile on top of the buffer. A download
+           holds bytes and nothing else. If the browser still cannot hold them, the catch hands the
+           file back to the browser's own downloader - the file always arrives, and the only thing
+           a very large one can cost is the progress bar. */
+        const name = path.split('/').pop();
+        const url = webServer + '/file?path=' + encodeURIComponent(path);
+        const of = total > 1 ? ' (' + (idx + 1) + ' of ' + total + ')' : '';
+        const known = fileSizes[path] || 0;
+        try {
+          const resp = await fetch(url);
+          if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText);
+          if (!resp.body) throw new Error('no streaming body');
+          const reader = resp.body.getReader();
+          const chunks = [];
+          let got = 0;
+          for (;;) {
+            const r = await reader.read();
+            if (r.done) break;
+            chunks.push(r.value);
+            got += r.value.length;
+            // without a size from the listing there is no percentage to give, so say the bytes
+            if (known) setProgress(got * 100 / known);
+            selNote('Downloading ' + name + of + ' - ' + fmtBytes(got) + (known ? ' of ' + fmtBytes(known) : ''));
+          }
+          const blob = new Blob(chunks, {type: 'application/octet-stream'});
+          chunks.length = 0;
+          setProgress(100);
+          saveBlobAs(blob, name);
+        } catch (e) {
+          // out of memory, or the fetch failed. Hand it to the browser rather than lose the file
+          selNote('Downloading ' + name + of + ' through the browser - no progress for this one');
+          setProgress(0);
+          saveBlobAs(url, name);
+          await sleep(1200);
+        }
+      }
+
+      function fmtBytes(n) {
+        if (n < 1024) return n + ' bytes';
+        if (n < 1048576) return Math.round(n / 1024) + 'KB';
+        return (n / 1048576).toFixed(1) + 'MB';
       }
 
       function getStill() {
@@ -4190,11 +4344,10 @@
         return base;
       }
 
-      function folderCaption(label, isUp) {
-        // A folder's label carries no size and may carry spaces (".. [ Up ]", "Go to current
-        // (today)"), so the file rule's split(' ')[0] would truncate it to "Go". Day folders are
-        // bare dates - shown as 2026-09-05, which is what a person reads
-        if (isUp) return 'Up';
+      function folderCaption(label) {
+        // A folder's label carries no size and may carry spaces ("Go to current (today)"), so the
+        // file rule's split(' ')[0] would truncate it to "Go". Day folders are bare dates - shown
+        // as 2026-09-05, which is what a person reads
         const m = String(label).match(/^(\d{4})(\d{2})(\d{2})$/);
         return m ? m[1] + '-' + m[2] + '-' + m[3] : String(label);
       }
@@ -4218,13 +4371,18 @@
         grid.innerHTML = '';
         // a new listing invalidates any ticked set - those paths may not even be in this folder
         pickedPaths.clear();
+        pickKind = '';
         const run = thumbRun;
+        upTarget = '';
         rows.forEach(([path, label]) => {
+          // The board's own "/" row is the way back up - it appears in every listing INSIDE a day
+          // folder and never at the root. It used to be drawn as a tile, which cost a whole cell of
+          // the grid; it is the small Up button beside the Tile view toggle now
+          if (path === '/') { upTarget = path; return; }
           const isFile = isPlayablePath(path);
-          const isUp = path === '/';   // listDir puts its own "/" row first in every file listing
           const tile = document.createElement('button');
           tile.type = 'button';
-          tile.className = 'fileTile local' + (isFile ? '' : (isUp ? ' folderTile upTile' : ' folderTile'));
+          tile.className = 'fileTile local' + (isFile ? '' : ' folderTile');
           tile.dataset.path = path;
           tile.dataset.kind = isFile ? 'file' : 'folder';
           tile.title = label;
@@ -4237,24 +4395,39 @@
           } else {
             // same box the thumbnail would fill, so folder and file tiles line up
             tile.insertAdjacentHTML('beforeend',
-              '<svg class="tileGlyph" aria-hidden="true"><use href="#icon-' + (isUp ? 'up' : 'folder') + '"></use></svg>');
+              '<svg class="tileGlyph" aria-hidden="true"><use href="#icon-folder"></use></svg>');
           }
           const cap = document.createElement('span');
           cap.className = 'tileCap';
-          cap.textContent = isFile ? tileCaption(label) : folderCaption(label, isUp);
+          cap.textContent = isFile ? tileCaption(label) : folderCaption(label);
           tile.appendChild(cap);
           if (isFile) {
             const size = document.createElement('span');
             size.className = 'tileSize';
             size.textContent = sizeTextFromLabel(label);
             tile.appendChild(size);
-            tile.insertAdjacentHTML('beforeend',
-              '<span class="tileCheck"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg></span>');
           }
+          // folders tick as well as files, for deletion
+          tile.insertAdjacentHTML('beforeend',
+            '<span class="tileCheck"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg></span>');
           grid.appendChild(tile);
         });
         thumbNext(run);
+        applyUpButton();
         applyPickState();
+      }
+
+      function applyUpButton() {
+        // only in tile view (the list has its own ".. [ Up ]" option), and only where there is
+        // somewhere to go: the root listing carries no "/" row
+        const btn = $('#folderUp');
+        if (!btn) return;
+        upTarget && galleryTilesOn() ? show(btn) : hide(btn);
+      }
+
+      function galleryTilesOn() {
+        const grid = $('#fileGrid');
+        return !!grid && !grid.classList.contains('hidden');
       }
 
       /* Selection and opening are two steps now, not one. A tap used to fetch and play the clip
@@ -4265,10 +4438,27 @@
 
       let pickedPaths = new Set(); // the ticked set, for Download and Delete
       let pickMode = false;        // ticks are only drawn once there is something ticked
+      let pickKind = '';           // 'file' or 'folder' - a set is one or the other, never both
       let selPath = '';            // the single selection Start Playback will open
+      let upTarget = '';           // where the Up button goes, or '' at the root
 
       function pickedList() {
         return Array.from(pickedPaths);
+      }
+
+      /* The percent bar. It has never moved: the board reports `progressBar` in /status for an FTP
+         upload, but updateStatus only writes into text, DIV.displayonly, INPUT, TD and SELECT, so
+         a PROGRESS element was never a target and every value was dropped. Three drivers now - the
+         poll for uploads, this page for downloads and deletions - and xferBusy says which owns it,
+         so a 5 s poll cannot stamp the board's stale number over a running download. */
+      let xferBusy = false;
+
+      function setProgress(pct) {
+        const bar = $('#progressBar'), lab = $('#progressPct');
+        if (!bar) return;
+        const v = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+        bar.value = v;
+        if (lab) lab.textContent = v + '%';
       }
 
       function selNote(text) {
@@ -4282,13 +4472,20 @@
 
       function clearPicked() {
         pickedPaths.clear();
+        pickKind = '';
         applyPickState();
       }
 
       function togglePick(tile) {
-        if (!tile || tile.dataset.kind != 'file') return;
-        const p = tile.dataset.path;
+        if (!tile || !tile.dataset.kind) return;
+        const p = tile.dataset.path, kind = tile.dataset.kind;
+        // a selection is files OR folders, never both: deleting a folder takes everything inside
+        // it, which is a different decision from deleting three clips, and Download cannot fetch
+        // a folder at all. Ticking the other kind starts a fresh set rather than mixing
+        if (pickedPaths.size && kind != pickKind) pickedPaths.clear();
+        pickKind = kind;
         pickedPaths.has(p) ? pickedPaths.delete(p) : pickedPaths.add(p);
+        if (!pickedPaths.size) pickKind = '';
         applyPickState();
       }
 
@@ -4302,10 +4499,14 @@
             t.classList.toggle('current', !pickMode && t.dataset.path === selPath);
           });
         }
+        const folders = pickKind == 'folder';
+        const noun = folders ? (pickedPaths.size == 1 ? ' day folder selected' : ' day folders selected')
+                             : (pickedPaths.size == 1 ? ' file selected' : ' files selected');
         const info = $('#fileSelInfo');
         if (info) {
-          info.textContent = pickedPaths.size + (pickedPaths.size == 1 ? ' file selected' : ' files selected')
-                           + ' - tap to add or remove, Download or Delete acts on all of them';
+          info.textContent = pickedPaths.size + noun + ' - tap to add or remove, '
+                           + (folders ? 'Delete removes each one and everything in it'
+                                      : 'Download or Delete acts on all of them');
           pickMode ? show(info) : hide(info);
         }
         // Both of these act on ONE file - playback plays a clip, upload sends a file to the
@@ -4315,6 +4516,13 @@
           pickMode ? disable(up) : enable(up);
           up.title = pickMode ? 'Upload sends one file at a time - clear the selection first'
                               : 'Upload selected file/folder to Fileserver';
+        }
+        // /file?path= serves a file, so a folder selection is for Delete only
+        const dl = $('#download');
+        if (dl) {
+          folders ? disable(dl) : enable(dl);
+          dl.title = folders ? 'A folder cannot be downloaded - open it and pick its files'
+                             : 'Download the selected file, or every ticked file';
         }
         if (playbackButton && !isActive(playbackButton)) {
           if (pickMode) {
@@ -4397,14 +4605,17 @@
           if (!tile) return;
           ev.stopPropagation();
           if (lpFired) { lpFired = false; return; } // the long press has already acted on this tile
-          if (tile.dataset.kind == 'file' && (ev.ctrlKey || ev.metaKey || pickMode)) { togglePick(tile); return; }
+          // folders tick too. While a set is ticked a tap on a folder toggles it rather than
+          // navigating into it - the only way to browse from here is to clear the selection first,
+          // which is what the ticks and the count line are saying
+          if (ev.ctrlKey || ev.metaKey || pickMode) { togglePick(tile); return; }
           tileSelect(tile);
         });
         grid.addEventListener('pointerdown', ev => {
           lpCancel();
           lpFired = false;
           const tile = ev.target.closest ? ev.target.closest('.fileTile') : null;
-          if (!tile || tile.dataset.kind != 'file') return;
+          if (!tile || !tile.dataset.kind) return;
           lpTile = tile;
           lpX = ev.clientX;
           lpY = ev.clientY;
@@ -4432,6 +4643,7 @@
         tiles ? show(grid) : hide(grid);
         if (tiles) grid.style.display = 'grid';
         list.style.display = tiles ? 'none' : 'grid';
+        applyUpButton(); // the list carries its own ".. [ Up ]" option, so Up is tile view only
         try { localStorage.setItem('galleryTiles', tiles ? '1' : '0'); } catch (e) {}
       }
 
@@ -5398,26 +5610,51 @@
       async function sdFile(key, value) {
         if (key == "delete") {
           const paths = pickedList();
-          if (paths.length) {
-            if (!confirm("Delete these " + paths.length + " files from the SD card?\n\n"
-                       + paths.map(p => p.split('/').pop()).join('\n'))) return false;
-            // one at a time with a gap: this board is never given back-to-back HTTP, and each
-            // delete also removes the clip's csv, srt and cached thumbnail on the card
-            for (const p of paths) {
-              await sendControl('delete', p);
-              await sleep(1200);
-            }
-            clearPicked();
-            selectFileOrFolder("/~reset", true);
-            return;
+          const folders = pickKind == 'folder';
+          if (!paths.length) {
+            // value is the button's, which is "1" until a file or folder has been chosen. Deleting
+            // that is meaningless and the confirm text made it look deliberate
+            if (!value || value[0] != '/') return selNote('Select a file or folder first, then Delete');
+            paths.push(value);
           }
-          // value is the button's, which is "1" until a file or folder has been chosen. Deleting
-          // that is meaningless and the confirm text made it look deliberate
-          if (!value || value[0] != '/') return selNote('Select a file or folder first, then Delete');
-          if (!confirm("Are you sure you want to delete " + value + " from the SD card?")) return false;
+          const names = paths.map(p => p.split('/').pop()).join('\n');
+          const ask = folders
+            ? "Delete " + (paths.length == 1 ? "this day folder" : "these " + paths.length + " day folders")
+              + " and EVERYTHING inside?\n\n" + names
+            : paths.length == 1 ? "Are you sure you want to delete " + paths[0] + " from the SD card?"
+                                : "Delete these " + paths.length + " files from the SD card?\n\n" + names;
+          if (!confirm(ask)) return false;
+          // one at a time with a gap: this board is never given back-to-back HTTP. Each file
+          // delete also removes the clip's csv, srt and cached thumbnail, and a folder delete
+          // empties the folder first - both finish before the board answers, so the gap is real
+          xferBusy = true;
+          setProgress(0);
+          try {
+            for (let i = 0; i < paths.length; i++) {
+              selNote('Deleting ' + paths[i].split('/').pop()
+                    + (paths.length > 1 ? ' (' + (i + 1) + ' of ' + paths.length + ')' : ''));
+              await sendControl('delete', paths[i]);
+              setProgress((i + 1) * 100 / paths.length);
+              await sleep(1200); // including after the last one - the re-listing below is a request too
+            }
+          } finally {
+            xferBusy = false;
+          }
+          clearPicked();
+          selPath = '';
+          // the three buttons still hold a path that no longer exists
+          ['#download', '#delete', '#upload'].forEach(s => { const e = $(s); if (e) e.value = '1'; });
+          // stay where the user was. Deleting files used to drop back to the folder list, which is
+          // wrong when the point of ticking several was to prune one day's recordings; deleting
+          // folders has nowhere to stay, so that one does go back
+          const parent = paths[0].substring(0, paths[0].lastIndexOf('/'));
+          selectFileOrFolder("/~reset", false); // clears the list's options and the selection
+          await getFiles(folders || !parent ? "/~reset" : parent);
+          selNote(paths.length > 1 ? paths.length + ' deleted' : 'Deleted');
+          return;
         }
         sendControl(key, value);
-        if (key == "delete" || key == "uploadMove") selectFileOrFolder("/~reset", true);
+        if (key == "uploadMove") selectFileOrFolder("/~reset", true);
       }
 
       function sendAll(key, val) {
