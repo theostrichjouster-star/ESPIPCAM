@@ -397,7 +397,31 @@ elsewhere in this file are the same items seen from their own subject.
 1. **`/sustain?download=0` wedges the web server** (§38.21, unexplained). No abort needed, the first
    download after a boot has done it, recovery is a reset. Not reachable from the page any more
    (§38.25) but still compiled. **Never test it on COM3** - that is COM4's peer-reset lever
-1b. **NEXT CAMPAIGN, not started: retune the mainstays against the 88 MHz PIXCLK ceiling**
+1a. **NEXT CAMPAIGN, baseline measured, no changes made yet: retune the 11 VISIBLE sizes, 1 fps to
+   ceiling** (user's brief, 7 Sep 2026). Four goals: maximise exposure per size, eliminate dropped
+   frames, keep motion detection / idle throttle / governor boost off the delivered rate, and expose
+   50 / 60 / off banding to the user. **§38.37 is the opening baseline** - all 22 points (1 fps and
+   ceiling for each size) read off the board. What it says:
+   - **Exposure fills the SENSOR's frame at every point (98-100%), so the deficit is entirely that at
+     1 fps the sensor runs faster than the request and the frame timer decimates.** As a percentage of
+     the 1000 ms request: QSXGA and QHD 99%, FHDNARROW 85, FHDFULL 83, FHDMID 65, 1280X960 42, HD /
+     VGANARROW / QVGANARROW 40, **VGA and QVGA 20**
+   - Two causes, one hazard each, both cheap to test and neither tested: **the four clock-tuned sizes
+     are pinned at the driver's VTS** (VGA/QVGA 984, FHDMID 1344, FHDFULL 1488 against 1968), worth
+     2x / 1.5x / 1.3x - blocked by §10's measured halving on scaler sizes, which FHDMID and FHDFULL
+     were never actually tested against; and **binned sizes cannot pass HTS ~2277**, capping HD at
+     399 ms - above 2644 the line cleanly costs 2 x HTS, which would double the exposure, unwalked
+   - **At the ceiling there is no exposure headroom at any size**, so goal 1 is purely a low-rate
+     problem and does not fight the 88 MHz raise except at the top rung
+   - **Goal 4 is nearly free**: `banding` already works, persists and is measured - it is just not on
+     the page (config row group 98, URL only). One select element
+   - **Goal 3 is partly done**: `idleThrottle` already stands down for a recording, stream, playback
+     or still; its cost is the retime on release. Motion detection's ~4.8% delivery loss is the real item
+   - **Goal 2 needs a decision**: at the ceiling, "no dropped frames" means LOWERING ceilings to the
+     sustainable rate (1280X960 and SXGA are 99% busy and deliver ~93% of rated), which pulls against
+     raising them with the clock. Ask before sweeping
+   - Scale: 448 rungs for all 11 sizes at every integer fps. Narrow first, do not sweep first
+1b. **Retune the mainstays against the 88 MHz PIXCLK ceiling**
    (§38.35 carries the full brief and the fresh per-size baseline). §37 established the in-spec 88 MHz
    route (0x3108 = 0x11, VCO 440, mul 66) and it was applied to **1280X960 alone**; every other
    mainstay still runs 80.00 MHz, so +10% clock is +10% fps at unchanged HTS x VTS on arithmetic.
