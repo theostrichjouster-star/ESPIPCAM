@@ -132,6 +132,27 @@ The web UI's controls (§38):
   Measured clean at 8 sizes twice on 6 Sep 2026; `parse_avi.py` carries `govWrites`, `govWin` and
   the ease-down's two closing lines for it
 
+Long exposure and the exposure baseline (§38.36-37):
+- `exposure_baseline.sh` - max exposure per VISIBLE frame size at 1 fps and at the ceiling, read off
+  the board's own retime line plus `updateFPS`'s `aecMax`. 22 points, ~15 min, `SIZES_LIST` overrides
+  the set as `name:idx:ceiling`. This is the map for "maximise exposure per size": it showed exposure
+  already fills the SENSOR's frame at every point, so the low-rate deficit is entirely the frame timer
+  decimating a sensor that runs faster than the request. **Two traps it was written around**: `aecMax`
+  arrives only in `updateFPS`'s JSON reply (not the log, not `/status`), and a size change retimes at
+  the OLD rate first - so the line must be matched on `for request <fps>`, or the idle throttle's
+  figure is read as the answer
+- `night_ceiling_probe.sh` - where a long exposure stops DELIVERING frames. Counts complete frames off
+  the stream per rung and reports delivered/produced. Holds the stream across each change deliberately:
+  a session that has stopped delivering cannot be retimed or left. `MSLIST`, `WIN`
+- `night_revert_verify.sh` - the Long Exposure panel at its 3.18 s ceiling through the page's own
+  path, a longer request clamped rather than refused, and recovery from a forced no-frame state
+- `night5s_verify.sh` - the 5 s attempt, kept as the record: every register and arithmetic check
+  passed and it failed on delivery, which is how the 4.0-4.5 s cliff was found
+- `stream_grab.py` - one complete JPEG out of a raw MJPEG capture. **The instrument below ~1 fps**,
+  where the still handler's 1.2 s wait makes a request a coin flip (zero stills in 59 requests at
+  7.5 and 10 s frames). Requires a start-of-frame marker, because the sensor really does emit a
+  68-byte header-only frame that a marker-pair scan calls complete
+
 Dead ends kept as records (§31, §37) - do not re-walk without a new mechanism:
 - `hts_floor.sh` - the HTS floor walk whose gates passed corrupt frames (the reason for
   `still_color.py`)
