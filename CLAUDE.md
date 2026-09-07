@@ -128,9 +128,14 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - **Every file in /data suddenly unopenable? It is the mount's open-file slots, not the card.**
   `utilsFS.cpp` `prepSD_MMC()` passes `maxOpenFiles = 15` (raised from the core's default of 5,
   before 5 Sep 2026 - earlier notes here and in §38.8 / §38.19 say five and are STALE). The SD log
-  holds one, a recording holds its AVI plus the CSV and SRT, and an aborted browser transfer leaves
-  another (`WARN sendChunks Failed to send to browser ... ESP_ERR_HTTPD_RESP_SEND` opens each
-  window). Past that, EVERY open fails - reads and writes, any file - until a remount, while the
+  holds one, and a recording holds its AVI plus the CSV and SRT. **An aborted browser transfer does
+  NOT leak a slot** - measured on COM4, 6 Sep 2026 (§38.34): three `/file?path=` downloads killed
+  mid-transfer, `fileProbe` reading 14 free before and after every one. The claim that it did was
+  this file's own, it predates §38.21 finding the real leak in the SD log, and it is now retracted by
+  measurement rather than by argument. `sendChunks` does log
+  `WARN Failed to send to browser ... ESP_ERR_HTTPD_RESP_SEND` on the abort, which is what made it a
+  plausible suspect - the warning is real, the leak is not.
+  Past the ceiling EVERY open fails - reads and writes, any file - until a remount, while the
   boot listing still shows the files present with their real timestamps. The 5 Sep exhaustion
   therefore reached FIFTEEN, so the leak is worse than the raised ceiling suggests and any bulk
   browsing must stay bounded (the gallery holds 2 fetches in flight). Measured on COM4 twice on 5 Sep 2026 (§38.8); COM3 took the identical uploads at the
