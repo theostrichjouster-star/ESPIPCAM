@@ -397,10 +397,28 @@ elsewhere in this file are the same items seen from their own subject.
 1. **`/sustain?download=0` wedges the web server** (§38.21, unexplained). No abort needed, the first
    download after a boot has done it, recovery is a reset. Not reachable from the page any more
    (§38.25) but still compiled. **Never test it on COM3** - that is COM4's peer-reset lever
+1b. **NEXT CAMPAIGN, not started: retune the mainstays against the 88 MHz PIXCLK ceiling**
+   (§38.35 carries the full brief and the fresh per-size baseline). §37 established the in-spec 88 MHz
+   route (0x3108 = 0x11, VCO 440, mul 66) and it was applied to **1280X960 alone**; every other
+   mainstay still runs 80.00 MHz, so +10% clock is +10% fps at unchanged HTS x VTS on arithmetic.
+   **Most of it is unreachable** - see item 2: at their present ceilings 1280X960 and SXGA are at 99%
+   busy and 1280X960 is already ON 88 MHz and still delivers 38.1 of 41, so a clock raise buys those
+   two nothing. Target the four with real time headroom: **QVGA 15% busy, VGA 39%, FHDMID 46%,
+   FHDFULL 53%.** Two hard constraints: ~90 MHz is the sensor's digital-path cliff so this is one step
+   and not a walk (96 is corrupt by every route), and raising the clock SHORTENS the line at fixed
+   HTS, so every binned size needs its HTS raised to hold the ~24.5 us row time that keeps the
+   bistable magenta latch away - which is exactly why 1280X960 went HTS 2112 -> 2156. The open
+   question worth testing rather than assuming: §31 concluded PIXCLK "helps 1280X960 ALONE" because
+   its scaler pass is 1:1, which would exclude QVGA and VGA - the two sizes with the most headroom
 2. **The governor pushes on KB/s only, never on storage TIME.** 1280X960 at its ceiling spends 25 ms
    of a 26 ms period writing and delivers 38.1 of 41 while demand sits under the push line, so the
    governor correctly does nothing about a rate the card is actually costing (§38.32, and the same
-   note from 2 Sep). The one size where the trigger and the real constraint disagree
+   note from 2 Sep). The one size where the trigger and the real constraint disagree.
+   **Busy % per mainstay at its ceiling, lit q10, measured 6 Sep 2026** - this is what decides whether
+   any fps work can help a size, so read it before proposing a rate change: 1280X960 99, SXGA 99,
+   FHDNARROW 85, QHD 72, FHDFULL 53, FHDMID 46, VGA 39, QVGA 15. Busy counts the blocked time the
+   frame pipeline spends in storage plus buffering plus monitoring, so a size at 99% is out of
+   headroom no matter what the sensor is capable of
 3. **Twenty frame sizes have no frame-window protection, and three of them matter.** 7832a16
    correctly stopped `frameWindowKB` handing QHD's 800 KB cliff to every size it does not name, so
    the governor's pre-arm and the ease-down's safety gate now stand down for all of them - better
