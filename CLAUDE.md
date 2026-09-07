@@ -220,6 +220,24 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   42 / 114 / 612 in one dark room against 171-256 lit), so a dark hold must place the lens at
   a lit code by register (`AF_VCM_SET`, datasheet table 3-2: code = 0x3603[5:0] << 4 |
   0x3602[7:4]) with the MCU stopped, and prove it by readback.
+- **THE AF MCU'S FIRMWARE DOES NOT SURVIVE THE HOLD, so releasing the reset resumes nothing**
+  (§38.33, 6 Sep 2026). Halting the MCU (0x3000 bit 5) discards its program - the library's own
+  `focusInit()` re-downloads the whole `OV5640_AF_Config` blob to 0x8000+ every time for exactly
+  that reason. `camFocusAuto()` used to write only 0x3000 = 0x00 and log "continuous again", so the
+  Autofocus toggle looked like it worked and the lens never moved again: measured, focused at 213,
+  held at 600 by hand, and still 600 after toggling back on. **The fix is the boot pair,
+  `ov5640AF.focusInit()` then `ov5640AF.autoFocusMode()`** - reload, then arm - which took the lens
+  600 -> 85 sweeping -> 199 settled. It is unconditional, so the toggle RE-ACQUIRES rather than
+  merely resuming, which is a "find focus" button's behaviour without exposing single-shot
+- **Do NOT hand-roll the AF mailbox; it reads as success and does nothing.** With no firmware
+  resident, writing 0x3023 = 0x01 then 0x3022 = 0x04 got 0x3023 CLEARED - an apparent
+  acknowledgement - while the lens sat at rest (VCM 42 in a lit room). `autoFocusMode()` also sends
+  a CMD_MAIN 0x01 / 0x08 preamble before the 0x04 that a hand-rolled version misses. `bench_lib.sh`
+  `af_resume` has the same latent gap: it releases the MCU and sends 0x04 without reloading the
+  firmware, and only ever logged the status rather than checking the lens moved
+- The AF re-init costs **~1 s** of SCCB blob download and runs inline on the caller's task. For the
+  UI toggle that is the httpd worker deliberately: the same second on the capture task would stall
+  frame delivery and hole any recording, and nothing here changes frame timing
 - HTS is 13 bits (0x380C[4:0], 0x380D): 8191 is the register's end, 3.18 s of ceiling at the
   10.13 MHz floor. Above the AEC band the sensor trades gain for line length 1:1 (57
   gain-seconds in the dark bench room, measured 4 Sep 2026: 26x at 2.2 s, 20x at 2.7 s, 19x

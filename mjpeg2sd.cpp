@@ -3615,6 +3615,7 @@ static void applyAecLimits(sensor_t* s) {
 // exactly why a long exposure needs the focus set by hand. Datasheet table 3-2:
 // code = 0x3603[5:0] << 4 | 0x3602[7:4], with 0x3602[3:0] the slew mode, which is preserved.
 // Same sequence as bench_lib.sh af_hold, including 0x3603 before 0x3602 and the read-back
+//
 bool camFocusManual(int code) {
   sensor_t* s = esp_camera_sensor_get();
   if (s == NULL || s->set_reg == NULL || s->get_reg == NULL) return false;
@@ -3642,11 +3643,42 @@ bool camFocusManual(int code) {
   return true;
 }
 
+// Handing the lens back. THE AF MCU'S FIRMWARE DOES NOT SURVIVE THE HOLD, which is what made this
+// look far simpler than it is (bug found 6 Sep 2026). camFocusManual() halts the MCU through 0x3000
+// bit 5, and the library's own focusInit() shows why that is destructive: it downloads the whole
+// OV5640_AF_Config blob to 0x8000+ every time, precisely because a halted MCU has no program left.
+// So releasing the reset - all this function used to do, under a log line claiming "continuous
+// again" - restarted nothing. The lens stayed exactly where the manual adjustment left it for the
+// rest of the session, and toggling Autofocus back on did nothing whatsoever.
+//
+// A hand-rolled mailbox command is NOT the fix either. Measured on COM4: with no firmware resident
+// there is nothing to run the command, 0x3023 cleared so it read as ACKNOWLEDGED, and the lens still
+// sat at rest - VCM 42 in a lit room where AF had been holding 228. autoFocusMode() also carries a
+// CMD_MAIN 0x01 / 0x08 preamble ahead of the 0x04 that a hand-rolled version misses.
+//
+// The correct sequence is the pair the boot path already uses, in that order: reload the firmware,
+// then arm continuous. Deliberately unconditional, so toggling Autofocus on always RE-ACQUIRES
+// rather than merely resuming - which gives the "find focus" behaviour without exposing single-shot
+// (CMD_MAIN 0x03), the command that wedged this MCU in permanent hunt at 21.5 fps (recordingCamMode).
+//
+// Runs inline, ~1 s for the blob download over SCCB ("the AF blob download spends its second",
+// prepCam). For the UI toggle that is the httpd worker, and it is the right place to pay it: the
+// same second on the capture task would stall frame delivery and hole any recording. This changes
+// no frame timing, so the capture task's ownership of the tuner is not in question, and
+// camFocusManual() already writes AF registers inline from the same task
 void camFocusAuto() {
+#if INCLUDE_AF
   sensor_t* s = esp_camera_sensor_get();
-  if (s == NULL || s->set_reg == NULL) return;
-  s->set_reg(s, 0x3000, 0xFF, 0x00); // restart the AF program - continuous again
-  LOG_INF("Focus: AF program restarted, continuous");
+  if (s == NULL) return;
+  ov5640AF.start(s);
+  uint8_t res = ov5640AF.focusInit();   // 0x3000 halt, blob to 0x8000+, release, wait for idle
+  if (res == 0) res = ov5640AF.autoFocusMode();
+  if (res == 0) LOG_INF("Focus: AF firmware reloaded, continuous AF re-acquiring (status 0x%02X, lens at VCM %d)",
+    ov5640AF.getFWStatus(), camFocusCode());
+  else LOG_WRN("Focus: AF re-init failed (%u) - lens left at VCM %d", res, camFocusCode());
+#else
+  LOG_WRN("Focus: built without INCLUDE_AF - no autofocus to resume");
+#endif
 }
 
 int camFocusCode() {
@@ -3656,6 +3688,7 @@ int camFocusCode() {
   if (r2 < 0 || r3 < 0) return -1;
   return ((r3 & 0x3F) << 4) | ((r2 >> 4) & 0x0F);
 }
+
 
 // Manual white balance gains, for the green cast a long exposure leaves. The AWB's own gains track
 // the AEC's gain (the high-gain pedestal), and at a multi-second frame in a dark room it converges
