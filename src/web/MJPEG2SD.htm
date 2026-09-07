@@ -2701,6 +2701,32 @@
                     <input type="range" id="agc_gain" min="0" max="30" value="5">
                     <div name="rangeMax">31x</div>
                   </div>
+                  <!-- The mains banding filter. ONE config row, `banding`, carrying three states -
+                       0 off, 50 and 60 the manual bands - shown as a toggle plus a frequency that
+                       only appears while the toggle is on. Both controls are "local" because neither
+                       id is the config key: each derives and sends `banding` itself, so the page
+                       never sends a frequency the toggle says is off (UI_REVIEW A3).
+                       Off is the persisted default and deliberately so: with the filter off the AEC
+                       spends the whole frame on exposure before reaching for gain. The driver's own
+                       init has it ON at 50 Hz, which held the AEC at two bands plus gain near the
+                       ceiling (4 Sep 2026). applyAecLimits keeps the band step registers correct
+                       whichever way this sits, so turning it on lands on the true mains grid -->
+                  <div class="input-group" id="bandingOn-group">
+                    <label for="bandingOn">Banding Filter</label>
+                    <div class="switch">
+                      <input id="bandingOn" class="local" type="checkbox"
+                             title="The mains flicker filter. Off by default: the AEC then spends the whole frame on exposure before reaching for gain. On, exposure is quantised to whole mains half cycles, which is what removes rolling bands under artificial light">
+                      <label class="slider" for="bandingOn"></label>
+                    </div>
+                  </div>
+                  <div class="input-group hidden" id="bandingHz-group">
+                    <label for="bandingHz">Mains Frequency</label>
+                    <select id="bandingHz" class="selectField local"
+                            title="The local mains frequency: 50 Hz across most of the world, 60 Hz in North America and parts of Japan and Brazil. The wrong one bands about as badly as no filter at all">
+                      <option value="50" selected="selected">50 Hz</option>
+                      <option value="60">60 Hz</option>
+                    </select>
+                  </div>
                   <div class="input-group group-head"><label>Colour</label></div>
                     <div class="input-group" id="awb-group">
                         <label for="awb">AWB Enable</label>
@@ -3682,6 +3708,28 @@
           else if (key == "govBoost") { govBoost = Number(value); updateBudget(); return; }
           else if (key == "govEase") { govEase = Number(value); updateBudget(); return; }
           else if (key == "frameCapKB") { frameCapKB = Number(value); updateBudget(); return; }
+          // The banding filter's two local controls. `banding` is one config row with three states,
+          // so the toggle and the frequency have to be combined into a single send - and the
+          // frequency row is hidden while the filter is off, which means the page must not send it
+          // either. Both return, so the generic tail never sees an id the board does not know.
+          else if (key == "bandingOn" || key == "bandingHz") {
+            // isOn, not a truthiness test: a checkbox hands this "0" as a STRING when it is
+            // unchecked and every string but "" is truthy in JavaScript
+            const on = (key == "bandingOn") ? isOn(value) : $('#bandingOn').checked;
+            rowShown('bandingHz', on);
+            // read the frequency off the element rather than off `value`, so the toggle's own send
+            // carries whichever band is currently selected
+            if (fromUser) debounceSendControl('banding', on ? $('#bandingHz').value : "0");
+            return;
+          }
+          // and the value coming back from the poll, which drives both controls and sends nothing
+          else if (key == "banding") {
+            const hz = Number(value) || 0;
+            $('#bandingOn').checked = hz > 0;
+            if (hz > 0) $('#bandingHz').value = String(hz);
+            rowShown('bandingHz', hz > 0);
+            return;
+          }
           else if (key == "zoneMask") { if (!fromUser) { setZoneMask(value); return; } }
           else if (key == "get-still") getStill();
           // the guard used to live here, on the single selection's value, which refused a download
