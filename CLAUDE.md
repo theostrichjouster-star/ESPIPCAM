@@ -738,6 +738,29 @@ elsewhere in this file are the same items seen from their own subject.
   Playback (the user's choice), so the app header is the way home. Everything is built to 48px touch
   targets - verify by scripting each element's box at 375px, not by looking. The desktop layout is
   unchanged apart from the body font stack and real icons where `➤` / `▢` used to be
+- **The phone's two cards are FOUR and EIGHT tiles, and three of them move at runtime** (7 Sep 2026).
+  Device Controls is Record / Start Stream / Get Still / Listen; Camera Tools is Camera, Night Mode,
+  Motion, Gallery, Controls, Access, Edit Config, Status. `placePhoneTiles()` moves Edit Config into
+  the tools card and Listen out of it, reversing both on the `48rem` media-query change, exactly as
+  `placePlaybackButton` does - moved, never cloned, for the same duplicate-id reason. **Edit Config
+  gains `quick-nav` on the way in and loses it on the way out**: the phone tile styling is written
+  for `.tab .navtop button` and `.quick-nav`, and once it leaves the tab row neither reaches it. Its
+  `.tablinks` class stays, which is what keeps the click dispatch sending it to `openTab`.
+  `#statusCard` is last in the markup so Edit Config can be inserted BEFORE it and Status stays
+  bottom right. A repositioning is driven by the media-query event, so a script that measures
+  immediately after setting a viewport reads the OLD arrangement - settle first, or the pass is a race
+- **A tile whose phone label is shorter carries two spans**, `.tile-label` and `.tile-short`, with
+  `hasShort` on the button choosing between them. Record / Stop on a phone, Start Recording / Stop
+  Recording on the desktop. It cannot be one span relabelled at a breakpoint, because
+  `setActionLabel()` rewrites that text every time the button toggles and a label picked at load
+  would go stale on the first press - so `setActionLabel` writes both, falling back to the full text
+- **System Status is hidden on a phone until the Status tile asks for it** (`body.status-open`,
+  remembered in `localStorage` per browser, every access in try/catch). It must be hidden in the
+  media block and NOT with the page's own `hide()`, which writes an inline `display: none` that would
+  follow the element to the desktop - where that same `section#footer` is the permanent bottom strip.
+  The chevron that used to collapse the card is gone with its `statusToggle` branch and `.collapsed`
+  rules; a fixed-position footer reports `offsetParent === null`, so do not test it for visibility
+  that way
 - `tools/core/README.md` - custom arduino-esp32 core: why, how to build, the four
   version pins, the sdkconfig gate, and candidate future config changes (committed)
 - `tools/bench/README.md` - how to run the sweep campaigns and the rules they enforce

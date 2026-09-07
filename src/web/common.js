@@ -10,7 +10,10 @@
           const sprite = '<svg xmlns="http://www.w3.org/2000/svg" style="display:none">' +
             '<symbol id="icon-camera" viewBox="0 0 24 24"><path d="M4 8.5h2.7L8.2 6h7.6l1.5 2.5H20a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.3"/></symbol>' +
             '<symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12S5.6 5.5 12 5.5 22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>' +
-            '<symbol id="icon-film" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M9.5 9l6 3-6 3V9Z" fill="currentColor" stroke="none"/></symbol>' +
+            // the frame was a <rect>, which the stylesheet's bare `rect` rule blew up to the whole
+            // 24x24 viewBox and filled with the button blue - so it drew a full-bleed outline that
+            // read thinner and larger than every other icon. Same fix as icon-image below: a path
+            '<symbol id="icon-film" viewBox="0 0 24 24"><path d="M5 4.5h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2Z"/><path d="M9.5 9l6 3-6 3V9Z" fill="currentColor" stroke="none"/></symbol>' +
             '<symbol id="icon-sliders" viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor"/></symbol>' +
             '<symbol id="icon-gear" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M21.5 12 18.467 14.679 18.717 18.717 14.679 18.467 12 21.5 9.321 18.467 5.283 18.717 5.533 14.679 2.5 12 5.533 9.321 5.283 5.283 9.321 5.533 12 2.5 14.679 5.533 18.717 5.283 18.467 9.321Z M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/></symbol>' +
             '<symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></symbol>' +
@@ -38,7 +41,7 @@
             '<symbol id="icon-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="9"/></symbol>' +
             '<symbol id="icon-play" viewBox="0 0 24 24"><path d="M10 8.5l6 3.5-6 3.5V8.5Z" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="9"/></symbol>' +
             '<symbol id="icon-broadcast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/><path d="M8 8a5.5 5.5 0 0 0 0 8M16 16a5.5 5.5 0 0 0 0-8"/><path d="M5 5a9.5 9.5 0 0 0 0 14M19 19a9.5 9.5 0 0 0 0-14"/></symbol>' +
-            '<symbol id="icon-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l4.5-4.5 4 4 3-2.5L20 18"/></symbol>' +
+            '<symbol id="icon-image" viewBox="0 0 24 24"><path d="M5.5 5h13a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l4.5-4.5 4 4 3-2.5L20 18"/></symbol>' +
             // replaces icon-grid, which was four 7x7 rects: at the 20px the card heading gives it
             // their 1.75 strokes and 1.67px gaps merged and it read as one solid block, not a grid
             '<symbol id="icon-wrench" viewBox="0 0 24 24"><path d="M15 6a1.05 1.05 0 0 0 0 1.5l1.5 1.5a1.05 1.05 0 0 0 1.5 0l3.4-3.4a5.9 5.9 0 0 1-7.8 7.8l-6.8 6.8a2.1 2.1 0 0 1-2.95-2.95l6.8-6.8a5.9 5.9 0 0 1 7.8-7.8Z"/></symbol>' +

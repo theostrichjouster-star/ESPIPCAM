@@ -1431,8 +1431,17 @@
       /* A tap that lands on a tile's icon or its label still has to reach the tile. The click
          dispatch in common.js reads event.target and a SPAN matches none of its branches, so a
          label would swallow the tap - the same reason svg.icon is already pointer-transparent. */
-      .tile-icon, .tile-label {
+      .tile-icon, .tile-label, .tile-short {
         pointer-events: none;
+      }
+
+      /* A tile whose phone label is shorter than its desktop one carries both, and .hasShort on the
+         button says which is in force. The desktop never shows the short form; the phone card block
+         swaps them. Written as two spans rather than one relabelled at a breakpoint because
+         setActionLabel rewrites the record button's text as it toggles, and a label chosen once at
+         load would go stale the first time anyone pressed it. */
+      .tile-short {
+        display: none;
       }
 
       .tile-icon {
@@ -1716,13 +1725,18 @@
           height: calc(var(--buttonSize) * 1.5);
           flex: 0 0 auto;
         }
-        .tile-label {
+        .tile-label, .tile-short {
           display: block;
           /* wrap between words only. overflow-wrap:anywhere broke labels mid-word ("Camer a",
              "Galler y") at the 75px a quarter of a 375px phone gives */
           word-break: normal;
           overflow-wrap: normal;
           hyphens: none;
+        }
+        /* .hasShort is on the button, so this beats the rule above at equal-or-higher specificity
+           and only the short form survives here */
+        .hasShort .tile-label {
+          display: none;
         }
 
         /* --- camera tools --- */
@@ -2071,26 +2085,15 @@
           grid-column: 1 / -1;
           margin: 0;
         }
-        section#footer.collapsed {
-          gap: 0;
-        }
-        section#footer.collapsed .info-group {
+        /* The card is off until the Status tile asks for it. It has to be hidden HERE rather than
+           with the page's own hide(), which writes an inline display:none - that would follow the
+           element to the desktop, where this same section is the permanent strip along the bottom
+           and must always be on screen. */
+        section#footer {
           display: none;
         }
-        #statusHead #statusToggle {
-          margin-left: auto;
-          width: 2.75rem;
-          height: 2.75rem;
-          padding: 0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: transparent;
-          transition: transform 160ms ease;
-          touch-action: manipulation;
-        }
-        #statusHead #statusToggle[aria-expanded="false"] {
-          transform: rotate(-90deg);
+        body.status-open section#footer {
+          display: grid;
         }
         #footer .info-group {
           margin: 0;
@@ -2316,8 +2319,7 @@
         }
 
         @media (prefers-reduced-motion: reduce) {
-          .tab .navtop button, .quick-nav, #statusHead #statusToggle,
-          .switch .slider::before {
+          .tab .navtop button, .quick-nav, .switch .slider::before {
             transition: none;
           }
         }
@@ -2419,8 +2421,10 @@
       <ul class="navtop">
         <button class="tablinks camTab noMobile active" name="mainPage" aria-label="Camera" title="Camera"><svg class="tile-icon" aria-hidden="true"><use href="#icon-camera"></use></svg><span class="tile-label">Camera</span></button>
         <button class="tablinks noMobile" name="ShowLog"><svg class="tile-icon" aria-hidden="true"><use href="#icon-doc"></use></svg><span class="tile-label">Show Log</span></button>
-        <button class="tablinks" name="EditConfig"><svg class="tile-icon" aria-hidden="true"><use href="#icon-edit"></use></svg><span class="tile-label">Edit Config</span></button>
-        <button class="tablinks noMobile" onclick="window.location.href='/web?OTA.htm'"><svg class="tile-icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span class="tile-label">OTA Upload</span></button>
+        <!-- moves into the Camera Tools card on a phone (placePhoneTiles). The OTA button carries
+             an id only so this one has an unambiguous marker to come home in front of -->
+        <button class="tablinks" id="cfgTab" name="EditConfig"><svg class="tile-icon" aria-hidden="true"><use href="#icon-edit"></use></svg><span class="tile-label">Edit Config</span></button>
+        <button class="tablinks noMobile" id="otaTab" onclick="window.location.href='/web?OTA.htm'"><svg class="tile-icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span class="tile-label">OTA Upload</span></button>
       </ul>
       <section id="main">
         <nav id="maintoolbar">
@@ -2428,7 +2432,10 @@
             <!-- the float:right each of these carried is gone: the list is a flex row now, and an
                  inline float would have beaten the stylesheet and left the widths unsettable -->
             <li class="ind-item"><span id="recording-indicator" class="hidden" style="display: none;"></span></li>
-            <li><button id="forceRecord"><svg class="tile-icon" aria-hidden="true"><use href="#icon-record"></use></svg><span class="tile-label">Start Recording</span></button></li>
+            <!-- hasShort: the phone shows .tile-short in place of .tile-label, so this tile reads
+                 Record / Stop where the desktop button still reads Start Recording / Stop Recording.
+                 setActionLabel writes both, so the pair cannot drift out of step -->
+            <li><button id="forceRecord" class="hasShort"><svg class="tile-icon" aria-hidden="true"><use href="#icon-record"></use></svg><span class="tile-label">Start Recording</span><span class="tile-short">Record</span></button></li>
             <li class="sep-item"><div class="sep"></div></li>
             <li><button id="forceStream" class="local"><svg class="tile-icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg><span class="tile-label">Start Stream</span></button></li>
             <li><button id="get-still" class="local"><svg class="tile-icon" aria-hidden="true"><use href="#icon-image"></use></svg><span class="tile-label">Get Still</span></button></li>
@@ -2464,11 +2471,16 @@
                 <nav class="quick-nav" id="nightControl" name="night-control" role="button" tabindex="0" aria-expanded="false" title="Long exposure - stills and video below 1 fps"><svg class="icon" aria-hidden="true"><use href="#icon-moon"></use></svg><span class="tile-label">Night Mode</span></nav>
                 <nav class="quick-nav" id="motionRec" name="motion-record" role="button" tabindex="0" aria-expanded="false" title="Motion detection and recording"><svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg><span class="tile-label">Motion</span></nav>
                 <nav class="quick-nav" id="fileControl" name="playback-transfers" role="button" tabindex="0" aria-expanded="false" title="Gallery - recordings, playback and download"><svg class="icon" aria-hidden="true"><use href="#icon-film"></use></svg><span class="tile-label">Gallery</span></nav>
-                <nav class="quick-nav" id="picSettings" name="picture-settings" role="button" tabindex="0" aria-expanded="false" title="Image settings - exposure, colour, geometry"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg><span class="tile-label">Image Settings</span></nav>
-                <nav class="quick-nav" id="accSettings" name="access-settings" role="button" tabindex="0" aria-expanded="false" title="System - access, storage and maintenance"><svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg><span class="tile-label">System</span></nav>
+                <nav class="quick-nav" id="picSettings" name="picture-settings" role="button" tabindex="0" aria-expanded="false" title="Image settings - exposure, colour, geometry"><svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg><span class="tile-label">Controls</span></nav>
+                <nav class="quick-nav" id="accSettings" name="access-settings" role="button" tabindex="0" aria-expanded="false" title="System - access, storage and maintenance"><svg class="icon" aria-hidden="true"><use href="#icon-gear"></use></svg><span class="tile-label">Access</span></nav>
                 <!-- must stay a <button>: common.js dispatches BUTTON by id (giving key
-                     spkrRem) but NAV by class, which routes into navigation() instead -->
+                     spkrRem) but NAV by class, which routes into navigation() instead.
+                     On a phone this one MOVES into Device Controls - see placePhoneTiles -->
                 <button class="quick-nav" id="spkrRem" aria-pressed="false" title="Listen - hear the camera's microphone"><svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg><span class="tile-label">Listen</span></button>
+                <!-- Last in the grid on purpose: placePhoneTiles inserts Edit Config BEFORE it, so
+                     Status stays bottom right however the row fills. Phone only - on a desktop the
+                     footer is the permanent strip along the bottom and has nothing to toggle -->
+                <button class="quick-nav local mobileOnly" id="statusCard" type="button" aria-pressed="false" title="Show system status"><svg class="icon" aria-hidden="true"><use href="#icon-chart"></use></svg><span class="tile-label">Status</span></button>
               </nav>
               <div id="menu-top" class="menu-pinned">
                 <!-- one close control for all six sheets, rather than one per panel. Shown only in
@@ -3279,9 +3291,10 @@
           <!-- On a phone this is the "System Status" card: the same thirteen fields, laid out as a
                grid and collapsible. On desktop it stays the fixed strip along the bottom -->
           <section id="footer" class="measure">
+            <!-- the chevron that used to close this card is gone: the Status tile in Camera Tools
+                 is the switch, and two controls for one card is one too many -->
             <h2 class="card-head mobileOnly" id="statusHead">
               <svg class="icon-inline" aria-hidden="true"><use href="#icon-chart"></use></svg>System Status
-              <button id="statusToggle" class="local" type="button" aria-expanded="true" title="Collapse system status"><svg class="icon" aria-hidden="true"><use href="#icon-chevron"></use></svg></button>
             </h2>
             <div class="info-group center">
                 <label for="fw_version">Version</label>
@@ -3593,7 +3606,13 @@
       function mobileInit() {
         placePlaybackButton();
         placeViewControls();
-        mobileMQ.addEventListener('change', () => { placePlaybackButton(); placeViewControls(); sheetApply(false); });
+        placePhoneTiles();
+        let statusOpen = false;
+        try { statusOpen = localStorage.getItem('statusCardOpen') == '1'; } catch (e) {}
+        setStatusCard(statusOpen);
+        mobileMQ.addEventListener('change', () => {
+          placePlaybackButton(); placeViewControls(); placePhoneTiles(); sheetApply(false);
+        });
         // the phone's Back gesture must close the sheet, not leave the page. Without this, backing
         // out of a settings sheet is the quickest way for a user to lose the whole page
         window.addEventListener('popstate', () => {
@@ -3618,6 +3637,50 @@
         if (!btn || !sheetHome || !deskHome) return;
         if (isMobile()) { if (btn.parentElement !== sheetHome) sheetHome.insertBefore(btn, sheetHome.firstChild); }
         else if (btn.parentElement !== deskHome) deskHome.appendChild(btn);
+      }
+
+      function placePhoneTiles() {
+        /* Two more one-element-two-homes moves, same rule as placePlaybackButton: MOVED, never
+           cloned, because updateStatus() matches a status key to the element whose id equals it and
+           a duplicate would only ever fill the first one.
+           On a phone, Edit Config belongs with the other settings tools rather than alone in Device
+           Controls, and Listen belongs with the things you press to make the camera do something.
+           Edit Config picks up quick-nav on the way in and drops it on the way out - the phone tile
+           styling is written for .tab .navtop button and .quick-nav, and once it leaves the tab row
+           neither would reach it. Its .tablinks class stays either way, which is what keeps the
+           click dispatch routing it to openTab. */
+        const cfg = $('#cfgTab'), listen = $('#spkrRem'), statusTile = $('#statusCard');
+        const tools = $('#menu-selector'), ota = $('#otaTab');
+        const tabRow = document.querySelector('.tab > ul.navtop');
+        const toolbar = document.querySelector('#maintoolbar ul.navtop');
+        if (!cfg || !listen || !tools || !ota || !tabRow || !toolbar) return;
+        if (isMobile()) {
+          if (cfg.parentElement !== tools) {
+            cfg.classList.add('quick-nav');
+            tools.insertBefore(cfg, statusTile);   // before Status, so Status stays bottom right
+          }
+          if (listen.parentElement !== toolbar) toolbar.appendChild(listen);  // right of Get Still
+        } else {
+          if (cfg.parentElement !== tabRow) {
+            cfg.classList.remove('quick-nav');
+            tabRow.insertBefore(cfg, ota);         // back to third in the tab row
+          }
+          if (listen.parentElement !== tools) tools.insertBefore(listen, statusTile);
+        }
+      }
+
+      function setStatusCard(open) {
+        /* The System Status card is off by default on a phone and the Status tile is its switch.
+           Remembered per browser, never sent to the board: a localStorage read can throw outright
+           in a private window or with site data blocked, so a failure just means the default. */
+        const tile = $('#statusCard');
+        document.body.classList.toggle('status-open', open);
+        if (tile) {
+          tile.classList.toggle('active', open);
+          tile.setAttribute('aria-pressed', open ? 'true' : 'false');
+          tile.title = open ? 'Hide system status' : 'Show system status';
+        }
+        try { localStorage.setItem('statusCardOpen', open ? '1' : '0'); } catch (e) {}
       }
 
       function placeViewControls() {
@@ -3662,7 +3725,7 @@
         }
       }
 
-      function setActionLabel(btn, icon, text, on) {
+      function setActionLabel(btn, icon, text, on, short) {
         /* The transport buttons used to have their whole innerHTML rewritten to change label, which
            would delete the tile icon the phone layout puts inside them. Label and icon are set
            separately now, and the arrow / square characters they used to carry are real icons. */
@@ -3670,6 +3733,10 @@
         const lab = btn.querySelector('.tile-label');
         if (!lab) { btn.innerHTML = text; return; }
         lab.textContent = text;
+        // the phone's shorter form, on the buttons that carry one. Falls back to the full text so a
+        // caller that does not know about it cannot leave the two spans saying different things
+        const sh = btn.querySelector('.tile-short');
+        if (sh) sh.textContent = short || text;
         if (icon) {
           const use = btn.querySelector('.tile-icon use');
           if (use) use.setAttribute('href', '#icon-' + icon);
@@ -3837,14 +3904,10 @@
           // phone-only chrome. Each is 'local' in the markup, so none of them reaches the board
           else if (key == "appHome") { openTab($('.camTab')); return; }
           else if (key == "sheetClose") { const t = $('nav.quick-nav.active'); if (t) navigation(t.id); return; }
-          else if (key == "statusToggle") {
-            const f = $('#footer'), b = $('#statusToggle');
-            if (f && b) {
-              const open = b.getAttribute('aria-expanded') != 'false';
-              f.classList.toggle('collapsed', open);
-              b.setAttribute('aria-expanded', open ? 'false' : 'true');
-              b.title = open ? 'Show system status' : 'Collapse system status';
-            }
+          // replaced the chevron that used to sit on the System Status heading. The card is hidden
+          // by default now and this tile in Camera Tools is the only thing that brings it back
+          else if (key == "statusCard") {
+            setStatusCard(!document.body.classList.contains('status-open'));
             return;
           }
           else if (key == "clearLog") clearLog();
@@ -4489,7 +4552,7 @@
       function activateRecordButton() {
         if (!recordButton.classList.contains("active")) {
           recordButton.classList.add("active");
-          setActionLabel(recordButton, 'stop', "Stop Recording", true);
+          setActionLabel(recordButton, 'stop', "Stop Recording", true, "Stop");
         }
         if (isHidden(recordingIndicator)) {
           show(recordingIndicator);
@@ -4499,7 +4562,7 @@
 
       function deactivateRecordButton() {
         recordButton.classList.remove("active");
-        setActionLabel(recordButton, 'record', "Start Recording", false);
+        setActionLabel(recordButton, 'record', "Start Recording", false, "Record");
         recordingIndicator.classList.remove("blinking");
         hide(recordingIndicator);
       }
