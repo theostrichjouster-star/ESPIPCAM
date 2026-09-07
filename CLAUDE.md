@@ -335,7 +335,16 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   the commit that replaced it says, four small icons whose strokes merged - that reading is wrong and
   the icon was never the cause, the `rect` rule was. Every other sprite icon is paths and circles,
   which is why nothing else ever showed it. The tell is `getBBox()` returning the whole viewBox, and
-  the proof is `document.styleSheets[0].disabled = true` restoring the geometry (7 Sep 2026)
+  the proof is `document.styleSheets[0].disabled = true` restoring the geometry (7 Sep 2026).
+  **THE SPRITE IS NOW RECT-FREE and must stay that way** - six icons were converted (`grid`->`wrench`,
+  `film`, `image`, `stop`, `frame`, `mic`, `aspect`). `document.querySelectorAll('svg symbol rect')`
+  returning anything but 0 is the regression test. The ONE legitimate `<rect>` left on the page is the
+  SVG config button `common.js` builds around line 901: it wants that fill and that full-size box, and
+  the click dispatch routes on the tag name (`e.nodeName == 'rect'` -> the id of the next text node),
+  so the rule and the button must both stay. **A rect icon can also be hiding a design that only ever
+  worked because of the bug**: `icon-aspect`'s frame and its corner brackets were both drawn at 4..20,
+  so drawn honestly they coincided into a plain square - the frame had to be redrawn smaller. Convert,
+  then LOOK at it
 - **The phone card block does NOT win by coming later - it wins by matching specificity**, and the
   desktop top row is where that bites. Making the row uniform meant scoping it to `.tab .navtop
   button` (0,2,1), which silently outweighs every `.tab button` / `nav#maintoolbar button` (0,1,1)

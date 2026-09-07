@@ -1886,11 +1886,12 @@
           border-radius: 0;
           display: grid;
           grid-template-columns: auto 1fr auto;
+          /* the rail used to be a fourth row of its own. It lives inside the bar now, so one strip
+             under the picture carries the readout on the left and the controls on the right */
           grid-template-areas:
             "badge size  close"
             "media media media"
-            "bar   bar   bar"
-            "rail  rail  rail";
+            "bar   bar   bar";
           align-items: center;
           column-gap: var(--buttonHalf);
           row-gap: var(--buttonQuart);
@@ -1968,14 +1969,18 @@
         #liveBadge.streaming #liveDot {
           background: var(--buttonActive);
         }
+        /* now a child of #playBar, sharing the row with fullscreen and screenshot. min-width:0 is
+           what lets it be the part that shrinks: without it a nowrap flex child refuses to go below
+           its content and pushes the buttons off the right edge on a narrow phone */
         #streamRail {
-          grid-area: rail;
           position: static;
           z-index: 4;
           display: flex;
           align-items: center;
+          flex: 1 1 auto;
+          min-width: 0;
           gap: 0.75rem;
-          padding: 0.2rem var(--buttonHalf) calc(0.4rem + env(safe-area-inset-bottom));
+          padding: 0;
           background: none; /* it is below the picture now, not over it */
           color: var(--pageText);
           font-size: calc(var(--bodySize) * 0.72);
@@ -2018,8 +2023,12 @@
           grid-area: bar;
           position: static;
           display: flex;
+          align-items: center;   /* the readout is text next to 2.75rem buttons */
+          flex-wrap: wrap;
           background: none; /* below the picture now, so it needs no scrim to stay legible */
-          padding: 0 var(--buttonHalf) var(--buttonQuart);
+          /* it is the last row of the card now that the rail sits inside it, so the safe-area
+             inset the rail used to carry comes here instead */
+          padding: 0 var(--buttonHalf) calc(var(--buttonQuart) + env(safe-area-inset-bottom));
           gap: var(--buttonHalf);
         }
         #playBar #playToggle, #playBar #playElapsed, #playBar #playTrack, #playBar #playSound {
@@ -2038,6 +2047,11 @@
         /* the size controls sit at the far end of the button row, away from play/pause */
         #playBar #fullAspect {
           margin-left: auto;
+        }
+        /* nothing to save off a live view - by the time the file lands the picture has moved on.
+           Get Still is the button for that, and it holds a frame the screenshot can then take */
+        #stream-container.liveStream #saveImage {
+          display: none;
         }
         /* the track takes a row of its own, ahead of the buttons. Sharing one row left it 143px on a
            375px phone - 14px per second of a 10s clip, which is not a thumb target. Full width is
@@ -3380,6 +3394,15 @@
                  matches a status key to the element whose id equals it and a value can therefore
                  exist only once. Every control is "local": none of this reaches the board -->
             <div id="playBar">
+              <!-- The readout shares the button row rather than taking a strip of its own below it:
+                   the bar was mostly empty for a live view, and the two together were two thin rows
+                   where one does. It is a child of the bar so the flex row aligns them; it is hidden
+                   while a clip plays, where the bar is full of the clip's own controls -->
+              <div id="streamRail" class="measure mobileOnly">
+                <span id="railRate">&nbsp;</span>
+                <span id="railSignal">&nbsp;</span>
+                <span id="railSensor">&nbsp;</span>
+              </div>
               <button id="playToggle" class="local playCtl" type="button" title="Pause" aria-label="Pause">
                 <svg class="icon" aria-hidden="true"><use href="#icon-pause"></use></svg>
               </button>
@@ -3393,11 +3416,6 @@
               <button id="playSound" class="local playCtl" type="button" title="Sound on" aria-label="Sound on">
                 <svg class="icon" aria-hidden="true"><use href="#icon-speaker"></use></svg>
               </button>
-            </div>
-            <div id="streamRail" class="measure mobileOnly">
-              <span id="railRate">&nbsp;</span>
-              <span id="railSignal">&nbsp;</span>
-              <span id="railSensor">&nbsp;</span>
             </div>
           </div>
         </figure>
@@ -3755,6 +3773,11 @@
         // decided here or it reverts to STILL the moment the view is sized
         const isClip = !!clip || (viewContainer && viewContainer.classList.contains('clipStreaming'));
         if (state) state.textContent = isClip ? 'CLIP' : (mode === 'live' ? 'LIVE' : 'STILL');
+        // marks the live MJPEG view specifically, which is the one case where the screenshot button
+        // has nothing worth saving - the picture is already moving on. A held still and a clip both
+        // keep it. Set here rather than at stream start because sizeView() calls this on every
+        // resize, the same reason the badge label is decided here
+        if (viewContainer) viewContainer.classList.toggle('liveStream', mode === 'live' && !isClip);
       }
 
       function isFullscreen() {
