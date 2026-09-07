@@ -378,10 +378,21 @@ elsewhere in this file are the same items seen from their own subject.
    of a 26 ms period writing and delivers 38.1 of 41 while demand sits under the push line, so the
    governor correctly does nothing about a rate the card is actually costing (§38.32, and the same
    note from 2 Sep). The one size where the trigger and the real constraint disagree
-3. **SXGA, UXGA and QXGA have no frame-window protection at all.** 7832a16 correctly stopped handing
-   them QHD's 800 KB cliff, so the pre-arm and the ease-down's safety gate now stand down for them.
-   Closing it means `frame_window_descend.sh` at those three. Lit SXGA frames are 121 KB against a
-   cliff probably above 400, so the exposure is a dark noisy scene, not a lit one
+3. **Twenty frame sizes have no frame-window protection, and three of them matter.** 7832a16
+   correctly stopped `frameWindowKB` handing QHD's 800 KB cliff to every size it does not name, so
+   the governor's pre-arm and the ease-down's safety gate now stand down for all of them - better
+   than arming on another size's number, but it is no protection either. `frameWindowKB` names only
+   VGA 266, HD 291, FHD/FHDNARROW 443, QSXGA 946, QHD 800, 1280X960 383, FHDMID/FHDFULL 443 and
+   VGANARROW 266; everything else returns 0.
+   **The three worth measuring are SXGA, UXGA and QXGA**, because the cliff follows the OUTPUT size
+   and all three emit more than 1280X960, whose measured cliff is 383 KB - so their real cliffs are
+   plausibly in the 400-700 KB band where a dark noisy scene can reach them. WQXGA and P_FHD are the
+   next tier down in priority. The small sizes are fine on physics: their frames cannot grow that
+   large. Closing it is `frame_window_descend.sh` per size (§20 method, §34 run).
+   Lit SXGA frames measure 121 KB, so this is a dark-room risk, not a lit-room one.
+   **This item is now the only record of that work**: it came from a spawned task session that has
+   since been deleted, and its own owed verification is closed (lit SXGA at ceiling 17 delivered
+   16.9 with the cap reading 0, boost 0, no governor writes - §38.32)
 4. **The open-file leak audit** (§38.21). THE leak was the SD log and is fixed, but the 5 Sep
    exhaustion reached fifteen, so something else may still leak. `fileProbe=1` either side of a
    suspect operation is the measurement; healthy idle is 14 with SD logging on, 15 with it off
