@@ -3879,11 +3879,29 @@
         setText('#appLinkText', 'Online');
         setBattGauge();   // the gauge takes the slot back if there is a reading to put in it
         clearTimeout(onlineTimer);
-        onlineTimer = setTimeout(() => {
-          // A clip download saturates the link, so the status poll can miss three intervals while
-          // the board is perfectly healthy - and the header then reads Offline mid-playback, which
-          // is alarming and wrong. Buffering IS traffic answering, so hold the pill while it runs
+        onlineTimer = setTimeout(async () => {
+          /* Traffic the page asked for IS the board answering, so neither of these is offline. A
+             clip download and a live stream both saturate the link hard enough for the status poll
+             to miss three intervals while the board is perfectly healthy, and the header then reads
+             Offline mid-playback or mid-stream - alarming, wrong, and on a phone it takes the
+             battery gauge with it, since the gauge hands its slot back when the link drops.
+             Neither guard is allowed to trust intent, because neither may hang. A clip has .done.
+             A live stream is asked for evidence instead: whether the picture still decodes. That
+             matters because the liveStream class alone would have held the header Online for ever
+             on a stream that opened and delivered nothing - measured on COM4, a stream sitting at
+             naturalWidth 0 while the board answered /status perfectly well.
+             What this does NOT prove is that frames are still ARRIVING: the last one stays
+             decodable. There is no honest test for that here - Chrome fires no load event per part
+             for a multipart MJPEG (measured: 0 in 5 s), decode() resolves against whatever frame is
+             already there rather than waiting for the next (200 resolves in the same 5 s), and
+             comparing pixels would call a static scene frozen. A frozen stream is visible in the
+             picture itself, which is the better instrument for it. */
           if (clip && !clip.done) { markOnline(); return; }
+          if (viewContainer && viewContainer.classList.contains('liveStream') && view) {
+            let decodes = false;
+            try { await view.decode(); decodes = view.naturalWidth > 0; } catch (e) { decodes = false; }
+            if (decodes) { markOnline(); return; }
+          }
           link.classList.remove('online');
           setText('#appLinkText', 'Offline');
           setBattGauge();   // hands the slot back to the word, since the reading is now stale
