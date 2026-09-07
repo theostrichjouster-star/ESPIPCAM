@@ -1596,6 +1596,43 @@
           background: var(--buttonActive);
         }
 
+        /* --- the header's battery gauge --- */
+        #appBatt {
+          display: flex;
+          align-items: center;
+          gap: 0.3rem;
+        }
+        .batt {
+          width: 1.65rem;
+          height: 0.9rem;
+          flex: 0 0 auto;
+          display: block;
+        }
+        .battShell {
+          fill: none;
+          stroke: currentColor;
+          stroke-width: 1.4;
+        }
+        .battCap, .battBar {
+          fill: currentColor;
+          stroke: none;
+        }
+        /* Bars are hidden by default and turned on up to the level, which keeps the rule for each
+           level in one place and makes an unset gauge read empty rather than full */
+        .batt .battBar {
+          display: none;
+        }
+        .batt.lvl1 .b1, .batt.lvl2 .b1, .batt.lvl3 .b1, .batt.lvl4 .b1,
+        .batt.lvl2 .b2, .batt.lvl3 .b2, .batt.lvl4 .b2,
+        .batt.lvl3 .b3, .batt.lvl4 .b3,
+        .batt.lvl4 .b4 {
+          display: block;
+        }
+        /* one bar left is a warning, none left is 3.0V - the voltage at which BATTERY.md says the
+           board parks itself, so it is a red state and not merely a low one */
+        #appBatt.warn { color: var(--alertMsg); }
+        #appBatt.crit { color: var(--errColor); }
+
         /* --- tiles: device controls and camera tools share one shape --- */
         /* The four tiles come from two different lists - the tab row and the toolbar - so the grid
            is declared on .tab and every wrapper between it and the buttons is display:contents.
@@ -2356,6 +2393,28 @@
            instrument - the real RSSI is on the viewfinder rail and in System Status -->
       <div id="appLink" class="offline" title="Connection to the camera">
         <span id="appLinkDot" aria-hidden="true"></span>
+        <!-- The battery gauge replaces the Online / Offline word whenever the board reports a
+             cell voltage; the dot stays, because a stale reading looks exactly like a fresh one
+             and the dot is the only thing that says which it is. Drawn inline rather than as a
+             sprite <use>, because the four bars have to be shown and hidden individually and a
+             <use> shadow tree cannot be reached by a descendant selector.
+             It is NOT given id="battV" - updateStatus() fills the element whose id equals the
+             status key, so a second one would silently take that key's value from the first. -->
+        <span id="appBatt" class="hidden">
+          <!-- Paths, not <rect>. A bare `rect` selector near the top of this stylesheet gives
+               EVERY rect on the page width/height 100%, x/y 0 and the ready-blue fill, for the
+               upstream project's SVG buttons - so a rect drawn here becomes a solid blue block
+               filling its viewBox, which is exactly what the old grid icon did. -->
+          <svg class="batt lvl0" viewBox="0 0 26 14" aria-hidden="true">
+            <path class="battShell" d="M3.5 1.5h16a2.5 2.5 0 0 1 2.5 2.5v6a2.5 2.5 0 0 1-2.5 2.5h-16A2.5 2.5 0 0 1 1 9.5v-6a2.5 2.5 0 0 1 2.5-2.5Z"/>
+            <path class="battCap" d="M23 5h1a1 1 0 0 1 0 4h-1Z"/>
+            <path class="battBar b1" d="M3 3.7h3.5v6.6H3Z"/>
+            <path class="battBar b2" d="M7.5 3.7h3.5v6.6H7.5Z"/>
+            <path class="battBar b3" d="M12 3.7h3.5v6.6H12Z"/>
+            <path class="battBar b4" d="M16.5 3.7h3.5v6.6H16.5Z"/>
+          </svg>
+          <span id="appBattText" class="measure">--</span>
+        </span>
         <span id="appLinkText">Connecting</span>
       </div>
     </header>
@@ -3535,6 +3594,7 @@
       let sheetPushed = false; // whether the open sheet owns a history entry
       let sheetClosing = false; // set while a history pop is driving the close, so we do not pop twice
       let onlineTimer = null;
+      let lastBattV = null;   // the board's last battV string, so the header gauge survives a redraw
 
       function mobileInit() {
         placePlaybackButton();
@@ -3684,12 +3744,54 @@
 
       function setText(sel, text) { const el = $(sel); if (el) el.textContent = text; }
 
+      function battBars(mv) {
+        /* Four bars over a li-ion cell, and the rungs are deliberately NOT evenly spaced.
+           BATTERY.md's measured ladder: battWarnMv is 3000 and sagShutdown() parks the board
+           there, so 3.0V is empty rather than "a bit left"; wifi itself died at 2643. Full is
+           4.20. Most of a cell's charge sits on the 3.6-4.0V plateau, so an even split over
+           3.0-4.2 would hold four bars until the pack was nearly half gone and then collapse
+           through the last three in minutes. These rungs spend the resolution where the charge is. */
+        if (mv >= 3950) return 4;
+        if (mv >= 3750) return 3;
+        if (mv >= 3550) return 2;
+        if (mv >= 3200) return 1;
+        return 0;
+      }
+
+      function setBattGauge(value) {
+        /* value is the board's own string: "4.02V", or "n/a" when battUse is off or no divider is
+           fitted. The gauge and the Online / Offline word share one slot in the header, so this is
+           the only place that decides which is in it. With no reading the word stays - an empty
+           gauge would claim a flat battery on a board that simply cannot measure one. */
+        if (value !== undefined) lastBattV = value;
+        const wrap = $('#appBatt'), text = $('#appLinkText');
+        if (!wrap || !text) return;
+        const volts = parseFloat(lastBattV);   // "n/a" and null both give NaN, which is the test
+        const live = $('#appLink').classList.contains('online');
+        // Offline, the reading is of unknown age and saying so matters more than the last value
+        if (!live || !isFinite(volts) || volts <= 0) {
+          hide(wrap);
+          show(text);
+          return;
+        }
+        const bars = battBars(Math.round(volts * 1000));
+        const svg = wrap.querySelector('.batt');
+        if (svg) svg.setAttribute('class', 'batt lvl' + bars);  // SVG className is not a string
+        wrap.classList.toggle('warn', bars == 1);
+        wrap.classList.toggle('crit', bars == 0);
+        setText('#appBattText', volts.toFixed(2) + 'V');
+        wrap.title = volts.toFixed(2) + 'V, ' + bars + ' of 4 bars. Empty is 3.00V, where the board parks itself';
+        hide(text);
+        show(wrap);
+      }
+
       function markOnline() {
         // the poll answering IS the connection test; no extra request for a connection indicator
         const link = $('#appLink');
         if (!link) return;
         link.classList.add('online');
         setText('#appLinkText', 'Online');
+        setBattGauge();   // the gauge takes the slot back if there is a reading to put in it
         clearTimeout(onlineTimer);
         onlineTimer = setTimeout(() => {
           // A clip download saturates the link, so the status poll can miss three intervals while
@@ -3698,6 +3800,7 @@
           if (clip && !clip.done) { markOnline(); return; }
           link.classList.remove('online');
           setText('#appLinkText', 'Offline');
+          setBattGauge();   // hands the slot back to the word, since the reading is now stale
         }, refreshInterval * 3);
       }
 
@@ -3852,6 +3955,9 @@
             const nl = $('#nightLive'); if (nl) nl.innerHTML = value;
             setText('#railSensor', railFromCamLive(value)); // the viewfinder rail, phone layout
           }
+          // updateStatus() has already written this into the System Status row by the time it
+          // calls here, so the header gauge is an addition and takes nothing away from that
+          else if (key == "battV") { setBattGauge(value); return; }
           else if (key == "colorbar") setColorbarBanner(value);
           else if (key == "colorbar-off") {
             const cb = $('#colorbar');

@@ -325,6 +325,17 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   equal specificity: its old `.quick-nav { width: 44px }` made the tool tiles compute 44px inside 75px
   grid columns. Same class of fault, same day: `.tabcontent button` also matches every tile on the main
   page, because `#mainPage` carries that class
+- **NEVER draw a new icon with `<rect>`, `<text>` or a bare `<svg>` - use `<path>`.** The stylesheet
+  carries three BARE ELEMENT rules from the upstream project's SVG buttons, and they reach every such
+  element on the page: `rect` gets `fill: var(--buttonReady); width: 100%; height: 100%; x: 0; y: 0;
+  ry: 15%`, `svg` gets a fixed 8-unit width, and `text` gets a `translate(50%, 50%)`. A `<rect>` you
+  draw therefore ignores its own x/y/width/height presentation attributes - CSS beats a presentation
+  attribute always - and paints as one solid ready-blue block filling its viewBox. **That is what the
+  Camera Tools heading's old `icon-grid` was**: four rects, each rendered full size, stacked. Not, as
+  the commit that replaced it says, four small icons whose strokes merged - that reading is wrong and
+  the icon was never the cause, the `rect` rule was. Every other sprite icon is paths and circles,
+  which is why nothing else ever showed it. The tell is `getBBox()` returning the whole viewBox, and
+  the proof is `document.styleSheets[0].disabled = true` restoring the geometry (7 Sep 2026)
 - **The phone card block does NOT win by coming later - it wins by matching specificity**, and the
   desktop top row is where that bites. Making the row uniform meant scoping it to `.tab .navtop
   button` (0,2,1), which silently outweighs every `.tab button` / `nav#maintoolbar button` (0,1,1)
