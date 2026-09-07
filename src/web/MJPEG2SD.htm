@@ -67,6 +67,11 @@
         --headingSize: calc(var(--bodySize) * 1.25);
         --subheadingSize: var(--bodySize);
         --footerSize: calc(var(--bodySize) * 0.7);
+        /* the desktop top row: one width for every button in it, both groups. Sized from the
+           longest label the row ever carries ("Start Recording") at --inputSize, so the row stays
+           a toolbar rather than text of assorted lengths. The phone card block overrides both */
+        --topBtnW: calc(var(--buttonSize) * 9);
+        --topBtnH: calc(var(--buttonSize) * 2.25);
         --smallThumbSize: 1rem; /* must be specific value, not calc */
         --bigThumbSize: 2rem; /* must be specific value, not calc */
         --markerSize: 1rem; /* must be specific value, not calc */
@@ -152,29 +157,78 @@
         padding-left: var(--buttonQuart);
       }
 
+      /* The top row holds two lists - the page tabs and the transport controls - and they used to
+         be floated text buttons of whatever width their label happened to need. They are one flex
+         row now, wrapping rather than clipping when the window is too narrow for all eight, with
+         the transport group pushed to the right edge by section#main's auto margin. */
       .tab {
         display: flex;
-        overflow: hidden;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: var(--buttonHalf);
         background: var(--menuBackground);
       }
 
-      .tab button {
+      /* Every button in the top row, both groups, one shape: a fixed-width rectangle with its
+         icon and label centred. Scoped to .tab .navtop rather than .tab button so it cannot reach
+         the buttons addButtons() injects further down the page. */
+      .tab .navtop button {
+        box-sizing: border-box;
+        width: var(--topBtnW);
+        min-height: var(--topBtnH);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--buttonQuart);
+        float: none;
+        margin: 0;
+        padding: 0 var(--buttonHalf);
         background: var(--buttonReady);
-        float: left;
+        color: var(--buttonText);
         border: none;
+        border-radius: var(--buttonQuart);
         outline: none;
         cursor: pointer;
-        padding: var(--buttonHalf);
-        transition: 0.3s;
-        font-size: calc(var(--buttonSize) * 1.1);
+        white-space: nowrap;
+        font-family: inherit;
+        font-size: var(--inputSize);
+        line-height: 1.1;
+        transition: background 0.2s;
       }
 
-      .tab button.active{
-        box-shadow: 0 0 0 var(--buttonQuart) var(--buttonActive);
+      /* was --buttonText on the teal-green, which measures 2.2:1 - under the 4.5:1 text rule. The
+         phone layout already used the dark label here; the desktop now matches it. */
+      .tab .navtop button.active {
         background: var(--buttonActive);
+        color: var(--buttonLabel);
       }
 
-      .tab button.hover {
+      /* The camera tab is the odd one out on purpose: a square icon button, the width of the row's
+         own height, standing for home the way the phone header's camera button does. Its label is
+         dropped rather than hidden with .hidden, which the page's own show()/hide() owns. An
+         icon-only control needs a name that is not its picture, so the button carries aria-label
+         and customButtons() writes the sensor model into the title on top of it. */
+      .tab .navtop button.camTab {
+        width: var(--topBtnH);
+        padding: 0;
+      }
+      .tab .navtop button.camTab .tile-label {
+        display: none;
+      }
+      .tab .navtop button.camTab .tile-icon {
+        width: 1.5em;
+        height: 1.5em;
+      }
+
+      /* the generic button.disabled further up is a weaker selector than .tab .navtop button, so
+         without this the disabled Start Playback would paint itself ready-blue */
+      .tab .navtop button.disabled {
+        background: var(--itemInactive);
+      }
+
+      /* :not(.active) so hovering the tab you are already on does not make it read as inactive -
+         .active and :hover carry the same specificity, so the later rule would otherwise win */
+      .tab .navtop button:not(.active):hover, .tab button.hover {
         background: var(--buttonHover);
       }
 
@@ -575,16 +629,22 @@
       }
 
 
+      /* Both top-row lists. The box that used to be drawn round each group is gone: with every
+         button the same size the row already reads as two groups, and the border only added a
+         second rectangle round the rectangles. Floats are gone with it, because a floated button
+         cannot be given a width without the row collapsing to nothing. */
       .navtop{
         list-style: none;
-        border: 1px solid var(--itemBorder);
-        border-radius: var(--buttonQuart);
-        padding: var(--buttonQuart);
-        margin-top: var(--buttonHalf);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: stretch;
+        gap: var(--buttonHalf);
+        padding: 0;
+        margin: var(--buttonHalf) 0 0 0;
       }
       .navtop li {
-       float: left;
-       position: relative;
+        display: flex;
+        position: relative;
       }
 
       nav.menu {
@@ -651,11 +711,12 @@
         background: var(--itemInactive);
       }
 
+      /* overflow:auto here put a scrollbar under the transport buttons the moment the row was a
+         few pixels too wide. The row wraps instead */
       nav#maintoolbar {
         display: flex;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         justify-content: flex-end;
-        overflow: auto;
       }
 
       .nav-toggle {
@@ -667,9 +728,12 @@
         border-bottom: 1px solid var(--itemBorder);
       }
 
+      /* the auto margin is what puts the transport group against the right edge of the window;
+         when the row wraps, that group drops to its own line and stays right-aligned */
       section#main {
         display: flex;
         flex-direction: column;
+        margin-left: auto;
       }
       section#header {
         min-width: calc(var(--buttonSize) * 20);
@@ -1389,13 +1453,25 @@
 
       /* The transport buttons used to carry ➤ and ▢ text characters as icons, which render
          differently on every platform and are not icons. Their real icons take that place on the
-         desktop toolbar too, inline and text-sized, so nothing is lost there. */
-      nav#maintoolbar .tile-icon {
-        display: inline-block;
-        width: 1.1em;
-        height: 1.1em;
-        vertical-align: -0.2em;
-        margin-right: var(--buttonQuart);
+         desktop toolbar too, inline and text-sized, so nothing is lost there. The page tabs show
+         theirs now as well, which is what makes the two groups one row rather than two: the first
+         tab in particular is the camera icon the phone's home button already carries. The button
+         is a flex box, so the gap between icon and label is its own and no margin is wanted. */
+      .tab .navtop .tile-icon {
+        display: block;
+        flex: 0 0 auto;
+        width: 1.3em;
+        height: 1.3em;
+      }
+
+      /* The two hairlines that divided the transport group into record | stream+still | playback.
+         With every button the same rectangle the grouping is carried by position, and a pair of
+         rules in the middle of an even row is the decoration this row is being cleaned of. The
+         markup stays: the phone card block flattens the list and needs these classes to tell the
+         empty items apart from the buttons. #recording-indicator is NOT hidden with them - it is
+         an instrument, and isHidden() reads its class as the recording state. */
+      .navtop li.sep-item {
+        display: none;
       }
 
       /*************** phone card layout (<48rem, 768px) ***************
@@ -1552,7 +1628,10 @@
           display: none;
         }
 
-        .tab button, nav#maintoolbar button, .quick-nav {
+        /* These four selectors were ".tab button" / "nav#maintoolbar button", which the desktop
+           row's ".tab .navtop button" now outweighs - the phone would have kept the desktop's
+           fixed width, radius and colours. Same coverage, matched specificity, later wins. */
+        .tab .navtop button, .quick-nav {
           box-sizing: border-box;
           display: flex;
           flex-direction: column;
@@ -1560,6 +1639,9 @@
           justify-content: center;
           gap: 0.3rem;
           width: 100%;
+          /* the desktop row keeps its labels on one line; here they must wrap, or "Start Recording"
+             widens its own column - 1fr is minmax(auto, 1fr) - and the four tiles stop matching */
+          white-space: normal;
           min-height: 4.5rem;   /* 72px - past the 48dp Android / 44pt iOS floor with room for a label */
           margin: 0;
           padding: var(--buttonHalf) 0.25rem;
@@ -1575,23 +1657,26 @@
           touch-action: manipulation;
           transition: background 120ms ease;
         }
-        .tab button:active, nav#maintoolbar button:active, .quick-nav:active {
+        .tab .navtop button:active, .quick-nav:active {
           background: var(--buttonHover);
         }
-        .tab button.active, .quick-nav.active {
+        .tab .navtop button.active, .quick-nav.active {
           background: var(--buttonActive);
           color: var(--buttonLabel);
         }
         .quick-nav.active {
           box-shadow: none; /* the desktop ring would break the grid rhythm */
         }
-        .tab button.disabled, nav#maintoolbar button.disabled, .quick-nav.disabled {
+        .tab .navtop button.disabled, .quick-nav.disabled {
           background: var(--itemInactive);
         }
         .tile-icon, .quick-nav .tile-label {
           display: block;
         }
-        nav#maintoolbar .tile-icon { /* beats the inline desktop sizing above */
+        /* beats the desktop top-row sizing above, and must keep the SAME selector shape as it:
+           .tab .navtop .tile-icon outweighs a nav#maintoolbar .tile-icon written here, so the
+           phone would silently get the desktop's text-sized icons back */
+        .tab .navtop .tile-icon {
           display: block;
           width: calc(var(--buttonSize) * 1.5);
           height: calc(var(--buttonSize) * 1.5);
@@ -2203,7 +2288,7 @@
         }
 
         @media (prefers-reduced-motion: reduce) {
-          .tab button, nav#maintoolbar button, .quick-nav, #statusHead #statusToggle,
+          .tab .navtop button, .quick-nav, #statusHead #statusToggle,
           .switch .slider::before {
             transition: none;
           }
@@ -2279,7 +2364,7 @@
       <!-- .card-head rows are for the mobile card layout only, hidden above the breakpoint -->
       <h2 class="card-head mobileOnly"><svg class="icon-inline" aria-hidden="true"><use href="#icon-gear"></use></svg>Device Controls</h2>
       <ul class="navtop">
-        <button class="tablinks camTab noMobile active" name="mainPage"><svg class="tile-icon" aria-hidden="true"><use href="#icon-camera"></use></svg><span class="tile-label">Camera</span></button>
+        <button class="tablinks camTab noMobile active" name="mainPage" aria-label="Camera" title="Camera"><svg class="tile-icon" aria-hidden="true"><use href="#icon-camera"></use></svg><span class="tile-label">Camera</span></button>
         <button class="tablinks noMobile" name="ShowLog"><svg class="tile-icon" aria-hidden="true"><use href="#icon-doc"></use></svg><span class="tile-label">Show Log</span></button>
         <button class="tablinks" name="EditConfig"><svg class="tile-icon" aria-hidden="true"><use href="#icon-edit"></use></svg><span class="tile-label">Edit Config</span></button>
         <button class="tablinks noMobile" onclick="window.location.href='/web?OTA.htm'"><svg class="tile-icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span class="tile-label">OTA Upload</span></button>
@@ -2287,13 +2372,15 @@
       <section id="main">
         <nav id="maintoolbar">
           <ul class="navtop">
-            <li class="ind-item"><span id="recording-indicator" class="hidden" style="float: right; display: none;"></span></li>
-            <li><button id="forceRecord" style="float:right;"><svg class="tile-icon" aria-hidden="true"><use href="#icon-record"></use></svg><span class="tile-label">Start Recording</span></button></li>
+            <!-- the float:right each of these carried is gone: the list is a flex row now, and an
+                 inline float would have beaten the stylesheet and left the widths unsettable -->
+            <li class="ind-item"><span id="recording-indicator" class="hidden" style="display: none;"></span></li>
+            <li><button id="forceRecord"><svg class="tile-icon" aria-hidden="true"><use href="#icon-record"></use></svg><span class="tile-label">Start Recording</span></button></li>
             <li class="sep-item"><div class="sep"></div></li>
-            <li><button id="forceStream" class="local" style="float:right;"><svg class="tile-icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg><span class="tile-label">Start Stream</span></button></li>
-            <li><button id="get-still" class="local" style="float:right;"><svg class="tile-icon" aria-hidden="true"><use href="#icon-image"></use></svg><span class="tile-label">Get Still</span></button></li>
+            <li><button id="forceStream" class="local"><svg class="tile-icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg><span class="tile-label">Start Stream</span></button></li>
+            <li><button id="get-still" class="local"><svg class="tile-icon" aria-hidden="true"><use href="#icon-image"></use></svg><span class="tile-label">Get Still</span></button></li>
             <li class="sep-item"><div class="sep"></div></li>
-            <li class="noMobile"><button id="forcePlayback" class="local disabled" style="float:right;" title="Select a video in 'Playback &amp; Download' to activate playback."><svg class="tile-icon" aria-hidden="true"><use href="#icon-play"></use></svg><span class="tile-label">Start Playback</span></button></li>
+            <li class="noMobile"><button id="forcePlayback" class="local disabled" title="Select a video in 'Playback &amp; Download' to activate playback."><svg class="tile-icon" aria-hidden="true"><use href="#icon-play"></use></svg><span class="tile-label">Start Playback</span></button></li>
           </ul>
         </nav>
       </section>
@@ -3807,7 +3894,13 @@
         // update camera button text
         if (firstCall) {
           cameraModel = value;
-          setActionLabel($('.camTab'), null, cameraModel);
+          // The first tab used to be RELABELLED to the sensor part number, so the row read
+          // "OV5640 | Show Log | Edit Config" - a component name among three verbs, and the only
+          // button in the row without an icon. It is the camera icon and "Camera" now, matching
+          // the phone header's home button; the model moves to the tooltip, where it is still one
+          // hover away and is also the phone subtitle below.
+          const camTab = $('.camTab');
+          if (camTab) camTab.title = cameraModel + " camera";
           setText('#appModel', cameraModel); // the phone header's subtitle
           // customise camera parameters according to camera model
           if (cameraModel == "OV2640") {

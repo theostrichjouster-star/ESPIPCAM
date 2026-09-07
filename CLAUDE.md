@@ -325,6 +325,21 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
   equal specificity: its old `.quick-nav { width: 44px }` made the tool tiles compute 44px inside 75px
   grid columns. Same class of fault, same day: `.tabcontent button` also matches every tile on the main
   page, because `#mainPage` carries that class
+- **The phone card block does NOT win by coming later - it wins by matching specificity**, and the
+  desktop top row is where that bites. Making the row uniform meant scoping it to `.tab .navtop
+  button` (0,2,1), which silently outweighs every `.tab button` / `nav#maintoolbar button` (0,1,1)
+  the `48rem` block writes: the phone kept the desktop's fixed width, radius, colours and icon size.
+  **Change both ends together.** Four phone rules and the `nav#maintoolbar .tile-icon` one were
+  rewritten to the same selector shape for that reason (7 Sep 2026). Two more from the same change:
+  `.sep-item` alone loses to `.navtop li`, so hiding a separator needs `.navtop li.sep-item`; and a
+  desktop `white-space: nowrap` must be reset to `normal` on the phone, or "Start Recording" widens
+  its own grid column, since `1fr` is `minmax(auto, 1fr)` and the four Device Controls tiles stop
+  matching. Read the tile widths back at 375px and 320px - unequal widths are the tell
+- **The desktop top row is one flex row of equal 9-unit rectangles**, tabs left and transport right
+  (`section#main`'s `margin-left: auto`), wrapping rather than clipping below ~1230px. The first tab
+  is a SQUARE icon-only camera button - it used to be relabelled to the sensor part number, which
+  now goes in its `title` instead, so `customButtons()` no longer calls `setActionLabel` on it.
+  An icon-only button carries `aria-label`; the model in the title does not replace that
 - **Only `#camera-control` is inside `#menu-top`**; the other five panels are direct children of
   `#menu-container`, so `#menu-top.menu-pinned nav.menu.panel` has only ever styled the camera one.
   Anything meant for all six targets `nav.menu.panel` (the phone sheet is `nav.menu.panel.active`)
