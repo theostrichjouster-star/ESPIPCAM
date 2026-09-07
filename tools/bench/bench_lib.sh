@@ -227,7 +227,21 @@ af_hold() {  # af_hold <size idx to return to> <quality> <fps to return to>
   log "AF MCU held (0x3000 0x20) at VCM 0x$AF_VCM; after the size change VCM 0x$(af_vcm)"
 }
 af_check() { local v; v=$(af_vcm); [ "$v" = "$AF_VCM" ] && log "AF held: VCM 0x$v unchanged" || log "WARN: VCM moved 0x$AF_VCM -> 0x$v"; }
-af_resume() {  # MCU out of reset (the program restarts to idle), then continuous AF as the boot leaves it
-  ctl "camReg=0x3000,0x00" > /dev/null; sleep 3
-  af_cmd 0x04 && log "AF MCU released, continuous again, status 0x$(regrd 0x3029)" || log "WARN: AF continuous command not acknowledged after the MCU release (status 0x$(regrd 0x3029))"
+af_resume() {  # hand the lens back to continuous AF, and CHECK it actually took
+  # NOT the register route this used to take (§38.33, 6 Sep 2026). Halting the MCU for the hold
+  # DISCARDS its program, so "camReg=0x3000,0x00 then af_cmd 0x04" resumed nothing at all - and the
+  # mailbox reads as acknowledged with no firmware resident, so the old version logged success while
+  # the lens sat at rest for the rest of the session. Every bench run that called it left AF dead
+  # until the next reboot. afAuto does the reload (focusInit) and the arm (autoFocusMode) in order.
+  # The lens position is the only honest witness, so it is read either side rather than the status
+  local v0 v1
+  v0=$(af_vcm)
+  ctl afAuto=1 > /dev/null
+  sleep 12   # ~1 s of blob download over SCCB, then the AF program's own sweep
+  v1=$(af_vcm)
+  if [ "$v0" = "$v1" ]; then
+    log "WARN: AF resume did not move the lens - still 0x$v1 (code $(af_code "$v1")), status 0x$(regrd 0x3029). Expected after a hold; check the room is lit"
+  else
+    log "AF resumed: lens 0x$v0 (code $(af_code "$v0")) -> 0x$v1 (code $(af_code "$v1")), status 0x$(regrd 0x3029)"
+  fi
 }
