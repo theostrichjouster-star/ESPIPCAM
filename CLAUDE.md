@@ -469,15 +469,29 @@ elsewhere in this file are the same items seen from their own subject.
    bistable magenta latch away - which is exactly why 1280X960 went HTS 2112 -> 2156. The open
    question worth testing rather than assuming: §31 concluded PIXCLK "helps 1280X960 ALONE" because
    its scaler pass is 1:1, which would exclude QVGA and VGA - the two sizes with the most headroom
-2. **The governor pushes on KB/s only, never on storage TIME.** 1280X960 at its ceiling spends 25 ms
-   of a 26 ms period writing and delivers 38.1 of 41 while demand sits under the push line, so the
-   governor correctly does nothing about a rate the card is actually costing (§38.32, and the same
-   note from 2 Sep). The one size where the trigger and the real constraint disagree.
-   **Busy % per mainstay at its ceiling, lit q10, measured 6 Sep 2026** - this is what decides whether
-   any fps work can help a size, so read it before proposing a rate change: 1280X960 99, SXGA 99,
-   FHDNARROW 85, QHD 72, FHDFULL 53, FHDMID 46, VGA 39, QVGA 15. Busy counts the blocked time the
-   frame pipeline spends in storage plus buffering plus monitoring, so a size at 99% is out of
-   headroom no matter what the sensor is capable of
+2. **PARTLY CLOSED 7 Sep 2026 by `fpsPriority`: the governor now closes a loop on the RATE.** It
+   used to ask only whether the CARD was in trouble - demand against the SD budget, and the frame
+   window - and never whether the user was getting the fps they asked for. `sdGovernor`'s fourth arm
+   compares delivered rate against requested (`govRingCount` over the ring's own span, so no new
+   state) and pushes while under `GOV_RATE_PCT`; the relax and ease arms stand down while that
+   deficit stands. `fpsPriority` (config, DEFAULT ON) also raises the boost cap from
+   `GOV_MAX_BOOST` 4 to `GOV_MAX_BOOST_FPS` 14. **A/B MEASURED on COM4, toggle alternated so the
+   drifting scene could not pick a side**: 1280X960 at 41 gave 39.8 on against 37.7 off, HD at 52
+   gave 49.4 against 46.5, with frames 94 vs 112KB and 74 vs 88KB. HD and 1280X960 therefore KEEP
+   their sensor ceilings (52, 41).
+   **Three things it still does NOT do, all measured:**
+   - **It does not fully reach the request** - 97% at 1280X960, 95% at HD - and the boost ends near
+     its 14 cap (13.0, 12.5), so the cap is binding again. Quality lands around q23.
+   - **The ramp is slow and drags the clip average**: one step per window, so 13 steps is 13s of a
+     25s clip spent climbing. A proportional step (more than one when far short) is the obvious fix
+     and is NOT built. The steady-state figure is therefore better than these averages suggest.
+   - **It cannot help QHD or QSXGA**, whose ceilings stay lowered (8, 6). At QSXGA 7 demand is ~75%
+     of budget while the size still misses the rate - the missing time is monitoring and buffering,
+     which the governor cannot see - and their frame counts are near `GOV_RATE_MIN_FRAMES`.
+   **Do NOT "fix" this by lowering `GOV_PUSH_PCT`**: `GOV_RELAX_PCT` is derived from it through one
+   step's effect on demand, and that effect is unsettled - 1.5x at QSXGA (28 Aug) against a MEASURED
+   2.9% per step at 1280X960 q14-q20 (7 Sep, `quality_buys_rate.sh`). Re-measure the step at QSXGA
+   before touching either threshold.
 3. **Twenty frame sizes have no frame-window protection, and three of them matter.** 7832a16
    correctly stopped `frameWindowKB` handing QHD's 800 KB cliff to every size it does not name, so
    the governor's pre-arm and the ease-down's safety gate now stand down for all of them - better

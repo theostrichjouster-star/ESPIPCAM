@@ -133,7 +133,27 @@ static uint32_t frameInterval; // units of us between frames
 // frames are standalone so quality may change mid-clip; fps may not (the AVI header
 // carries one rate). Boost is bounded, hysteretic, and restored when the clip closes.
 // Quality NUMBER up = more compression on this driver.
-#define GOV_MAX_BOOST 4   // quality steps above the user's setting
+// Two ceilings on the boost, and `fpsPriority` picks between them. They answer opposite questions.
+// OFF: quality is what the user asked for and the rate gives way - the boost exists only to stop a
+//   scene change shedding frames silently, so 4 steps is a rescue allowance, not a rate lever.
+// ON (the default): the RATE is what the user asked for and quality gives way. The size a frame
+//   must reach to fit the period is often many steps down, because a quality step is a far smaller
+//   lever than this file assumed: MEASURED 7 Sep 2026 at 1280X960, q14 -> q20 shrank frames 105 ->
+//   88KB, ~2.9% per step, with storage 24 -> 19ms and busy 86 -> 70% (quality_buys_rate.sh). At
+//   that slope the 20% of period 1280X960 needs to reach 41fps is six or seven steps, and the old
+//   cap of 4 is exactly why it sat pinned at boost 4 delivering 34.8 of 38.
+//   14 is not a target, it is a stop: the push arm only climbs while demand stays over
+//   GOV_PUSH_PCT and the relax arm walks it back below GOV_RELAX_PCT, so a scene that does not
+//   need the steps never takes them. From a q10 base it reaches q24.
+#define GOV_RATE_PCT 97        // push while the window delivers under this % of the requested
+                               // rate. Not 100: the delivered figure is frames over the ring's
+                               // own span and carries a frame of quantisation either way, so a
+                               // perfect clip would otherwise step for ever
+#define GOV_RATE_MIN_FRAMES 8  // a window with fewer than this says nothing about a rate. At
+                               // 1 fps the deficit arm therefore never fires, which is correct:
+                               // a slow clip's problem is never that the card cannot keep up
+#define GOV_MAX_BOOST 4      // quality steps above the user's setting, protecting QUALITY
+#define GOV_MAX_BOOST_FPS 14 // ...and protecting the RATE instead, when fpsPriority is on
 #define GOV_PUSH_PCT 90   // demand above this % of budget raises the boost. Must sit BELOW
                           // the saturation plateau: a backpressured card delivers ~94-98%
                           // of the nominal budget, so 95 made most ticks hover just under
@@ -577,13 +597,29 @@ static void sdGovernor() {
 #define GOV_WINDOW_PCT 80
   uint16_t capKB = frameWindowKB(fsizePtr);
   bool windowNear = capKB && sdGovFrameKB > (uint32_t)capKB * GOV_WINDOW_PCT / 100;
-  if (windowNear || demandKBs > (uint32_t)budget * GOV_PUSH_PCT / 100) {
+  // THE RATE DEFICIT, and it is the arm fpsPriority actually needs. The three tests above ask
+  // whether the CARD is in trouble; none of them asks whether the user is getting the frame rate
+  // they requested, and those are not the same question. MEASURED 7 Sep 2026: with only the
+  // demand test, HD at 52 settled delivering 49 with demand at 88% of budget - under the 90%
+  // push line, so the governor stopped stepping while still 3fps short, and raising the boost
+  // ceiling alone made delivery slightly WORSE rather than better (fps_priority_ab.sh).
+  // govRingCount over the ring's own span IS the delivered rate, on the same window and with no
+  // new state: the ring already timestamps every saved frame.
+  uint32_t winFps100 = (uint32_t)govRingCount * 100000 / winMs;   // delivered fps x100
+  uint32_t wantFps100 = (uint32_t)FPS * 100;
+  // GOV_RING caps the sample count, so a window can only under-report the rate at the very top
+  // end - and under-reporting pushes, which is the safe direction. Needs a window with enough
+  // frames in it to mean anything: below that the ratio is quantisation, not a deficit.
+  bool rateShort = fpsPriority && wantFps100 && govRingCount >= GOV_RATE_MIN_FRAMES
+                   && winFps100 * 100 < wantFps100 * GOV_RATE_PCT;
+  if (windowNear || rateShort || demandKBs > (uint32_t)budget * GOV_PUSH_PCT / 100) {
     govLowSince = govEaseSince = 0;
     // Spaced by the full window since the last write. The onset is immediate now, which is the
     // gain - protection starts on the frame that crosses rather than up to a second later - but a
     // step must not be repeated until the measurement it is judged on has actually refreshed,
     // or the ramp runs to its ceiling before the first step has shown up in the average
-    if (sdGovBoost < GOV_MAX_BOOST && (!govLastStepMs || now - govLastStepMs >= govWinMs)) {
+    uint8_t boostCeiling = fpsPriority ? GOV_MAX_BOOST_FPS : GOV_MAX_BOOST;
+    if (sdGovBoost < boostCeiling && (!govLastStepMs || now - govLastStepMs >= govWinMs)) {
       sdGovBoost++;
       if (sdGovBoost > govMaxBoost) govMaxBoost = sdGovBoost;
       int q = govBaseQ + sdGovBoost;
@@ -593,7 +629,7 @@ static void sdGovernor() {
       govLastStepMs = now;
       LOG_INF("SD governor: quality %d (boost %u) - demand %lu KB/s of %u over %lums", q, sdGovBoost, demandKBs, budget, winMs);
     }
-  } else if (demandKBs < (uint32_t)budget * GOV_RELAX_PCT / 100 && sdGovBoost && !windowNear) {
+  } else if (demandKBs < (uint32_t)budget * GOV_RELAX_PCT / 100 && sdGovBoost && !windowNear && !rateShort) {
     // !windowNear: at low fps the SD demand can be tiny while frames sit just under
     // the frame window - easing the boost there would grow them straight over it
     govEaseSince = 0; // unwind the whole boost before the base is allowed to move
@@ -619,7 +655,7 @@ static void sdGovernor() {
     // govUserQ != 0: the floor is only known once the config replay has reached the sensor
     // (reloadConfigs -> updateAppStatus "quality"). Without it there is nothing to walk TO,
     // and a zero floor would walk the quality off the bottom of its range
-    if (!sdGovBoost && govUserQ && govBaseQ > govUserQ && !nightFrameMs) {
+    if (!sdGovBoost && govUserQ && govBaseQ > govUserQ && !nightFrameMs && !rateShort) {
       // A step down GROWS frames, which is the direction that ends in no frames at all, so
       // the test is whether the frame this step would produce still clears both of the
       // governor's own arming gates. Nothing new to tune: with the measured 1.5x the SD half
@@ -1140,6 +1176,11 @@ static int nightPrevQ = -1;     // the quality before the session, restored on t
 #define NIGHT_DARK_QSXGA_Q 28
 
 int tunedFps = 0; // config: fps choices drive the sensor's own timing on the in-spec PLL
+// config: trade JPEG quality to hold the requested frame rate. Default ON - the fps ceiling
+// describes what the SENSOR can emit, and the governor's job is to make the storage path keep
+// up with it. Off, the ceilings still stand but a size the card cannot carry sheds frames at
+// the user's chosen quality instead, which is the behaviour before 7 Sep 2026
+bool fpsPriority = true;
 volatile bool retimePending = false; // fps changed - capture task retimes on the next frame
 // config: the mains banding filter. 0 = off (the persisted default since 4 Sep 2026), 50 or
 // 60 = manual band select. Applied by applyBanding() next to applyAecLimits()

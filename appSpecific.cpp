@@ -311,6 +311,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "banding")) setBanding(intVal);
   // takes effect on the next size change (or boot), when applySensorTuning() next runs - the
   // sensor cannot be retimed from the web task while the capture task may hold a frame
+  else if (!strcmp(variable, "fpsPriority")) fpsPriority = (bool)intVal;
   else if (!strcmp(variable, "tunedFps")) {
     tunedFps = intVal;
     if (playbackHandle != NULL) retimePending = true; // capture task re-times on next frame
@@ -1079,6 +1080,7 @@ ae_level~-2~98~~na
 banding~0~98~~na
 aec~1~98~~na
 tunedFps~0~98~~na
+fpsPriority~1~98~~na
 sdBusDiv~4~98~~na
 zoneMask~65535~98~~na
 aec2~0~98~~na
