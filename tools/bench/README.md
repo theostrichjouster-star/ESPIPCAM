@@ -113,6 +113,25 @@ The web UI's controls (§38):
   report is an audit note, `SPEC[awb]` expects 0x5001, and the flip scenario restores the board's
   persisted mirror/flip instead of 0. Findings and proposals: `UI_REVIEW.md`, BOARD_TESTING §38.5
 
+- `gov_size_regress.sh` - **the SD governor across frame sizes, lit room** (§38.32). A 30 s forced
+  clip at each size's ceiling, compared against the 2-3 Sep 2026 lit q10 figures recorded in
+  `appGlobals.h` `frameData` - those predate the governor rework, so it is a real before-and-after
+  rather than a self-check. **It gates the governor and only the governor**, because only that is
+  scene-independent: no no-frame rescues, `govWrites` no more than twice the boost taken plus two
+  (one write up and one back down per step, anything above it is churn), and a boost above the
+  recorded figure only when the demand did not justify it - the push rule is a fixed percentage of
+  the SD budget, so a brighter room with bigger frames boosts correctly.
+  **Delivered fps is REPORTED, never gated.** At these ceilings it is storage-time bound, storage
+  time follows frame size and frame size follows the room; the first version did gate it and flagged
+  four sizes on a governor that was clean at all seven. `SIZES_LIST` overrides the set as
+  `name:idx:ceiling:expFps:expKB:expBoost`, `GOVWIN` sets the governor's window for an A/B, `DUR`
+  the clip length, `Q` the quality. The state restore is on an **EXIT trap**: `bench_lib`'s
+  `preflight` and `ctl` call `exit` directly, and an abort otherwise leaves `micGain` and
+  `stillSave` at 0 - which then becomes the NEXT run's captured restore point. It uses plain `curl`
+  rather than `ctl` so a dead board cannot recurse through `ctl`'s own abort.
+  Measured clean at 8 sizes twice on 6 Sep 2026; `parse_avi.py` carries `govWrites`, `govWin` and
+  the ease-down's two closing lines for it
+
 Dead ends kept as records (§31, §37) - do not re-walk without a new mechanism:
 - `hts_floor.sh` - the HTS floor walk whose gates passed corrupt frames (the reason for
   `still_color.py`)

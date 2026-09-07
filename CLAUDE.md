@@ -366,6 +366,41 @@ MINIMUM-ever memory figures are the ones that matter: a burst that briefly
 squeezes memory is invisible to instantaneous polling, and the failure it causes
 shows up only on the NEXT boot as a refused camera frame buffer.
 
+## Open items (as of 6 Sep 2026)
+
+Ordered by what would bite first. Each names where the detail lives; the inline "Still owed" notes
+elsewhere in this file are the same items seen from their own subject.
+
+1. **`/sustain?download=0` wedges the web server** (§38.21, unexplained). No abort needed, the first
+   download after a boot has done it, recovery is a reset. Not reachable from the page any more
+   (§38.25) but still compiled. **Never test it on COM3** - that is COM4's peer-reset lever
+2. **The governor pushes on KB/s only, never on storage TIME.** 1280X960 at its ceiling spends 25 ms
+   of a 26 ms period writing and delivers 38.1 of 41 while demand sits under the push line, so the
+   governor correctly does nothing about a rate the card is actually costing (§38.32, and the same
+   note from 2 Sep). The one size where the trigger and the real constraint disagree
+3. **SXGA, UXGA and QXGA have no frame-window protection at all.** 7832a16 correctly stopped handing
+   them QHD's 800 KB cliff, so the pre-arm and the ease-down's safety gate now stand down for them.
+   Closing it means `frame_window_descend.sh` at those three. Lit SXGA frames are 121 KB against a
+   cliff probably above 400, so the exposure is a dark noisy scene, not a lit one
+4. **The open-file leak audit** (§38.21). THE leak was the SD log and is fixed, but the 5 Sep
+   exhaustion reached fifteen, so something else may still leak. `fileProbe=1` either side of a
+   suspect operation is the measurement; healthy idle is 14 with SD logging on, 15 with it off
+5. **The ease-down can walk to a floor the scene cannot sustain** (§38.29). At `govEaseSecs=1` a
+   flickering lamp reached the configured quality, the next dark phase did not fit at it, and the
+   rescue fired twice in one clip at ~4.2 s of lost frames each. Harmless at the default 10 s.
+   A fix would be an adaptive floor - refuse to return to it for the rest of the clip after a
+   rescue follows the walk - which would also make a fast walk safe. Not built, and a new mechanism
+6. **The dark-room AWB comparison** (§38.16): simple vs advanced AWB measured neutral on the star
+   chart in a LIT room and simple became the default on that basis. The dark-room half is owed
+7. **The `colorbar` firmware half** (UI_REVIEW): 0x503D survives a framesize change and is
+   persistable, so a board can boot into test bars. Never persist it, clear it at boot
+8. **The `wb_mode` firmware gate** (UI_REVIEW): the presets are hidden in the page but still
+   reachable by `/control`, and every one measured further from neutral than auto
+9. **`ui_regress.sh` has not been run against any of the governor work** (§38.29-32). It exercises
+   `quality`, which the governor now writes on its own, so the register snapshots could show an
+   unexpected 0x4407 during the mid-recording scenarios. `DRY=1` is the smoke run, the full matrix
+   is 3.5 h. Not a known fault, an ungated change
+
 ## Docs map
 
 - `BATTERY.md` - battery deployment guide (committed)
