@@ -424,7 +424,7 @@ MINIMUM-ever memory figures are the ones that matter: a burst that briefly
 squeezes memory is invisible to instantaneous polling, and the failure it causes
 shows up only on the NEXT boot as a refused camera frame buffer.
 
-## Open items (as of 6 Sep 2026)
+## Open items (as of 7 Sep 2026)
 
 Ordered by what would bite first. Each names where the detail lives; the inline "Still owed" notes
 elsewhere in this file are the same items seen from their own subject.
@@ -511,6 +511,22 @@ elsewhere in this file are the same items seen from their own subject.
    `quality`, which the governor now writes on its own, so the register snapshots could show an
    unexpected 0x4407 during the mid-recording scenarios. `DRY=1` is the smoke run, the full matrix
    is 3.5 h. Not a known fault, an ungated change
+10. **A live stream has no watchdog, so a stalled one is never torn down** (7 Sep 2026, page only).
+   `checkStream()` is called from `activatePlaybackButton` alone - `activateStreamButton` sets
+   `view.src` and never arms it. **Measured on COM4**: a stream sat at `naturalWidth 0` with the
+   request open and nothing decoding, `liveStream` still on the container and the LIVE badge still
+   showing, while `/status` answered perfectly well. Nothing timed it out; only a manual stop or a
+   reload cleared it. It is last in this list because the page still looks alive and nothing is lost,
+   and because `markOnline`'s guard was deliberately written not to depend on it - it asks whether
+   the picture decodes, so a stalled stream reads Offline rather than Online.
+   **Do NOT fix it by copying the playback path.** `checkStream()` is a `while` loop on
+   `view.decode()`, and decode resolves against whatever frame is already decoded rather than waiting
+   for the next one - measured 200 resolves in 5 s on a 10 fps stream. On playback that spin is
+   bounded by the clip; on a live stream it would run for as long as the stream does, on a phone.
+   The signal it wants does not exist in the obvious places either: Chrome fires **no** `load` event
+   per part for a multipart MJPEG (0 in 5 s, measured), and comparing pixels calls a static scene
+   frozen. Something new is needed - a byte counter on the response, or the board reporting its own
+   sent-frame count in `/status` and the page watching it stop
 
 ## Docs map
 
