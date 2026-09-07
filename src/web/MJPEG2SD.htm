@@ -1586,25 +1586,16 @@
           gap: 0.35rem;
           font-size: calc(var(--bodySize) * 0.8);
         }
-        #appLinkDot {
-          width: 0.55rem;
-          height: 0.55rem;
-          border-radius: 50%;
-          background: var(--itemInactive);
-        }
-        #appLink.online #appLinkDot {
-          background: var(--buttonActive);
-        }
-
         /* --- the header's battery gauge --- */
         #appBatt {
           display: flex;
           align-items: center;
-          gap: 0.3rem;
         }
+        /* the gauge stands alone, with no reading printed beside it, so it is drawn larger than
+           an inline icon would be - the bars have to be countable at a glance */
         .batt {
-          width: 1.65rem;
-          height: 0.9rem;
+          width: 2.1rem;
+          height: 1.15rem;
           flex: 0 0 auto;
           display: block;
         }
@@ -2388,11 +2379,13 @@
         <div id="appTitle">ESP32-S3 CAM</div>
         <div id="appSubtitle"><span id="appModel">Camera</span> &middot; WiFi Camera</div>
       </div>
-      <!-- the dot IS the indicator: it turns green while the status poll is answering. A wifi glyph
-           sat here and never changed with signal strength, so it was decoration pretending to be an
-           instrument - the real RSSI is on the viewfinder rail and in System Status -->
-      <div id="appLink" class="offline" title="Connection to the camera">
-        <span id="appLinkDot" aria-hidden="true"></span>
+      <!-- One slot, two states, no separate connection light. The green dot that used to sit here
+           said exactly what the presence of the gauge says: the poll is answering. When it stops,
+           the gauge gives the slot back to the word, so "Offline" IS the indicator now.
+           (Before the dot, a wifi glyph sat here and never changed with signal strength - it was
+           decoration pretending to be an instrument. The real RSSI is on the viewfinder rail and
+           in System Status.) -->
+      <div id="appLink" class="offline">
         <!-- The battery gauge replaces the Online / Offline word whenever the board reports a
              cell voltage; the dot stays, because a stale reading looks exactly like a fresh one
              and the dot is the only thing that says which it is. Drawn inline rather than as a
@@ -2400,7 +2393,9 @@
              <use> shadow tree cannot be reached by a descendant selector.
              It is NOT given id="battV" - updateStatus() fills the element whose id equals the
              status key, so a second one would silently take that key's value from the first. -->
-        <span id="appBatt" class="hidden">
+        <!-- role="img" so the aria-label setBattGauge writes is announced: with the reading gone
+             there is no text left in here for a screen reader to read instead -->
+        <span id="appBatt" class="hidden" role="img" aria-label="Battery level">
           <!-- Paths, not <rect>. A bare `rect` selector near the top of this stylesheet gives
                EVERY rect on the page width/height 100%, x/y 0 and the ready-blue fill, for the
                upstream project's SVG buttons - so a rect drawn here becomes a solid blue block
@@ -2413,7 +2408,6 @@
             <path class="battBar b3" d="M12 3.7h3.5v6.6H12Z"/>
             <path class="battBar b4" d="M16.5 3.7h3.5v6.6H16.5Z"/>
           </svg>
-          <span id="appBattText" class="measure">--</span>
         </span>
         <span id="appLinkText">Connecting</span>
       </div>
@@ -3779,8 +3773,10 @@
         if (svg) svg.setAttribute('class', 'batt lvl' + bars);  // SVG className is not a string
         wrap.classList.toggle('warn', bars == 1);
         wrap.classList.toggle('crit', bars == 0);
-        setText('#appBattText', volts.toFixed(2) + 'V');
+        // the reading itself is not printed - the gauge is the display, and the exact volts are
+        // one tap away in System Status. It stays in the tooltip and in the accessible name
         wrap.title = volts.toFixed(2) + 'V, ' + bars + ' of 4 bars. Empty is 3.00V, where the board parks itself';
+        wrap.setAttribute('aria-label', 'Battery ' + volts.toFixed(2) + ' volts, ' + bars + ' of 4 bars');
         hide(text);
         show(wrap);
       }
