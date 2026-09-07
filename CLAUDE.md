@@ -452,9 +452,10 @@ elsewhere in this file are the same items seen from their own subject.
      the page (config row group 98, URL only). One select element
    - **Goal 3 is partly done**: `idleThrottle` already stands down for a recording, stream, playback
      or still; its cost is the retime on release. Motion detection's ~4.8% delivery loss is the real item
-   - **Goal 2 needs a decision**: at the ceiling, "no dropped frames" means LOWERING ceilings to the
-     sustainable rate (1280X960 and SXGA are 99% busy and deliver ~93% of rated), which pulls against
-     raising them with the clock. Ask before sweeping
+   - **Goal 2 is DONE (7 Sep 2026)** - see open item 2 and BOARD_TESTING §38.40. All 11 sizes were
+     measured for delivered rate; QHD 9->8 and QSXGA 7->6 are lowered for good, HD and 1280X960 KEEP
+     their sensor ceilings because `fpsPriority` now trades quality to hold the rate, and the other
+     seven were already exact. It did NOT pull against the clock work: nothing here changed a clock
    - Scale: 448 rungs for all 11 sizes at every integer fps. Narrow first, do not sweep first
 1b. **Retune the mainstays against the 88 MHz PIXCLK ceiling**
    (§38.35 carries the full brief and the fresh per-size baseline). §37 established the in-spec 88 MHz
@@ -886,6 +887,12 @@ State and budgets:
   NOT the decision interval any more: a decision is taken on every frame regardless. 0 collapses the
   window to a single frame, which is measured broken and kept only as the record (§38.30). Bench
   knob, RAM only. `govWrites` in `updateFPS` and the `closeAvi` line are the churn metric
+- `fpsPriority=0|1` - **which gives way when the card cannot keep up: quality or the frame rate.**
+  Default ON and persisted. ON, `sdGovernor`'s rate arm pushes JPEG quality (boost cap
+  `GOV_MAX_BOOST_FPS` 14, not 4) while the rolling window delivers under `GOV_RATE_PCT` of the
+  request, and the relax and ease arms stand down while that deficit stands. OFF is the pre-7 Sep
+  behaviour: the user's quality is kept and frames are shed. Measured A/B in open item 2. It cannot
+  help a size whose demand sits under `GOV_PUSH_PCT` while it still misses the rate (QHD, QSXGA)
 - `motionStats=1`, `zoneStats`, `avgZones` - detector counters and the AEC 4x4 zone grid
 - `sdBusClk` / `sdBusDiv`, `battScale` / `sagTest`, `extDVDD`, `lencFhd` (LENC A/B)
 - `peerReset=1` - pulse the OTHER board's RESET through D1 / GPIO 2 for 5 s (`=<ms>` 500-10000,
@@ -1002,6 +1009,19 @@ Destructive or dangerous:
   an A/B, `DUR` the clip length. The restore is on an **EXIT trap**, because `bench_lib`'s `preflight`
   and `ctl` call `exit` directly and an abort otherwise leaves `micGain` and `stillSave` at 0 - which
   then becomes the NEXT run's captured restore point. Measured clean at 8 sizes twice, 6 Sep 2026
+- `fps_sustain_descend.sh` - **what rate each size actually DELIVERS at its ceiling**, and therefore
+  what the ceiling should be. Walks DOWN from the ceiling, jumping straight to the delivered rate
+  (if it carried 38.1 of 41 it can carry ~38) rather than stepping, so QVGANARROW is a handful of
+  rungs not 147. `CONFIRM` clips must pass before a rate is accepted and 2 is the minimum that
+  works - QVGANARROW passed 147 once at 146.5 then failed at 144.3. Enforces the settle rule
+  itself (`SETTLE`, 240s): run at 207s it read busy 99% with 22ms of MONITORING time where the
+  settled board reads 15% and 0. `TOL`, `DUR`, `MAXRUNGS`, `MINFREEGB`, `SIZES_LIST`
+- `quality_buys_rate.sh` - what one JPEG quality step is WORTH: a ladder of base qualities at one
+  size and rate. Measured 1280X960 q14->q20 at 2.9% of frame size per step, storage 24->19ms,
+  busy 86->70% - against the 1.5x per step `GOV_STEP_GROWTH` assumes from a QSXGA measurement
+- `fps_priority_ab.sh` - the `fpsPriority` A/B. **Alternates the toggle rather than running it in
+  blocks**, because the scene drifts: an hour of failing light moved 1280X960's delivered rate by
+  3fps on its own, and blocks would confound the room with the setting
 - `ui_regress.sh` - the web UI's camera controls, every `/control` key the page can send, one at
   a time at the three mainstays (HD 30, 1280X960 41, FHDNARROW 1): min / max / the live default,
   each with a register snapshot diffed against the size's baseline (`regsnap.py`: the tuner
