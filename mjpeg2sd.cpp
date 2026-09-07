@@ -1063,6 +1063,7 @@ static void setOutputSize(sensor_t* s, uint16_t w, uint16_t h) {
 // defined further down, next to camClocks() which it needs for the line time
 static void applyAecLimits(sensor_t* s);
 static int senLineFactor(sensor_t* s);
+static int camReg(sensor_t* s, int reg); // one register, -1 on a failed read - defined further down
 
 // Night (long exposure) mode, UI_REVIEW part 2. 0 = off, else the requested frame period in ms.
 // Read by applyTunedTiming (which does the work) and by stillWaitMs(). Deliberately NOT a config
@@ -1070,6 +1071,41 @@ static int senLineFactor(sensor_t* s);
 int nightFrameMs = 0;
 #define NIGHT_PIXCLK_MHZ 10.1333f  // mul 76 / sys_div 5, the verified clock floor
 #define NIGHT_HTS_MAX 8191         // 0x380C[4:0] + 0x380D is 13 bits - 3.18s at the floor clock
+// Past 3.18s the LINE is at the register's end, so the only place left to put time is DUMMY
+// LINES - frame length beyond the rows actually read. Datasheet 4.6.2 spells out the rule: the
+// exposure must stay below {0x380E,0x380F} + {0x350C,0x350D}, and to pass the frame period the
+// FRAME is raised first and the exposure second. What that costs is the auto exposure engine:
+// its range is 1964 x tROW whatever the frame holds (features table, "maximum exposure interval"),
+// which is exactly the array's own 1964 rows, so the long end has to write the exposure by hand.
+//
+// MEASURED 6-7 Sep 2026 at 5MP on the floor clock, gain fixed, dummy lines carrying the frame:
+// the sensor integrates correctly to at least 10s - its own zone statistic rose 36 / 49 / 79 / 119
+// across 3.70 / 5.00 / 7.51 / 10.00s, tracking the exposure. What does NOT survive is DELIVERY.
+// At 5.00s two complete frames arrived in a 23s stream capture and the still was a real picture;
+// at 7.51s exactly one thing arrived and it was 68 bytes - a JFIF header and one quantisation
+// table, then end-of-image, with no scan data at all; at 10.00s nothing complete arrived in 38s.
+// So the ceiling here is the ESP32 side, not the sensor and not the array.
+//
+// WHERE IT IS, measured 7 Sep 2026 by counting complete frames off the stream over 52 s windows,
+// as delivered / produced: 3.18s 0.86, 4.00s 1.00, 4.50s 0.00, 5.00s 0.00, then 3.18s again 0.80.
+// A CLIFF, not a slope, and in the same place by both routes - the LINE does not matter, only the
+// frame period. The long regime below was moved onto the size's own line on the theory that it
+// would (a 5.00s frame HAD come back at the short line on 6 Sep, with the gain pinned low) and it
+// changed nothing: 4.50s delivered zero at HTS 2844 exactly as it had at HTS 8191. That theory is
+// retracted by measurement. A cliff at 4.0-4.5s is the shape of a TIMEOUT in the driver's frame
+// fetch rather than a bandwidth limit, which would fit esp_camera_fb_get's own wait - but the
+// camera library ships precompiled and its source is not in the core tree, so that is a candidate
+// and not a finding.
+//
+// THE CAP IS THEREFORE 3180ms, the user's decision once 5s was measured dead: the value the line
+// alone reaches at the 8191 register end, which is where this feature has always been. Everything
+// below - the dummy-line regime and the manual exposure that goes with it - is unreachable through
+// nightEnter's clamp and is kept as the record of what works and what does not. 4.00s measured a
+// perfect 1.00 twice and is one constant away if it is ever wanted; 4.50s and beyond are not
+#define NIGHT_MAX_MS 3180
+// Exposure in LINES to write by hand once the retime has landed, 0 = the AEC owns the exposure.
+// Set only by applyTunedTiming's night branch, and only above what the line alone can carry
+static int nightExpLines = 0;
 static int nightPrevFS = -1, nightPrevFPS = -1, nightPrevIdle = -1, nightPrevMic = -1;
 // The size's OWN line length, captured before the first stretch and keyed to the size. It cannot
 // be read live once stretched: clamping a new target against the current (already long) HTS would
@@ -1135,6 +1171,66 @@ static bool pickPll(float targetMHz, int* mulOut, int* sysDivOut) {
     return true;
   }
   return false;
+}
+
+// The exposure currently programmed, in whole lines, read back rather than remembered: a frame
+// size change reloads the whole 0x35xx block underneath us. -1 if the reads fail
+static int nightExpRead(sensor_t* s) {
+  int e0 = camReg(s, 0x3500), e1 = camReg(s, 0x3501), e2 = camReg(s, 0x3502);
+  if (e0 < 0 || e1 < 0 || e2 < 0) return -1;
+  return (((e0 & 0x0F) << 16) | (e1 << 8) | e2) / 16; // the field is sixteenths of a line
+}
+
+static bool nightExpWrite(sensor_t* s, int lines) {
+  // Low byte first when RAISING and high byte first when LOWERING, so no intermediate value is
+  // ever above BOTH the old exposure and the new one. That matters more here than it looks: an
+  // intermediate longer than the frame is precisely the invalid state the frame-then-exposure
+  // ordering exists to avoid, and it would land for one frame with no error anywhere
+  uint32_t v = (uint32_t)lines * 16;
+  int cur = nightExpRead(s);
+  if (cur >= 0 && lines >= cur) {
+    s->set_reg(s, 0x3502, 0xFF, v & 0xF0);        // 0x3502[3:0] is a fraction of a line and the
+    s->set_reg(s, 0x3501, 0xFF, (v >> 8) & 0xFF); // part does not support one, so it stays 0
+    s->set_reg(s, 0x3500, 0xFF, (v >> 16) & 0x0F);
+  } else {
+    s->set_reg(s, 0x3500, 0xFF, (v >> 16) & 0x0F);
+    s->set_reg(s, 0x3501, 0xFF, (v >> 8) & 0xFF);
+    s->set_reg(s, 0x3502, 0xFF, v & 0xF0);
+  }
+  return nightExpRead(s) == lines;
+}
+
+// Bring a manual exposure DOWN before the frame that has to hold it does. Called immediately
+// before the VTS write; the raise is the other half, after it
+static void nightExposurePre(sensor_t* s, int newVts) {
+  if (s == NULL || s->set_reg == NULL) return;
+  int mode = camReg(s, 0x3503);
+  if (mode < 0 || !(mode & 0x01)) return; // the AEC owns the exposure - nothing manual to lower
+  int cur = nightExpRead(s), limit = newVts - 4;
+  if (cur > 0 && limit > 0 && cur > limit && nightExpWrite(s, limit))
+    LOG_VRB("Night exposure %d -> %d lines before the frame shortens to %d", cur, limit, newVts);
+}
+
+static void nightExposurePost(sensor_t* s) {
+  if (s == NULL || s->set_reg == NULL) return;
+  int mode = camReg(s, 0x3503);
+  if (mode < 0) return;
+  if (nightExpLines > 0) {
+    // AEC manual with AGC left AUTO (0x3503 = 0x01). Full manual (0x03) is the mode carrying the
+    // two measured quirks - a frame that will not integrate its register value until a LARGE
+    // increase is written, and a decrease that gives a persistent flat black frame (BOARD_TESTING
+    // 38.5). Leaving the gain automatic is also what keeps the picture self regulating once the
+    // exposure can no longer move: the AGC becomes the only loop, and it is the one that works
+    s->set_reg(s, 0x3503, 0x03, 0x01);
+    if (!nightExpWrite(s, nightExpLines))
+      LOG_WRN("Night exposure %d lines did not read back (got %d)", nightExpLines, nightExpRead(s));
+    else LOG_INF("Night exposure manual: %d lines in a %d line frame, AGC left auto",
+      nightExpLines, senReg16(s, 0x380E));
+  } else if (mode & 0x01) {
+    // leaving the manual regime - hand the exposure back before anything else reads it
+    s->set_reg(s, 0x3503, 0x03, 0x00);
+    LOG_INF("Night exposure back to auto (0x3503 0x%02X)", camReg(s, 0x3503));
+  }
 }
 
 static void applyTunedTiming(sensor_t* s, framesize_t fs) {
@@ -1211,6 +1307,9 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   int vts = (int)(80e6f / ((float)hts * lf * fps * fpsOverdrive(fps)));
   int mul = 120, sysDiv = 1; // PIXCLK 80MHz, the high-fps default
   int htsWant = hts; // every path but night mode leaves the line length exactly as it found it
+  // cleared on EVERY retime, so ending a session, changing size or changing rate all hand the
+  // exposure back on their own. Only the night branch below re-arms it, and only above 3.18s
+  nightExpLines = 0;
   // 0x3108 root dividers: 0x26 is route A (SCLK = pll_clki/4, the tree every reference point
   // was measured on), 0x11 is route B (every root divider halved, so the same SCLK comes from
   // half the VCO). The tuner never used to write this register at all, which left whatever a
@@ -1232,9 +1331,30 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     clkMHz = NIGHT_PIXCLK_MHZ;
     vts = AEC_VTS_CEIL;
     if (nightHtsBase <= 0 || nightHtsFS != (int)fs) { nightHtsBase = hts; nightHtsFS = (int)fs; }
-    htsWant = (int)((float)nightFrameMs * NIGHT_PIXCLK_MHZ * 1e3f / (AEC_VTS_CEIL * lf) + 0.5f);
+    int htsNeeded = (int)((float)nightFrameMs * NIGHT_PIXCLK_MHZ * 1e3f / (AEC_VTS_CEIL * lf) + 0.5f);
+    // Past the line register's end the AEC can go no further either way, so the regime changes:
+    // the frame is carried by DUMMY LINES at the size's OWN line, and the exposure is written by
+    // hand. Nothing below 3.18s changes at all - those keep the stretched line, VTS at the engine
+    // cap and the AEC owning the exposure, byte for byte as before.
+    //
+    // Going back to the SHORT line for the long regime is measured, not tidiness. A long line and
+    // a long frame are not equivalent to the capture path even at the same period: at the 8191
+    // line, 4.0s delivered every frame the sensor produced and 4.5s delivered NOTHING in 52s,
+    // while the short line carried a real 5.00s picture at 5MP (7 Sep 2026). It also cuts
+    // rolling-shutter skew by the same factor, since skew is the row time times the rows read -
+    // 1.1s instead of 3.2s across the frame at 5MP
+    bool dummyRegime = (htsNeeded > NIGHT_HTS_MAX);
+    htsWant = dummyRegime ? nightHtsBase : htsNeeded;
     if (htsWant < nightHtsBase) htsWant = nightHtsBase; // never below the size's own line
     if (htsWant > NIGHT_HTS_MAX) htsWant = NIGHT_HTS_MAX;
+    if (dummyRegime) {
+      float nightLineUs = (float)htsWant * lf / NIGHT_PIXCLK_MHZ;
+      int vtsWant = (nightLineUs > 0) ? (int)((float)nightFrameMs * 1000.0f / nightLineUs + 0.5f) : 0;
+      if (vtsWant > AEC_VTS_CEIL && vtsWant <= 0xFFFF) {
+        vts = vtsWant;
+        nightExpLines = vtsWant - 4; // datasheet 4.6.2: the exposure must leave 4 lines
+      }
+    }
   }
   else if (vts > AEC_VTS_CEIL) {
     // Exposure-first low-fps regime. VTS-only stretching froze the exposure ceiling at
@@ -1329,10 +1449,12 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
     if (gotHts != htsWant) LOG_WRN("Night timing: HTS %d did not read back (got %d)", htsWant, gotHts);
     else hts = gotHts;
   }
+  nightExposurePre(s, vts); // a manual exposure comes down BEFORE the frame that has to hold it
   if (!senWrite16(s, 0x380E, vts)) LOG_WRN("Tuned timing: VTS %d did not read back", vts);
   else {
+    nightExposurePost(s); // and goes up after it, which is the order datasheet 4.6.2 requires
     int expLines = vts - 4;
-    if (expLines > 1964) expLines = 1964; // the AEC engine cap, applyAecLimits
+    if (expLines > 1964 && !nightExpLines) expLines = 1964; // the AEC engine cap, applyAecLimits
     float senFps = pixClkMHz * 1e6f / ((float)hts * lf * vts);
     sensorFrameMs = (senFps > 0.0f) ? (uint32_t)(1000.0f / senFps + 0.5f) : 0; // the no-frame watchdog's yardstick
     LOG_INF("Tuned timing %s: PIXCLK %.2fMHz, HTS %d x%d, VTS %d -> sensor %.2ffps for request %u, max exposure %.0fms",
@@ -1369,6 +1491,10 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
   // steps (worst ratio 2, at 1->2) can never leave an unreachable fps gap.
   uint8_t fps = desiredFPS(fs);
   if (fps < 1) fps = 1;
+  // night mode never runs on a scaler size, so reaching here means any manual exposure left over
+  // from a session belongs to a size we are no longer on: clear it, or the sensor keeps a
+  // multi-second exposure while /status reports an ordinary rate - the §38.13 failure exactly
+  nightExpLines = 0;
   int hts = senReg16(s, 0x380C);
   int vts = senReg16(s, 0x380E);
   int lf = senLineFactor(s);
@@ -1417,6 +1543,7 @@ static void applyScalerClock(sensor_t* s, framesize_t fs) {
   float pixClkMHz = mul * 2.0f / 3 / sysDiv;
   float senFps = pixClkMHz * 1e6f / ((float)hts * lf * vts);
   sensorFrameMs = (senFps > 0.0f) ? (uint32_t)(1000.0f / senFps + 0.5f) : 0; // the no-frame watchdog's yardstick
+  nightExposurePost(s); // clears a stale manual exposure; a no-op when there was never one
   LOG_INF("Scaler clock %s: PIXCLK %.2fMHz (mul %d sys_div %d), HTS %d x%d, VTS %d -> sensor %.2ffps for request %u",
     frameData[fs].frameSizeStr, pixClkMHz, mul, sysDiv, hts, lf, vts, senFps, fps);
 }
@@ -2417,6 +2544,15 @@ static boolean processFrame() {
   camera_fb_t* fb = esp_camera_fb_get();
   if (fb == NULL) {
     noFrameRescue(false);
+    // A retime MUST still be serviced when no frame arrives, or any state that stops delivery is
+    // unrecoverable except by reboot: the request is accepted and raises retimePending, and the
+    // only thing that services it sat below this early return. Measured 7 Sep 2026 - a 4.5 s night
+    // session stopped delivering, and from then on it ignored a shorter exposure, a frame size
+    // change AND its own exit, leaving the sensor on a 4.49 s frame while /status reported HD 30.
+    // The same trap has always existed for a dark 5MP frame that never fits the buffer.
+    // Safe here precisely BECAUSE there is no frame: settleSensor's precondition is that the
+    // capture task holds no buffer, and this is the one path where that is guaranteed
+    settleSensor();
     return false;
   }
   if (!fb->len || fb->len > maxFrameBuffSize) {
@@ -2432,6 +2568,7 @@ static boolean processFrame() {
     badFrameCnt++;
     LOG_VRB("Discarded bad frame, len %u", fb->len);
     esp_camera_fb_return(fb);
+    settleSensor(); // same reason as the no-frame path above, and the buffer is back
     return false;
   }
   lastGoodFrameMs = millis(); // feeds the no-frame watchdog; stale-size flushes below
@@ -3589,7 +3726,11 @@ static void applyAecLimits(sensor_t* s) {
     int step = (bandSel & 1) ? b50 : b60; // 0x3C0C[0]: the band the engine is quantising to
     // below one band the engine's own auto-band-off applies and freeform is by design; with
     // the filter off altogether (bandingHz 0) there is no grid, and freeform is the config
-    if (bandingHz && expo > step) {
+    // and never while the night regime owns the exposure: the snap writes 0x3500-0x3502 and
+    // CLEARS 0x3503[0] on the way out, which would hand a multi-second exposure back to an engine
+    // whose range stops at 1964 lines. Dormant today (the filter is off by default) and one
+    // banding=50 away from being live
+    if (bandingHz && expo > step && !nightExpLines) {
       int n = (expo + step / 2) / step;
       if (n * step > maxExp) n = maxExp / step;
       int snapped = n * step;
@@ -3734,6 +3875,12 @@ uint32_t stillWaitMs() {
 // capture task owns that, see settleSensor), so this sets the target and raises retimePending
 bool nightEnter(int fsIdx, int ms) {
   if (ms < 1) return false;
+  // The cap is a DELIVERY limit, not a sensor one - see NIGHT_MAX_MS. Clamped rather than
+  // refused so a stale page or a bench call gets the longest frame that works instead of nothing
+  if (ms > NIGHT_MAX_MS) {
+    LOG_INF("Night mode: %dms clamped to the %dms delivery ceiling", ms, NIGHT_MAX_MS);
+    ms = NIGHT_MAX_MS;
+  }
   nightFS = fsIdx; // the stretch applies to THIS size and no other
   if (nightPrevFS < 0) { // first entry - remember what to put back
     nightPrevFS = fsizePtr;
@@ -3817,7 +3964,13 @@ void nightStatus(char* buf, size_t len) {
     c = camClocks(s);
   }
   float lineUs = (c.valid && c.pixClk && hts > 0) ? (float)hts * lf * 1e6f / c.pixClk : 0;
-  float gotMs = lineUs * AEC_VTS_CEIL / 1000.0f;
+  // the LIVE frame length, not the engine cap. Identical up to 3.18s where VTS is pinned at the
+  // cap, and the only truthful figure above it, where dummy lines carry the frame
+  float gotMs = lineUs * ((vts > 8) ? vts : AEC_VTS_CEIL) / 1000.0f;
+  // the longest exposure the frame can actually hold: 4 lines short of it, and additionally capped
+  // at the engine's own 1964-line range whenever the engine is the thing choosing
+  int maxLines = (vts > 8) ? vts - 4 : AEC_VTS_CEIL - 4;
+  if (!nightExpLines && maxLines > 1964) maxLines = 1964;
   // The reachable range on the floor clock. The short end is the size's OWN line (nightHtsBase),
   // not the stretched one - reporting the current value as the minimum would let the slider trap
   // itself at whatever it last set. The long end is the register's 13-bit end
@@ -3826,7 +3979,11 @@ void nightStatus(char* buf, size_t len) {
     float usPerHts = lineUs / hts;
     int base = (nightHtsBase > 0) ? nightHtsBase : hts;
     minMs = usPerHts * base * AEC_VTS_CEIL / 1000.0f;
+    // the long end is the line register's 13-bit end, computed rather than hardcoded so it stays
+    // right if the clock floor ever moves, and then held to the DELIVERY ceiling - which is the
+    // lower of the two and the one that actually binds. See NIGHT_MAX_MS
     maxMs = usPerHts * NIGHT_HTS_MAX * AEC_VTS_CEIL / 1000.0f;
+    if (maxMs > NIGHT_MAX_MS) maxMs = NIGHT_MAX_MS;
   }
   // the live AWB gains and whether they are manual, so the panel's sliders start from what the ISP
   // actually converged on rather than from a guess
@@ -3839,7 +3996,7 @@ void nightStatus(char* buf, size_t len) {
     "\"hts\":%d,\"vts\":%d,\"lineUs\":%.2f,\"maxLines\":%d,\"pixClkMHz\":%.2f,\"vcm\":%d,"
     "\"awbR\":%d,\"awbG\":%d,\"awbB\":%d,\"awbManual\":%d}",
     nightFrameMs > 0 ? 1 : 0, frameData[sensorFS].frameSizeStr, nightFrameMs, gotMs, minMs, maxMs,
-    hts, vts, lineUs, AEC_VTS_CEIL - 4, c.valid ? c.pixClk / 1e6f : 0, camFocusCode(),
+    hts, vts, lineUs, maxLines, c.valid ? c.pixClk / 1e6f : 0, camFocusCode(),
     awbR & 0x0FFF, awbG & 0x0FFF, awbB & 0x0FFF, awbMan == 1 ? 1 : 0);
 }
 

@@ -456,6 +456,35 @@ elsewhere in this file are the same items seen from their own subject.
 ## Docs map
 
 - `BATTERY.md` - battery deployment guide (committed)
+- **THE LONG EXPOSURE CEILING IS 3.18 s AND IT IS A DELIVERY LIMIT, NOT THE SENSOR'S** (7 Sep 2026,
+  §38.36). The sensor integrates correctly to **at least 10 s** and the array is not the limit either:
+  the datasheet's "maximum exposure interval: 1964 x tROW" is the AEC ENGINE's range and equals the
+  array's own 1964 rows, and it is lifted by **dummy lines** - frame length past the rows read, with
+  the exposure written by hand (0x3503 = 0x01, AEC manual and AGC left auto; full manual 0x03 carries
+  the two §38.5 quirks). Datasheet 4.6.2: raise the FRAME first, then the exposure. Measured at 5MP
+  with the gain fixed, the sensor's own zone statistic rose 36 / 49 / 79 / 119 across 3.70 / 5.00 /
+  7.51 / 10.00 s, tracking the exposure, and 5.00 s came back as a real 135 KB picture.
+  **What fails is the ESP32 handing the frame over**, and it is a CLIFF: complete frames counted off
+  the stream over 52 s windows, as delivered/produced, **3.18 s 0.86, 4.00 s 1.00, 4.50 s 0.00,
+  5.00 s 0.00**. At 7.51 s the one thing that arrived was 68 bytes - a JFIF header and one
+  quantisation table then end-of-image, no scan data. **The LINE does not matter, only the period**:
+  the long regime was moved onto the size's own short line on the theory that it would help, and
+  4.50 s still delivered zero - that theory is RETRACTED by measurement. A cliff at 4.0-4.5 s is the
+  shape of a timeout in the driver's frame fetch, but the camera library ships precompiled and its
+  source is not in the core tree, so that is a candidate and not a finding. **4.00 s measured a
+  perfect 1.00 twice** and is one constant away (`NIGHT_MAX_MS`); the user's decision was to stay at
+  3180. The dummy-line code and its manual exposure are in `applyTunedTiming`, unreachable through
+  `nightEnter`'s clamp, kept as the record. Bench rigs: `night_ceiling_probe.sh`, `night_revert_verify.sh`
+- **A no-frame state used to be unrecoverable without a reboot** (7 Sep 2026, fixed). `settleSensor()`
+  runs at the END of `processFrame()`, and `processFrame()` returned early whenever
+  `esp_camera_fb_get()` handed back NULL - so nothing serviced `retimePending`. Observed: a 4.5 s
+  session stopped delivering and then ignored a shorter exposure, a framesize change AND its own
+  exit, sitting on a 4.49 s frame while `/status` reported HD 30. **The same trap always existed for
+  a dark 5MP frame that never fits the buffer**, so this was reachable before the night work. Both
+  the NULL path and the oversize path now call `settleSensor()` - safe at exactly those points
+  because the capture task holds no buffer, which is that function's precondition. The forced re-test
+  recovered in 5 s but did not clearly reproduce the stuck state first, so the fix is argued from the
+  original observation plus the code path, not from that re-test
 - **Long Exposure panel** (moon button, 5 Sep 2026): `nightExp=<size>,<ms>` programs a multi-second
   frame by stretching the LINE - VTS held at `AEC_VTS_CEIL`, clock at the 10.13 MHz floor, HTS
   carrying the rest - as a branch inside `applyTunedTiming`, so every retime reproduces it and the
@@ -818,6 +847,17 @@ Destructive or dangerous:
   on the floor (`POINTS="vts:lines ..."`, `GAIN=`): a control point (same exposure, doubled
   frame) validates the rig before the 2x, 3x and 3.4x steps; gain through the driver's
   `agc_gain`, the exposure only ever raised (see the manual-mode rule above)
+- `night_ceiling_probe.sh` - **where a long exposure stops DELIVERING frames.** Walks the night
+  slider and counts complete frames off the stream per rung, reporting delivered/produced against the
+  period the registers imply. Holds the stream across each change deliberately: a session that has
+  stopped delivering cannot be retimed or left, so without a consumer the walk cannot proceed - and a
+  viewer is the realistic case anyway. `MSLIST` sets the rungs, `WIN` the window
+- `night_revert_verify.sh` - the panel at its 3.18 s ceiling through the page's own path, that a
+  longer request is clamped rather than refused, and that a board forced into a no-frame state climbs
+  out without a reboot. The last part passed but did not clearly reproduce the stuck state first
+- `night5s_verify.sh` - the 5 s attempt, kept as the record: it PASSED every register and arithmetic
+  check (HTS 8191, VTS 3093, 3089 lines, 1141 dummy lines) and failed on delivery, which is how the
+  4.0-4.5 s cliff was found
 - `awb_eval.sh` - does the AWB work during long exposures: QSXGA at fps 5, fps 1, HTS 5600,
   HTS 8191 and a manual 3932-line stage, the AWB gains (0x3400-0x3405, 0x3406) sampled every
   10 s and a still per stage with the star-chart box's R/G and B/G (`BOX=`, `EGAIN=`)
@@ -869,6 +909,24 @@ Destructive or dangerous:
   The rate gate is rate-dependent (6% below 10 fps: the VSYNC counter's window is a dozen edges at
   1 fps), the WRN gate compares only a line's tail (the RTC ring clips ageing lines from the
   front), and a key `/status` does not report is an audit note not a finding
+- `stream_grab.py` - pull one complete JPEG out of a raw MJPEG capture. **The instrument for any
+  rate below ~1 fps**: the still handler waits `MAX_FRAME_WAIT` (1.2 s) for a kept frame and gives up,
+  so a request lands with probability 1.2 x fps - ZERO stills in 59 requests at 7.5 and 10 s frames,
+  while the VSYNC pin said the sensor was delivering. The stream has no such window. **It requires a
+  start-of-frame marker, not just SOI/EOI**: the sensor really does emit a 68-byte header-only frame,
+  which a marker-pair scan calls complete and a byte gate calls small. Reports complete and truncated
+  counts separately. **Proven not to disturb the sensor** with `idleFps` 0 - a VTS written by register
+  survived an 8 s stream open byte for byte; with `idleFps` non-zero the throttle release retimes and
+  WOULD rewrite it, so campaign config's `idleFps=0` is load-bearing wherever this is used
+- `bench_lib.sh` `CTL_TRIES` / `CTL_RETRY_S` (default 2 attempts 5 s apart, exactly as before) -
+  raise them on a flaky LAN. The board's own supervisor takes 60-121 s to restart a station and it
+  roams between two APs on this SSID, so a transient roam looks EXACTLY like a wedge: two failures,
+  then `peer_reset` - which is a POWERON that wipes the RTC ring, the one place the pre-crash tail
+  lives. The default escalation destroys the evidence needed to tell the two apart
+- `bench_lib.sh` `AF_DIRECT=1` with `AF_VCM_SET` - place the lens by register and skip the AF program.
+  For a DARK run it loses nothing (the program cannot focus in low light and the hold overwrites its
+  answer anyway) and it drops a size change, a settle and ~20 mailbox polls: the flakiest stretch of
+  any dark campaign's setup, and where a run aborted on 6 Sep
 - Parsers: `t1_point.py` (retime line + gates), `parse_avi.py`, `parse_play.py`,
   `parse_motion.py`, `parse_zones.py` (the avgZones grid: mean / min / max / YAVG / band / AEC
   state), `jfield.py` (/status field), `jpeg_dims.py`, `still_color.py` (channel ratio +

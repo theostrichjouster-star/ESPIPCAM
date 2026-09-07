@@ -55,21 +55,42 @@ peer_reset() {
 # ctl key=value : one retry after 5 s, then abort. Prints the response body. On the abort the
 # board is recovered through the other board if PEER is set (the run still stops: a rebooted
 # board fails the 240 s settle rule and its RAM config is gone)
+# CTL_TRIES / CTL_RETRY_S default to 2 attempts 5 s apart, which is what this always did. Raise
+# them on a flaky LAN: the board's own wifi supervisor takes 60-121 s to restart a station and the
+# station roams between two APs on this SSID (-27 to -69 dBm across channels 1, 6 and 11), so a
+# transient roam looks EXACTLY like a wedge from here - two failures, then peer_reset. And the
+# peer reset is a POWERON, which wipes the RTC ring: the one place the pre-crash tail lives. So the
+# default escalation destroys the evidence needed to tell the two apart. Measured 6 Sep 2026, when
+# a run aborted mid-AF-hold 20 minutes after a logged half-hour of SSID-not-available warnings,
+# failed gateway pings and four supervisor restarts. Set CTL_TRIES so the window outlasts 121 s.
 ctl() {
-  local r
-  http_gap
-  if ! r=$(curl -s -m 25 "$B/control?$1"); then
-    sleep 5; http_gap
-    r=$(curl -s -m 25 "$B/control?$1") || { log "ABORT: control $1 failed twice"; peer_reset; exit 3; }
-  fi
-  printf '%s' "$r"
+  local r i tries=${CTL_TRIES:-2} gap=${CTL_RETRY_S:-5}
+  for i in $(seq 1 "$tries"); do
+    http_gap
+    if r=$(curl -s -m 25 "$B/control?$1"); then
+      [ "$i" -gt 1 ] && log "control $1 recovered on attempt $i"
+      printf '%s' "$r"; return 0
+    fi
+    [ "$i" -lt "$tries" ] && sleep "$gap"
+  done
+  log "ABORT: control $1 failed $tries times over $(( (tries - 1) * gap ))s"
+  peer_reset; exit 3
 }
 
 # the RTC ring: 7KB, wraps in ~95 lines, carries non-text bytes (hence grep -a)
 ramlog() { http_gap; curl -s -m 40 "$B/control?displayLog=1" | grep -a ''; }
 
 # /status field, with the stray control characters the board sometimes emits stripped
-status_field() { http_gap; curl -s -m 15 "$B/status" | python "$HERE/jfield.py" "$1"; }
+status_field() {
+  local v i
+  for i in $(seq 1 "${CTL_TRIES:-2}"); do
+    http_gap
+    v=$(curl -s -m 15 "$B/status" | python "$HERE/jfield.py" "$1")
+    [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    [ "$i" -lt "${CTL_TRIES:-2}" ] && sleep "${CTL_RETRY_S:-5}"
+  done
+  printf ''   # empty is the caller's signal, same as before - preflight and uptime_s both gate on it
+}
 
 uptime_s() {
   local u d t h m s
@@ -194,6 +215,24 @@ af_vcm() { echo "$(regrd 0x3602)$(regrd 0x3603)"; }
 af_code() { printf '%d' $(( ((16#${1:2:2} & 0x3F) << 4) | (16#${1:0:2} >> 4) )); }
 AF_VCM=""
 af_hold() {  # af_hold <size idx to return to> <quality> <fps to return to>
+  # AF_DIRECT=1 with AF_VCM_SET: place the lens by register and skip the AF program entirely.
+  # For a DARK run that loses nothing - the program cannot focus in low light, it parks the lens
+  # wherever it gives up (codes 42 / 114 / 342 / 612 measured against 171-256 lit), so the hold
+  # below then overwrites its answer anyway. What it saves is the FHDNARROW size change, the 10 fps
+  # settle and ~20 mailbox polls: the longest and flakiest stretch of any dark campaign's setup.
+  if [ -n "${AF_DIRECT:-}" ] && [ -n "${AF_VCM_SET:-}" ]; then
+    ctl "camReg=0x3000,0x20" > /dev/null; sleep 1
+    [ "$(regrd 0x3000)" = "20" ] || { log "ABORT: MCU reset bit did not take - lens not held"; exit 9; }
+    local was; was=$(af_vcm)
+    ctl "camReg=0x3603,0x${AF_VCM_SET:2:2}" > /dev/null; sleep 0.3
+    ctl "camReg=0x3602,0x${AF_VCM_SET:0:2}" > /dev/null; sleep 1
+    AF_VCM=$(af_vcm)
+    [ "$AF_VCM" = "$AF_VCM_SET" ] || { log "ABORT: VCM set to 0x$AF_VCM_SET reads back 0x$AF_VCM"; exit 9; }
+    log "AF_DIRECT: MCU held (0x3000 0x20), lens 0x$was (code $(af_code "$was")) -> 0x$AF_VCM (code $(af_code "$AF_VCM"))"
+    set_size "$1" "$2" "$3"; sleep 3
+    log "after the size change VCM 0x$(af_vcm)"
+    return 0
+  fi
   set_size 16 10 10; sleep 3
   if ! af_cmd 0x04; then
     log "AF program not answering - MCU restart (0x3000 bit 5)"

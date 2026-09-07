@@ -2498,6 +2498,13 @@
                   <div class="input-group" id="nightSecs-group">
                     <label for="nightSecs">Exposure time</label>
                     <div name="rangeMin">-</div>
+                    <!-- The real range comes from nightExp's own reply (changeRange from minMs /
+                         maxMs), so these are only what the slider shows before the first response.
+                         3180 is where the line register's 13-bit end lands at the clock floor, and
+                         it is also inside the DELIVERY ceiling: the sensor integrates correctly to
+                         at least 10 s by dummy lines, but the ESP32 stops handing frames over
+                         between 4.0 and 4.5 s, measured both by a long line and by a short one
+                         (7 Sep 2026, NIGHT_MAX_MS) -->
                     <input type="range" id="nightSecs" class="local" min="850" max="3180" step="10" value="1000"
                            title="The frame period. The exposure ceiling follows it, because VTS is held at the AEC engine's cap">
                     <div name="rangeMax">-</div>
