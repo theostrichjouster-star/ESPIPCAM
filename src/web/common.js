@@ -39,7 +39,9 @@
             '<symbol id="icon-play" viewBox="0 0 24 24"><path d="M10 8.5l6 3.5-6 3.5V8.5Z" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="9"/></symbol>' +
             '<symbol id="icon-broadcast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/><path d="M8 8a5.5 5.5 0 0 0 0 8M16 16a5.5 5.5 0 0 0 0-8"/><path d="M5 5a9.5 9.5 0 0 0 0 14M19 19a9.5 9.5 0 0 0 0-14"/></symbol>' +
             '<symbol id="icon-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l4.5-4.5 4 4 3-2.5L20 18"/></symbol>' +
-            '<symbol id="icon-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>' +
+            // replaces icon-grid, which was four 7x7 rects: at the 20px the card heading gives it
+            // their 1.75 strokes and 1.67px gaps merged and it read as one solid block, not a grid
+            '<symbol id="icon-wrench" viewBox="0 0 24 24"><path d="M15 6a1.05 1.05 0 0 0 0 1.5l1.5 1.5a1.05 1.05 0 0 0 1.5 0l3.4-3.4a5.9 5.9 0 0 1-7.8 7.8l-6.8 6.8a2.1 2.1 0 0 1-2.95-2.95l6.8-6.8a5.9 5.9 0 0 1 7.8-7.8Z"/></symbol>' +
             '<symbol id="icon-chart" viewBox="0 0 24 24"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="5"/><line x1="18" y1="20" x2="18" y2="9"/></symbol>' +
             '<symbol id="icon-wifi" viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0"/><path d="M6 12.5a9 9 0 0 1 12 0"/><path d="M9.5 16a4 4 0 0 1 5 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor" stroke="none"/></symbol>' +
             '<symbol id="icon-chevron" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6"/></symbol>' +
