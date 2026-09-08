@@ -183,6 +183,16 @@ bool startOtaUpdate() {
   otaInProgress = true;
   snprintf(otaStatus, OTA_STATUS_LEN, "Downloading %s ...", otaLatestTag);
   if (otaHandle == NULL)
-    xTaskCreateWithCaps(&otaTask, "otaTask", OTA_STACK_SIZE, NULL, FTP_PRI, &otaHandle, STACK_MEM);
+    // MALLOC_CAP_INTERNAL deliberately, NOT the STACK_MEM every other task in this project
+    // uses. STACK_MEM is MALLOC_CAP_SPIRAM whenever PSRAM is found (utils.cpp), and this is
+    // the one task here that writes to FLASH. A flash erase or write disables the flash
+    // cache, and OPI PSRAM is reached through that same cache - so the instant
+    // Update.writeStream() starts, this task cannot reach its own stack. It dies where it
+    // stands: no log line (nothing is flushed), no restart, no rollback confirm, and the
+    // board never comes back until something resets it.
+    // Measured twice on COM4, 8 Sep 2026, on the first live use of this feature. The
+    // discriminator was the manual /upload path flashing the BYTE-IDENTICAL image cleanly:
+    // uploadHandler runs on the httpd worker, whose stack is internal RAM.
+    xTaskCreateWithCaps(&otaTask, "otaTask", OTA_STACK_SIZE, NULL, FTP_PRI, &otaHandle, MALLOC_CAP_INTERNAL);
   return true;
 }
