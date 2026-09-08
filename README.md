@@ -1,318 +1,355 @@
 # ESPIPCAM
 
-IP camera firmware for the Seeed Studio XIAO ESP32S3 Sense with an OV5640 camera. Records motion-triggered or continuous video to SD card as AVI files with audio, and streams live to a browser or an NVR.
+IP camera firmware for the Seeed Studio XIAO ESP32S3 Sense with an OV5640. Records motion-triggered or continuous video to SD card as AVI files with audio, streams live to a browser or an NVR, and updates itself over the air from GitHub Releases.
+
+A hardware-locked fork of [s60sc/ESP32-CAM_MJPEG2SD](https://github.com/s60sc/ESP32-CAM_MJPEG2SD), retuned against real boards rather than inherited defaults.
 
 ---
 
-## Attribution
+## What the retuning bought
+
+Every figure here was measured on this hardware. Frame rates are counted off the sensor's VSYNC pin and confirmed by a recorded clip.
+
+### Sensor frame rates
+
+Upstream ships one default rate per frame size. This build measures a ceiling per size, and any integer rate up to it can be requested.
+
+| Frame size | Upstream default | Ceiling here |
+|---|---|---|
+| QVGANARROW 320x240 | not in upstream | 147 |
+| VGANARROW 640x480 | not in upstream | 77 |
+| HD 1280x720 | 5 | 56 |
+| 1280X960 | not in upstream | 42 |
+| VGA 640x480 | 20 | 39 |
+| QVGA 320x240 | 30 | 39 |
+| SXGA 1280x1024 | 5 | 17 |
+| FHD 1920x1080 | 5 | 16 |
+| UXGA 1600x1200 | 5 | 14 |
+| QXGA 2048x1536 | 5 | 11 |
+| QHD 2560x1440 | 5 | 8 |
+| QSXGA 2560x1920 | 4 | 6 |
+
+Six frame sizes exist here that upstream does not have. The two NARROW sizes crop the sensor array rather than scaling it down, trading field of view for rate, which is where 147 fps at QVGA comes from. `FHDMID` and `FHDFULL` are two more crops of the 5 MP array, at 12 and 9. `HDV2` is 720p read the way the datasheet specifies it, worth half a frame per second over `HD` at the top three rates and nothing below them.
+
+### WiFi throughput, and a rebuilt core
+
+Throughput over WiFi is the TCP window divided by the round trip time, and the window was pinned by the lwip send buffer: a compile-time constant baked into the prebuilt Arduino core at 5760 bytes. Nothing at runtime reaches it, since this core defines `SO_SNDBUF` as unimplemented and every IDF component links as a prebuilt archive, so neither a socket option nor a project `sdkconfig` can move it.
+
+Rebuilding the core is the only route, so this repository does that and raises the buffer to 65535. Released binaries carry it. See [`tools/core/`](tools/core/) for the build and the config gate run before flashing.
+
+| Live stream at HD | Stock core, 5760 | Rebuilt core |
+|---|---|---|
+| 67 KB frames, dark scene | 8.5 fps, 552 KB/s | 15.7 fps, 1121 KB/s |
+| 19 KB frames, lit scene | 25 fps, ~100 frames dropped | 30 fps, 0 dropped |
+
+The gain scales with frame size, so it is largest on the big frames a dark scene produces. At ordinary frame sizes the stream reaches the sensor's own cap and discards nothing it offers. That is what zero dropped frames means: sent plus skipped equals what the sensor produced, so the count is self-calibrating.
+
+### Storage write speed
+
+The write ceiling here is the 1-bit SD bus, not the card. The host clock divider is not reachable through the public driver API, so it is set through the hardware registers and persisted, reapplied after every mount.
+
+| SD bus clock | Sustained write |
+|---|---|
+| 40.00 MHz, the driver default | 3.55-3.68 MB/s |
+| 53.33 MHz, opt-in | 4.39 MB/s |
+
+53.33 MHz is 7% outside the SD High Speed specification, so it ships off and `sdBusDiv` defaults to 4. Setting it to 3 buys 22% of sustained write, and the recording governor's budget moves with it from 3643 to 4458 KB/s.
+
+It has to be qualified per physical card. A 32 GB card passed three integrity round trips at 53.33 MHz. A 256 GB SDXC in the same board was already card-limited at 40 MHz and turned intermittent at 53.33, truncating a 512 KB write at 176 KB, which is worse than failing cleanly. Bigger is not faster on this bus. 80 MHz is a hard wall where file creation fails outright and only a reboot recovers the driver. Every failure seen was a truncation or a clean error, never silent corruption, and the cards verified unharmed afterwards.
+
+### Web UI delivery
+
+The page is generated at build time. Sources stay commented and readable in [`src/web/`](src/web/), and the build minifies them and writes a pre-gzipped copy alongside, which the board serves with `Content-Encoding: gzip`.
+
+| | Source | Served |
+|---|---|---|
+| `MJPEG2SD.htm` | 307 KB | 33 KB |
+| `common.js` | 58 KB | 9 KB |
+| Total | 365 KB | 42 KB |
+
+That is 8.6x less on every page load, over the same link the video uses.
+
+### Other measured gains over upstream
+
+| | Upstream | Here |
+|---|---|---|
+| Clip playback in the browser | 21.9 fps, silent | full recorded rate, with audio |
+| Serving a file off the card | 1.32 MiB/s | 1.42 MiB/s |
+| Flash used | baseline | ~86 KB freed |
+| Motion detection above SXGA | stops working | runs at every frame size |
+
+The audio was in the recordings all along; the old player stepped over every audio chunk and discarded it.
+
+### Added here
+
+* `fpsPriority`, on by default, trades JPEG quality to hold the requested frame rate when the card cannot keep up. Measured at HD 52, alternating the setting so a drifting scene could not pick a side: 49.4 fps delivered with it on against 46.5 with it off.
+* An SD governor that measures over a rolling window and decides every frame. On an 87 second steady clip that took quality writes from 96 to 0.
+* Long exposure to 3.18 s. The sensor integrates correctly to at least 10 s, but frame delivery falls off a cliff between 4.0 and 4.5 s.
+* Firmware update from GitHub Releases, tested end to end on hardware.
+
+---
+
+## Attribution and licence
 
 ESPIPCAM is a derivative work of [s60sc/ESP32-CAM_MJPEG2SD](https://github.com/s60sc/ESP32-CAM_MJPEG2SD).
 
-Substantially all of the core functionality, including the AVI recording engine, motion detection, audio capture, web interface, streaming, and every integration described below, is the work of [s60sc](https://github.com/s60sc) and the upstream contributors credited at the end of this document. This project is a repackaging of that firmware for a single fixed board. It is not an independent implementation, and it would not exist without their work. If you find this useful, please star the upstream project.
+Substantially all of the core functionality, including the AVI recording engine, motion detection, audio capture, web interface, streaming and every integration below, is the work of [s60sc](https://github.com/s60sc) and the contributors credited at the end. This project repackages and retunes that firmware for one fixed board. It is not an independent implementation and would not exist without their work. If you find it useful, please star the upstream project.
 
-This program is free software licensed under the GNU Affero General Public License v3.0, inherited from upstream. See [LICENSE](LICENSE).
+Licensed under the GNU Affero General Public License v3.0, inherited from upstream. See [LICENSE](LICENSE).
 
-> Notice of modification (AGPL-3.0 §5a): This is a modified version of ESP32-CAM_MJPEG2SD, forked at upstream version 10.9.4. Modifications were made between 21 and 24 August 2026 by the maintainers of this repository. See [Changes from upstream](#changes-from-upstream) for what was changed, and the commit history for full detail.
+> **Notice of modification (AGPL-3.0 §5a):** a modified version of ESP32-CAM_MJPEG2SD, forked at upstream v10.9.4. Modified between 21 August and 8 September 2026 by the maintainers of this repository. See [Changes from upstream](#changes-from-upstream) and the commit history.
 
-> Network use (AGPL-3.0 §13): This firmware operates as a network server, serving a web interface over HTTP. If you deploy a modified version of it on a device that others interact with over a network, you must offer those users the Corresponding Source of your modified version. The Corresponding Source for this version is published at [github.com/theostrichjouster-star/ESPIPCAM](https://github.com/theostrichjouster-star/ESPIPCAM).
-
----
+> **Network use (AGPL-3.0 §13):** this firmware operates as a network server. If you deploy a modified version where others interact with it over a network, you must offer them the Corresponding Source of your version. The Corresponding Source for this version is at [github.com/theostrichjouster-star/ESPIPCAM](https://github.com/theostrichjouster-star/ESPIPCAM).
 
 ## What this build is
 
-Upstream ESP32-CAM_MJPEG2SD is a general-purpose firmware supporting around twenty different ESP32 and ESP32S3 camera boards, with every GPIO exposed as a web-configurable field so it can be adapted to arbitrary hardware.
+Upstream supports around twenty ESP32 and ESP32S3 camera boards, with every GPIO exposed as a web-configurable field so it can be adapted to arbitrary hardware. ESPIPCAM is the opposite: a fixed end product for one board. Board selection, the alternate camera drivers, the Ethernet stack, the companion mode and the GPIO configuration UI are all gone. Pins are hardwired, autofocus and audio are on by default, and updates arrive over the air.
 
-ESPIPCAM is the opposite: a fixed end-product for one board. The board selection logic, the alternate camera drivers, the Ethernet stack, the auxiliary-board companion mode, and the GPIO configuration UI have all been removed. Pins are hardwired to the XIAO Sense layout, autofocus and audio are on by default, and firmware updates are delivered over the air from GitHub Releases.
-
-The trade-off is deliberate. This build is simpler and smaller, but it will not run on any other board, and the peripheral features that depended on user-assignable pins are no longer configurable. See [Inherited features that need source changes](#inherited-features-that-need-source-changes).
+The trade is deliberate. This build is smaller and simpler, but it will not run on any other board, and features that depended on user-assignable pins are no longer configurable.
 
 ## Hardware
 
 | | |
 |---|---|
-| Board | Seeed Studio XIAO ESP32S3 Sense (the Sense expansion board is required, since it carries the camera connector, SD slot and microphone) |
-| Camera | OV5640, autofocus supported and enabled by default |
-| PSRAM | 8 MB octal (OPI). Minimum 2 MB enforced at startup |
-| Storage | microSD, 1-bit SD_MMC mode |
+| Board | Seeed Studio XIAO ESP32S3 Sense. The Sense expansion board is required, since it carries the camera connector, SD slot and microphone |
+| Camera | OV5640, autofocus enabled by default |
+| PSRAM | 8 MB octal (OPI), 2 MB minimum enforced at startup |
+| Storage | microSD, 1-bit SD_MMC |
 
-Pin assignments are fixed in [`camera_pins.h`](camera_pins.h) and are not user-configurable:
+Pins are fixed in [`camera_pins.h`](camera_pins.h): SD card CLK/CMD/D0 on GPIO 7/9/8, PDM microphone data and clock on 41/42, camera per the XIAO Sense reference layout.
 
-| Function | GPIO |
-|---|---|
-| SD card CLK / CMD / D0 | 7 / 9 / 8 |
-| PDM microphone data / clock | 41 / 42 (`I2S_SCK` = -1, i.e. PDM mode) |
-| Camera | per the XIAO Sense reference layout |
+The user LED on GPIO 21 is not driven, since upstream's lamp driver sits inside `INCLUDE_PERIPH`, which is off here. 4-bit SD mode is unavailable because the expansion board only wires `D0`, so upstream's roughly 2x write speedup for 4-line SD_MMC cannot be reached without hardware modification.
 
-The onboard user LED on GPIO 21 is not driven. Upstream's lamp driver (`setupLamp()` / `setLamp()`) lives entirely inside `#if INCLUDE_PERIPH`, which is `false` in this build, so the LED control was removed from the web UI rather than left as a slider that does nothing.
-
-4-bit SD mode is not available. The XIAO Sense expansion board only wires `D0`, so the roughly 2x write speedup that upstream documents for 4-line SD_MMC on ESP32S3 cannot be achieved here without hardware modification.
+The OV5640's pinout matches OV2640-designed boards, but its internal 1.5 V regulator runs hot. A heat sink helps in sustained use.
 
 ## Features
 
-Enabled by default:
+On by default: motion detection, continuous dashcam recording, audio from the PDM microphone muxed into the AVI as WAV, autofocus, live MJPEG streaming, still capture, a gallery with browser playback, SD card management with oldest-first deletion when space runs low, and over-the-air updates.
 
-* Motion detection by camera. See [Motion detection](#motion-detection)
-* Continuous recording, dashcam style
-* Audio recording from the onboard PDM microphone, muxed into the AVI as WAV
-* OV5640 autofocus
-* Live MJPEG streaming to browser, and still capture
-* Playback of recordings in the browser
-* SD card management, including automatic deletion of oldest recordings when space runs low
-* [Firmware updates over the air](#firmware-updates) from GitHub Releases
-
-Optional, off by default. Set the corresponding `#define INCLUDE_*` to `true` in [`appGlobals.h`](appGlobals.h):
+Off by default. Set the `#define INCLUDE_*` to `true` in [`appGlobals.h`](appGlobals.h):
 
 | Flag | Feature |
 |---|---|
 | `INCLUDE_FTP_HFS` | Upload recordings to an FTP or HTTPS file server |
 | `INCLUDE_SMTP` | Email alerts |
-| `INCLUDE_TGRAM` | [Telegram bot](#telegram-bot) alerts |
-| `INCLUDE_MQTT` / `INCLUDE_HASIO` | [MQTT](#mqtt) control and Home Assistant discovery |
-| `INCLUDE_WEBDAV` | [WebDAV](#webdav) access to the SD card |
-| `INCLUDE_CERTS` | [HTTPS](#https) and remote certificate checking |
+| `INCLUDE_TGRAM` | Telegram bot alerts |
+| `INCLUDE_MQTT` / `INCLUDE_HASIO` | MQTT control and Home Assistant discovery |
+| `INCLUDE_WEBDAV` | WebDAV access to the SD card |
+| `INCLUDE_CERTS` | HTTPS, and verification of remote server certificates |
 
-`INCLUDE_NEW_JPG` selects the `esp_new_jpeg` codec instead of the one in the ESP32 core. It stays `false`, and that is now a measured decision rather than a default. The library is an ESP-IDF component rather than an Arduino one, so enabling it adds a manual install step for every user, and the decode speed it would buy is no longer the bottleneck: choosing the right scale factor already brings a motion check at VGA to about 30 ms. The code paths behind the flag still compile.
+`INCLUDE_NEW_JPG` selects the `esp_new_jpeg` codec instead of the core's. It stays `false`: it is an ESP-IDF component rather than an Arduino one, so it adds a manual install step for every user, and since motion detection no longer decodes anything there is nothing left for it to speed up.
 
 ## Building
 
-Requires the arduino-esp32 core v3.1.1 or later, and the [`OV5640_Auto_Focus_for_ESP32_Camera`](https://github.com/0015/ESP32-OV5640-AF) library. Autofocus is on by default, so the build fails clearly without it.
+Requires the arduino-esp32 core v3.1.1 and the [`ESP32-OV5640-AF`](https://github.com/0015/ESP32-OV5640-AF) library. Autofocus is on by default, so the build fails clearly without it.
 
 ```bash
 arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --warnings all .
-arduino-cli upload  --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --port COM3 .
 ```
 
-> `PSRAM=opi` is not optional. The board's PSRAM menu defaults to *Disabled* in `boards.txt`, so a bare `--fqbn esp32:esp32:XIAO_ESP32S3` compiles without `-DBOARD_HAS_PSRAM` and produces a binary that flashes and boots but then halts with `Startup Failure: Need PSRAM to be enabled`. Verify with `arduino-cli compile --fqbn ... --show-properties | grep build.defines`, and confirm on the device. A correct build logs `PSRAM 8.0MB, mode OPI @ 80Mhz` at boot.
+> `PSRAM=opi` is not optional. The board's PSRAM menu defaults to *Disabled*, so a bare `--fqbn esp32:esp32:XIAO_ESP32S3` compiles without `-DBOARD_HAS_PSRAM` and produces a binary that flashes and boots, then halts with `Startup Failure: Need PSRAM to be enabled`. A correct build logs `PSRAM 8.0MB, mode OPI @ 80Mhz` at boot.
 
-In the Arduino IDE, select XIAO_ESP32S3 and set PSRAM to OPI PSRAM. The remaining defaults are already correct for this board: 8 MB flash, QIO 80 MHz, *Default with spiffs (3MB APP/1.5MB SPIFFS)*, USB hardware CDC with CDC-on-boot enabled, 240 MHz.
+That build is fully functional and differs from the published binaries only in the lwip send buffer. To match them, point the compile at the rebuilt core per invocation rather than installing it over the stock one:
 
-`arduino-cli board list` reports this board as the generic `esp32:esp32:esp32_family`, because every ESP32-S3 with native USB shares the same USB IDs (`303A:1001`). That is expected. Always pass the FQBN explicitly rather than relying on detection.
+```bash
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi \
+  --build-property "tools.esp32-arduino-libs.path=<rebuilt core>" \
+  --build-property "runtime.tools.esp32-arduino-libs.path=<rebuilt core>" \
+  --build-path build-65535 .
+```
 
-No board selection is needed in code. There is no `CAMERA_MODEL_*` choice to make.
+Both switches are needed, and a plain compile silently produces a stock-core image. `lwipSndBuf` in `/status` is the only thing that tells the two apart on a running board, so read it back if it matters.
+
+### Flashing
+
+Over the air is the normal route, and the only one that keeps the rollback image in the other slot. Arm the upload first, then POST the raw file as the request body:
+
+```bash
+curl "http://<camera>/control?startOTA=firmware.bin"
+curl --data-binary "@build-65535/ESP32-CAM_MJPEG2SD.ino.bin" "http://<camera>/upload"
+```
+
+Do not use `-F`: the handler reads the body directly, so a multipart form arrives as corrupt firmware. Any name containing `.bin` is treated as an image, and anything else lands in `/data`, which is how the web files are pushed. A fresh image is confirmed only after the camera, storage and WiFi validate, so an image that fails to boot properly is reverted on the next reset.
+
+Serial still works and preserves NVS and the SD card, but it writes the bootloader and OTA data as well as the app, which discards the known-good image in the other slot:
+
+```bash
+arduino-cli upload --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --port COMx .
+```
+
+In the Arduino IDE select XIAO_ESP32S3 and set PSRAM to OPI PSRAM; the other defaults are already right. Note that `arduino-cli board list` reports this board as the generic `esp32:esp32:esp32_family`, since every ESP32-S3 with native USB shares the same USB IDs, so always pass the FQBN explicitly.
+
+The web UI is generated too, so edit [`src/web/`](src/web/) and never `data/`. Run `node tools/web/build.mjs` after a change, which writes the minified and pre-gzipped files into `data/`. Those outputs are committed on purpose, because a board re-downloads them from this repository whenever its card loses them. `node tools/web/build.mjs --check` fails on a stale `data/` and should be run before committing a web change. Detail in [`tools/web/README.md`](tools/web/README.md).
 
 ## First run
 
-On first boot the device starts a WiFi access point named ESP-CAM_MJPEG_... Connect to it and open `192.168.4.1` to select your router and enter its password.
+On first boot the device starts an access point named ESP-CAM_MJPEG_... Connect to it, open `192.168.4.1`, and select your router and password. The configuration file is created automatically, and the web interface files download to the card's `/data` folder from this repository's `main` branch once the device has internet access. `/data` can be reloaded later from the Edit Config tab.
 
-The configuration file is created automatically, and the web interface files are downloaded to the SD card `/data` folder from this repository's `main` branch once the device has internet access. The `/data` folder can be reloaded later with the Reload /data button on the Edit Config tab, or over WebDAV.
-
-Settings changed from the web page are held in memory until you press Save. A reboot before saving discards them.
-
-Browser functionality is fully tested only on Chrome.
+Settings changed on the web page are held in memory until you press Save. A reboot before saving discards them. Browser functionality is fully tested only on Chrome.
 
 ## Firmware updates
 
 Two routes, both requiring authentication.
 
-Over the air from GitHub Releases: under the Access Settings sidebar there is a Firmware update section with a Check for Updates button. If a newer release exists, Install Update & Restart becomes available. It downloads the release asset, writes it to the OTA partition, and reboots.
+Over the air, under Access Settings, a Firmware update section carries a Check for Updates button. If a newer release exists, Install Update & Restart becomes available: it downloads the release asset, writes it to the OTA partition and reboots. A release must be tagged with a version parsing higher than the running `APP_VER`, where a leading `v` is optional, and must carry an asset named exactly `ESPIPCAM.bin`.
 
-For this to work, a release in [this repository](https://github.com/theostrichjouster-star/ESPIPCAM/releases) must:
+The device rejects an image under 64 KB before touching the OTA partition and aborts cleanly on a partial download. A fresh image is confirmed only after the camera, storage and WiFi validate; an unconfirmed image plus any reset reverts automatically to the previous one.
 
-* be tagged with a version that parses higher than the running `APP_VER`, where a leading `v` is optional, e.g. `v1.0.1`
-* carry an asset named exactly `ESPIPCAM.bin`
+> Versions 1.0.0 through 1.0.2 carry a broken updater and cannot install anything over the air. The fault is in the updater those versions are running, so a camera on one of them needs a single manual flash to reach 1.0.3 or later. Self-update is tested and works from 1.0.3 on.
 
-The device rejects an image smaller than 64 KB before touching the OTA partition, and aborts cleanly on a partial download, so a failed update cannot damage the running firmware. If the repository has no releases yet, the check reports that rather than erroring.
-
-Manual upload: the OTA Upload tab still accepts a `.bin` built locally, as upstream does.
-
-> Firmware update over the air has been verified by compilation and UI testing only. It has not yet been exercised against a real published release.
+The OTA Upload tab also accepts a locally built `.bin`, as upstream does.
 
 ## Security
 
-Every web endpoint requires HTTP Basic authentication once credentials are set, including `/control`, `/update`, `/upload`, `/status`, `/web`, the WebDAV tree and the websocket. Set a username and password under Access Settings on first run. Leaving them blank leaves the device open, which is only appropriate on a trusted network during provisioning.
+Every web endpoint requires HTTP Basic authentication once credentials are set, including `/control`, `/update`, `/upload`, `/status`, `/web`, the WebDAV tree and the websocket. Set a username and password under Access Settings on first run. Leaving them blank leaves the device open, which suits only a trusted network during provisioning.
 
-Also hardened: query-string and path lengths are bounds-checked, path traversal is rejected, credential comparison is constant-time, and Telegram tokens are masked in the status JSON and saved configuration.
+Also hardened: query-string and path lengths are bounds-checked, path traversal is rejected, credential comparison is constant-time, and Telegram tokens are masked in the status JSON and saved configuration. Residual risks, accepted rather than fixed: firmware images are not cryptographically signed, so anyone who can authenticate can flash arbitrary firmware; HTTP is the default and HTTPS needs `INCLUDE_CERTS` and plenty of memory; CORS headers are permissive; FTPS is stubbed and MQTT has no TLS.
 
-Known residual risks, accepted rather than fixed:
-
-* Firmware images are not cryptographically signed. Anyone who can authenticate can flash arbitrary firmware.
-* HTTP is the default. HTTPS requires `INCLUDE_CERTS` and is memory-hungry.
-* CORS headers are permissive.
-* FTPS is stubbed, not implemented, and MQTT has no TLS.
-
-If the device is reachable from the internet, see [Port forwarding](#port-forwarding) and set credentials first.
+To reach the camera over the internet, forward a router port to the device's HTTP port. Set a static IP and credentials first. ISPs using [CGNAT](https://en.wikipedia.org/wiki/Carrier-grade_NAT) may make this impossible.
 
 ## Configuration
 
-Most behaviour is changed from the main web page, which is largely self-explanatory. Settings persist only after pressing Save. Network and peripheral changes need a reboot via Reboot ESP.
+Six panels on the sidebar cover most settings. Changes are held in memory until you press Save, and network changes need a reboot.
 
-* Access Settings: WiFi, hostname and mDNS, time zone, FTP/HTTPS, SMTP, authentication, HTTPS toggles, and firmware update
-* Motion Detect & Recording: motion sensitivity, capture length, dashcam interval, night switch
-* Edit Config, under Network / Motion / Streaming / Other: detection tuning, stream enables, SD management, MQTT, Telegram, night-time deep sleep
-* Recording parameters: `Resolution`, `Frame Rate`, `Quality`
+| Panel | Holds |
+|---|---|
+| Camera Control | Resolution, frame rate, quality |
+| Image settings | Exposure, white balance, colour, geometry, focus, mains banding filter |
+| Long exposure | Stills and video below 1 fps |
+| Motion detection and recording | Sensitivity, zone thresholds, capture length, dashcam interval, night switch |
+| Gallery | Recordings and stills: play, download, delete |
+| System | WiFi, hostname, time zone, authentication, storage, firmware update |
+
+Everything else is under Edit Config, grouped Network, Motion, Streaming and Other: detection tuning, stream enables, SD management, MQTT, Telegram and deep sleep.
 
 For time zone, use the dropdown or paste a value from the second column of [this list](https://raw.githubusercontent.com/nayarsystems/posix_tz_db/master/zones.csv).
 
-There is no pin configuration UI. It was removed along with multi-board support. The Peripherals settings panel went with it: every setting it held (PIR, buzzer, relay, servos, battery voltage, remote control, telemetry, accelerometer, lamp) belongs to a subsystem this build does not compile, so toggling them only ever wrote a value to `configs.txt`. For the same reason there is no battery-voltage readout in the page footer, no lamp slider, no camera pan/tilt sliders, no RC control overlay, and no Machine Learning options under Motion.
+There is no pin configuration UI, and no Peripherals panel: every setting it held belonged to a subsystem this build does not compile, so toggling them only ever wrote a value to `configs.txt`. For the same reason there are no lamp, pan/tilt or RC controls, and no Machine Learning options.
 
-The page footer shows a Sensor field reporting what the camera is doing and at what resolution, for example `Detecting (VGA)`, `Recording (FHD)`, `Live view (FHD)` or `NVR - recording paused`. The sensor changes resolution on its own during normal operation, so this is the field to check when behaviour looks unexpected.
+The footer shows a Sensor field reporting what the camera is doing and at what resolution, such as `Recording (FHD)`, `Live view (FHD)` or `Detecting (FHD)`.
 
-Logs are viewable under the Show Log tab, held in RTC RAM (7 KB cyclic, default), streamed over websocket, or written to SD. SD logging can slow recording.
+Logs are viewable under Show Log, held in RTC RAM as a 7 KB cyclic buffer that survives a reset, streamed over websocket, or written to SD. SD logging can slow recording.
 
 ## How recording works
 
-Frames are buffered in PSRAM and written to SD in sector-aligned chunks to minimise write count. Recordings are named `YYYYMMDD_HHMMSS` plus frame size, frame rate and duration, for example `20200130_201015_VGA_15_60.avi`, and stored in a per-day `YYYYMMDD` folder. Suffixes mark the type: `_S` audio, `_C` continuous.
+Frames are buffered in PSRAM and written to the card in 32 KB blocks, a whole number of sectors, so the write count stays low. Recordings are named `YYYYMMDD_HHMMSS` plus frame size, frame rate and duration, for example `20200130_201015_VGA_15_60.avi`, in a per-day folder. `_S` marks audio, `_C` continuous.
 
-Saving a set of JPEGs as one AVI is faster than writing individual files and replays at the correct frame rate in ordinary media players. Throughput depends heavily on SD card quality. A genuine name-brand card can be several times faster than a no-name card with the same class marking.
+Saving a set of JPEGs as one AVI is faster than writing individual files and replays at the right rate in ordinary players. Throughput depends heavily on card quality; a name-brand card can be several times faster than a no-name card of the same class.
 
-A motion-triggered recording runs for a fixed time, set by `Capture Seconds` (default 15). It is not extended by continued movement. If movement is still present when the file closes, a new recording starts immediately, so sustained activity produces a series of fixed-length files rather than one long one.
+When the card cannot keep up, `fpsPriority` decides what gives way. On by default, it raises JPEG compression to hold the frame rate you asked for, then walks the quality back down a step at a time once the scene allows. Off, the configured quality is kept and frames are shed instead. Either way the decision is taken on every frame but measured over a rolling window, because frames arrive in bursts and a single-frame sample reads that jitter rather than the sustained write rate.
 
-Connecting a browser live view or an NVR stream pins the camera to the capture resolution for the whole session, which suspends motion recording until the viewer disconnects. The log says so when it happens, and the Sensor field in the footer reports it.
+A motion-triggered recording runs for a fixed `Capture Seconds`, default 15, and is not extended by continued movement. If movement persists when the file closes a new recording starts immediately, so sustained activity produces a series of fixed-length files.
 
-> Frame-rate benchmarks for this board are largely unpublished. Upstream's figures were measured on an OV2640 AI Thinker board and do not transfer to the OV5640 on XIAO Sense. One measured point so far: VGA sustains 20 fps with audio, motion detection and a live stream all running.
+Playback happens in the browser rather than on the board: tapping a clip fetches it and plays it locally, at full recorded rate with sound. Stills are filed on the card alongside recordings and appear in the same gallery, with cached thumbnails.
 
 ## Motion detection
 
-Recording can be triggered by the camera itself detecting movement, or manually with Start Recording.
+Recording can be triggered by the camera detecting movement, or manually.
 
-Motion detection always runs at VGA, whatever capture resolution is selected. The sensor sits at VGA while the device is armed and idle, and switches up to the capture resolution only when a recording starts, a viewer connects, or a still is requested. This is why detection works at every capture size, including FHD, where the decoder previously could not run at all.
+Detection reads the sensor's own 4x4 zone luminance grid, sixteen registers the auto-exposure engine already maintains, and compares them against the previous check. That is about twenty register reads over SCCB and a few milliseconds, with no frame decode anywhere in it. The JPEG-decode background-subtraction detector that upstream uses was removed outright.
 
-Sampled frames are decoded at 1/8 scale to an 80x60 grayscale bitmap (RGB optionally, at triple the memory and processing) and compared against the previous sample. `Checks per second for start motion` sets the rate, defaulting to 5 per second. Each check costs roughly 30 ms, about 15% of wall clock at the default rate.
+Detection therefore runs at every frame size, where decoding at 1.3 MP and above intermittently hard hung the board and capped it at HD. The sensor stays at the capture resolution, so there is no VGA round trip on every recording and no transition frames to flush. Checks also continue through recordings, live view and NVR streams, where the old design had to suspend detection while capturing and produced a deterministic false retrigger after every motion recording. Only dashcam mode opts out.
 
-Detection is suspended while a recording is in progress, during live view or NVR streaming, and in dashcam mode. The one exception is Show Motion, described below.
+Two gates decide whether the zones can be trusted, because a global optical event moves all sixteen at once and is not movement. While the luminance average sits inside the band where the auto-exposure engine holds exposure, the zones are stable to plus or minus one count on a static scene; outside it the AEC is re-exposing. A focus hunt moves every zone too, so only idle and focused autofocus states count.
 
-<img align="right" src="extras/motion.png" width="200" height="200">
+A failed gate is indeterminate rather than negative: the reference is dropped and the motion state returned unchanged, so there is never a false edge either way. It also pauses the consecutive-trip streak rather than resetting it. Real movement perturbs the exposure continuously, so checks alternate between tripped and out of band, and on the first walk test fourteen zones moved at a delta of 52 while nothing fired, because every re-exposure had zeroed the streak.
 
-* `Motion Sensitivity`: higher is more sensitive. It sets a percentage of changed pixels, so the absolute threshold scales with the bitmap
-* `Capture Seconds`: how long a motion-triggered recording runs
-* `Show Motion`: displays the detector's own view for calibration, with changed pixels marked in red. Available only when the capture resolution is VGA
-* `Night Switch`: light level below which detection is suspended
+| Control | Default | Effect |
+|---|---|---|
+| `Motion Sensitivity` | 8 | Maps 1-10 onto the per-zone luminance delta that counts as changed, inverted: 8 gives a delta of 4, against a measured noise floor of 1 |
+| `Zones changed at once` | 2 | How many of the sixteen must change in one check |
+| `Num changed checks` | 3 | Consecutive tripped checks needed to confirm |
+| `Checks per second` | 5 | Check rate, so the default confirms on 0.6 s of sustained movement |
+| `Night Switch` | 10 | Light level below which detection stops |
+| `Capture Seconds` | 15 | How long a triggered recording runs |
 
-Show Motion streams the 80x60 comparison bitmap rather than the camera image, so the picture is visibly coarse. That is how you can tell it is active. Because it needs the sensor to stay at the detection resolution, it is offered only when the capture resolution is VGA, and it is refused with a message in the log otherwise. At VGA no resolution switching happens at all, so recording, streaming and Show Motion all run together.
+Those defaults are measured: a walk across half the frame peaked at 4 consecutive tripped checks, so 3 confirms it and 5 would have missed it, while a single-zone LED blink never exceeded 1. Expect roughly 5% of delivered frames to be lost with detection on.
 
-The log reports motion events at normal verbosity, with the numbers needed to tune sensitivity:
+`Show Motion` streams the detector's own view instead of the camera image: a 96x96 grid of the sixteen zones, grey for luminance, red for a zone that moved on this check, dimmed for one masked out. `zoneMask` sets that mask and is URL-only, held in the order you see rather than the order the sensor reads, so a flip never silently moves the masked region.
+
+The log reports both edges with the numbers needed for tuning:
 
 ```
-Motion detected: 809 changed pixels vs threshold 28 (motionVal 10, 3 consecutive), light 38%
-Motion ended: 0 changed pixels, below threshold 28
+Motion detected: 6 zones moved >= 4 (zoneCount 2, 3 consecutive), light 38%
+Motion ended: 1 zones moved, below zoneCount 2
 ```
 
-`Motion detection stats` under the Show Log tab reports cost per check, duty cycle, and the highest changed-pixel count seen since the last report. Requesting the stats resets that window, so the way to measure a scene is to request them once, move in front of the camera, then request them again. Note that the peak reads high for the first few seconds after boot while auto-exposure settles.
+`/control?motionStats=1` reports the thresholds in force and the peak delta and zone count since the last request. `/control?zoneStats=1` returns the live zones and their deltas against the detector's reference as JSON.
 
-Detection is enabled by default and can be switched off under Motion Detect & Recording. Two behaviours are worth knowing about:
-
-* Below the `Night Switch` level, detection is suspended entirely and the log says so. The light level is derived from auto-exposure output rather than measured room brightness, so it can read low in ordinary indoor light and stop detection unexpectedly. Lowering `Night Switch` is the workaround.
-* With motion detection switched off, the ambient light reading in the footer stops updating, because it is calculated as part of the same decode.
+Below `Night Switch` detection stops, and the log says so once per transition rather than silently doing nothing. The light level comes from the sensor's pre-gamma luminance average, so it measures exposure output rather than room brightness and can latch in ordinary indoor light.
 
 ## Audio
 
-The onboard PDM microphone is enabled by default and its pins are applied automatically. Audio is 16-bit mono PCM at 16 kHz, stored as WAV inside the AVI.
+The onboard PDM microphone is enabled by default. Audio is 16-bit mono PCM at 16 kHz, stored as WAV inside the AVI.
 
-Microphone Gain on the web page controls level, defaulting to 5. A value of 3 is unity gain, higher amplifies, lower attenuates. Setting it to 0 turns audio off, since recording and the NVR audio stream are both gated on it. The speaker icon streams live microphone audio to the browser.
-
-The intercom feature, two-way audio between the device and a browser, additionally requires an I2S amplifier, which needs a free pin and therefore a source change on this build. Browser microphone access has security constraints. See [`audio.cpp`](audio.cpp).
-
-## OV5640
-
-For recording, frame sizes above `FHD` should be used for stills only, due to memory limits. Recordable frame rates at the highest sizes:
-
-| Frame size | FPS |
-|---|---|
-| QXSGA | 4 |
-| WQXGA | 5 |
-| QXGA | 5 |
-| QHD | 6 |
-| FHD | 6 |
-| P_FHD | 6 |
-
-These defaults are inherited and predate several changes to the write path, so they are due a retune.
-
-Note that the OV5640's pinout matches OV2640-designed boards but its internal 1.5 V regulator runs hot. A heat sink helps in sustained use.
-
-## HTTPS
-
-Set `INCLUDE_CERTS` to `true`, then toggle Use HTTPS under Access Settings. See [`certificates.cpp`](certificates.cpp) for generating and installing certificates, and for importing the server certificate into the browser to avoid trust warnings.
-
-If HTTPS is enabled with incorrect certificates the web page becomes unreachable, and the certificate files must be deleted from the SD card manually.
-
-Check Certs separately enables verification of remote server certificates, protecting outbound connections against man-in-the-middle attacks.
-
-## MQTT
-
-Under Edit Config, Other, set the broker IP, topic prefix, optional user and password, then enable. It connects automatically on ping success.
-
-Status is published to `homeassistant/sensor/{hostname}/state`, e.g. `{"MOTION":"ON", "TIME":"10:07:47.560"}`. Commands can be published to the `/cmd` channel, e.g. `dbgVerbose=1;framesize=7;fps=1`.
-
-With `INCLUDE_HASIO`, discovery messages create a Home Assistant [MQTT Camera](https://www.home-assistant.io/integrations/camera.mqtt/) device automatically and publish an image on motion. Contributed upstream by [@gemi254](https://github.com/gemi254).
-
-<a href="extras/hasio_device.png"><img src="extras/hasio_device.png" width="500" height="350"></a>
-
-## Telegram bot
-
-Enable either Telegram or SMTP, not both. Get your chat ID from [IDBot](https://t.me/myidbot) and a bot token from [BotFather](https://t.me/botfather), then enter both under Edit Config, Other. The bot receives motion alerts with a frame from the recording and a command link to download it (max 50 MB). This feature uses a lot of heap because of TLS.
-
-<img src="extras/telegram.png" width="500" height="500">
+Microphone Gain defaults to 5, where 3 is unity, higher amplifies and lower attenuates. Setting it to 0 turns audio off, since recording and the NVR audio stream are both gated on it. The speaker icon streams live microphone audio to the browser. Two-way intercom additionally needs an I2S amplifier, so it needs a free pin and a source change here. See [`audio.cpp`](audio.cpp).
 
 ## Streaming to an NVR
 
-Streaming is MJPEG over HTTP. Performance depends on network quality.
+Streaming is MJPEG over HTTP, and performance depends on network quality. Enable the streams under Edit Config, Streaming, which exposes `/sustain?video=1` and `/sustain?audio=1`. Multiple streams need an intermediate tool such as [go2rtc](https://github.com/AlexxIT/go2rtc) to synchronise them.
 
-Enable the streams under Edit Config, Streaming, which exposes `/sustain?video=1` and `/sustain?audio=1`. Multiple streams need an intermediate tool such as [go2rtc](https://github.com/AlexxIT/go2rtc) to synchronise them.
+The sensor stays at the capture resolution throughout and zone detection keeps running, so a connected viewer does not suspend motion recording. The audio stream does not affect the sensor.
 
-While a video stream is connected the camera is held at the capture resolution, so the resolution stays constant for the whole session and motion recording is suspended until the client disconnects. The audio stream does not affect the sensor.
+RTSP was removed. It required an external library, and enabling it disabled the HTTP NVR streams outright by taking the same task slots.
 
-RTSP was removed from this fork. It required an external library, and enabling it disabled the HTTP NVR streams outright, since it took over the same task slots.
+## Optional integrations
 
-## WebDAV
+### MQTT
 
-Set `INCLUDE_WEBDAV` to `true` and browse the SD card at `<ip_address>/webdav` from a WebDAV client such as Windows File Explorer. See [`webDav.cpp`](webDav.cpp) for other platforms.
+Under Edit Config, Other, set broker IP, topic prefix, optional credentials, then enable. Status is published to `homeassistant/sensor/{hostname}/state`, and commands accepted on the `/cmd` channel, for example `dbgVerbose=1;framesize=7;fps=1`. With `INCLUDE_HASIO`, discovery messages create a Home Assistant [MQTT Camera](https://www.home-assistant.io/integrations/camera.mqtt/) automatically and publish an image on motion. Contributed upstream by [@gemi254](https://github.com/gemi254).
 
-<img src="extras/webdav.png" width="600" height="300">
+### Telegram
 
-## Port forwarding
+Enable either Telegram or SMTP, not both. Get a chat ID from [IDBot](https://t.me/myidbot) and a token from [BotFather](https://t.me/botfather), then enter both under Edit Config, Other. The bot receives motion alerts with a frame and a download link, up to 50 MB. It uses a lot of heap because of TLS.
 
-To reach the camera over the internet, forward a port on your router to the device's HTTP port and use `your_router_external_ip:port`.
+### WebDAV
 
-![Port forwarding](extras/portForward.png)
+Set `INCLUDE_WEBDAV` to `true` and browse the card at `<ip_address>/webdav` from a client such as Windows File Explorer. See [`webDav.cpp`](webDav.cpp).
 
-Set a static IP for the device, and set authentication credentials first. Note that ISPs using [CGNAT](https://en.wikipedia.org/wiki/Carrier-grade_NAT) may make port forwarding impossible.
+### HTTPS
 
-## Inherited features that need source changes
+Set `INCLUDE_CERTS` to `true`, then toggle Use HTTPS under Access Settings. See [`certificates.cpp`](certificates.cpp) for generating and installing certificates. If HTTPS is enabled with incorrect certificates the web page becomes unreachable and the certificate files must be deleted from the card by hand. Check Certs separately enables verification of remote server certificates.
 
-Removing the GPIO configuration UI left several upstream features present in the source but not configurable at runtime. Their pin variables default to `0` or `-1` and there is no longer any way to set them from the web interface, so they will not function unless you assign pins in code and rebuild.
+## What was removed
 
-| Feature | Flag | Why it needs a source change |
-|---|---|---|
-| Peripherals: PIR, buzzer, relay, servos, battery voltage, DS18B20, wake pin | `INCLUDE_PERIPH`, `INCLUDE_DS18B20` | All pins unassigned |
+Deleted outright and not recoverable by a flag: photogrammetry, machine learning (its classifier never compiled, carrying an inherited syntax error), RTSP, telemetry recording, the Camera Hub, BDC motor control, I2C peripherals, the auxiliary board over UART, the external heartbeat, time lapse, Ethernet, and the companion mode that ran this firmware on a second cameraless ESP32.
 
-Their web UI controls and config rows have been removed, since none of these flags is enabled and the settings therefore had no effect. The C++ is left in place behind its `#if INCLUDE_*` guards, so enabling a flag also means restoring the corresponding rows to the `appConfig` table in [`appSpecific.cpp`](appSpecific.cpp) and bumping `CFG_VER`.
-
-Deleted outright, and not recoverable by a flag flip: photogrammetry, machine learning (its classifier never compiled, carrying a syntax error inherited from upstream), RTSP, the SRT subtitle stream, telemetry recording, the Camera Hub, BDC motor control, I2C peripherals, the auxiliary board over UART, the external heartbeat, time lapse, and the auxiliary-board companion mode that ran this firmware on a second cameraless ESP32.
+Still present in source but not configurable: the peripherals behind `INCLUDE_PERIPH` and `INCLUDE_DS18B20`, whose pins are all unassigned since the GPIO UI went. Enabling a flag also means restoring the corresponding rows to `appConfig` in [`appSpecific.cpp`](appSpecific.cpp) and bumping `CFG_VER`.
 
 For documentation of these features as they work on upstream hardware, see the [upstream README](https://github.com/s60sc/ESP32-CAM_MJPEG2SD#readme).
 
 ## Changes from upstream
 
-Forked at upstream v10.9.4. Versioning was restarted at `1.0.0` for this project.
+Forked at v10.9.4. Versioning restarted at `1.0.0`.
 
 | Change | Detail |
 |---|---|
-| Board lock | Reduced from ~20 supported boards to XIAO ESP32S3 Sense only. Removed the auxiliary/side-alarm companion build modes |
-| Security hardening | Authentication enforced on every endpoint, buffer bounds checks, path-traversal rejection, constant-time credential compare, token masking, OTA size sanity check |
-| GPIO UI removal | All pin configuration fields removed from the web interface |
-| Web UI | New colour palette, SVG icon set replacing emoji, mobile breakpoint with 44 px touch targets |
-| Inert control removal | Removed the UI controls and config rows for most subsystems this build does not compile: the Peripherals settings panel, the RC / Servos / Photogrammetry panels and control overlay, the lamp and pan/tilt sliders, the battery-voltage footer field, the Machine Learning options, the RTSP rows and the external-heartbeat rows. Still inert and deliberately left in place: the FTP / HTTPS and SMTP settings blocks and the Use HTTPS / Check Certs toggles, so those features need no UI work if their flag is ever enabled |
-| Dead code removal | Removed unreachable macro branches, orphaned declarations, and Ethernet support entirely, around 1,800 lines, reducing flash use by roughly 86 KB |
-| Subsystem removal | Deleted eight whole source files that compiled to nothing: photogrammetry, RTSP, telemetry, BDC motor control, I2C peripherals, UART auxiliary board, external heartbeat, plus time lapse, the Camera Hub and the SRT stream. Around 3,700 lines |
-| Motion detection redesign | Detection now runs at a fixed VGA regardless of capture resolution, so it works at every frame size instead of stopping above SXGA. Motion recordings are a fixed length rather than movement-driven. Detection is suspended during recording and streaming, which removed the large-frame decode path that could hang the board |
-| Recording fixes | FHD recordings previously wrote a header claiming 920x1080, from a hand-maintained duplicate of the frame size table that has been removed. Frames left over from a resolution change no longer reach a file |
-| Autofocus and audio | Both enabled by default for this hardware |
-| OTA | Added update checking and installation from GitHub Releases |
+| Motion detection | Rebuilt on the sensor's own 4x4 zone luminance grid: no frame decode, so it runs at every frame size, holds the capture resolution, and keeps checking through recordings and live views. The decode detector it replaced hung the board above 1.3 MP, forced a VGA round trip per recording, and false-retriggered after every one |
+| Sensor retuning | Per-size frame rate ceilings measured on hardware rather than inherited, six new frame sizes, an 88 MHz pixel clock route, and a tuner that programs clock, line length and frame length per requested rate |
+| WiFi throughput | A rebuilt arduino-esp32 core raising the lwip send buffer from 5760 to 65535, which is the only way to reach that constant, plus a 32 KB file-serving chunk |
+| Storage | The SD host clock divider made settable and persistent, for 22% more sustained write on a qualified card |
+| Recording | `fpsPriority` and a rolling-window SD governor; long exposure to 3.18 s; FHD recordings no longer write a header claiming 920x1080; frames left over from a resolution change no longer reach a file |
+| Web UI | Rebuilt: phone card layout, gallery with in-browser playback and multi-file zip download, camera control panel, long exposure panel, SVG icon set, new palette, and a minify plus pre-gzip build step taking the page from 365 KB to 42 KB served |
+| Playback | Clips play in the browser at full recorded rate with their audio, which was present in every recording upstream writes and discarded by its player |
+| Board lock | From ~20 boards to XIAO ESP32S3 Sense only, and the GPIO configuration UI removed with them |
+| Security | Authentication on every endpoint, bounds checks, path-traversal rejection, constant-time credential compare, token masking, OTA size sanity check |
+| Code removal | Around 5,500 lines across dead branches, Ethernet and eight whole source files that compiled to nothing, freeing roughly 86 KB of flash |
+| OTA | Update checking and installation from GitHub Releases, tested end to end |
 
 Full detail is in the commit history.
 
 ## Credits
 
-* [s60sc](https://github.com/s60sc), original author of ESP32-CAM_MJPEG2SD, and of essentially all functionality in this firmware
-* [@gemi254](https://github.com/gemi254), Home Assistant MQTT integration, and the original setup assistant
-* [@alojzjakob](https://github.com/alojzjakob), external heartbeat (since removed from this build); see also [EspSee](https://github.com/alojzjakob/EspSee)
+* [s60sc](https://github.com/s60sc), original author of ESP32-CAM_MJPEG2SD and of essentially all functionality here
+* [@gemi254](https://github.com/gemi254), Home Assistant MQTT integration and the original setup assistant
+* [@alojzjakob](https://github.com/alojzjakob), external heartbeat, since removed; see also [EspSee](https://github.com/alojzjakob/EspSee)
 * [@josef2600](https://github.com/josef2600), SD_MMC 4-line mode investigation
-* [@RedCanti](https://github.com/RedCanti), Ethernet support (since removed from this build)
+* [@RedCanti](https://github.com/RedCanti), Ethernet support, since removed
 * [@ldijkman](https://github.com/ldijkman), installation walkthrough
-* Eric Nam ([@0015](https://github.com/0015)), the [OV5640 Auto Focus for ESP32 Camera](https://github.com/0015/ESP32-OV5640-AF) library, which this build depends on
+* Eric Nam ([@0015](https://github.com/0015)), the [OV5640 Auto Focus](https://github.com/0015/ESP32-OV5640-AF) library this build depends on
 
 ## Licence
 
-GNU Affero General Public License v3.0, inherited from upstream. See [LICENSE](LICENSE) for the full text.
+GNU Affero General Public License v3.0, inherited from upstream. See [LICENSE](LICENSE).
 
 Because this firmware acts as a network server, AGPL §13 applies: if you run a modified version and let others use it over a network, you must make your modified source available to them. The source for this version is at [github.com/theostrichjouster-star/ESPIPCAM](https://github.com/theostrichjouster-star/ESPIPCAM).
