@@ -476,6 +476,7 @@ uint16_t frameWindowKB(int fs) {
     case FRAMESIZE_FHD: return 443;
     case FRAMESIZE_QSXGA: return 946;
     default:
+      if (fs == FS_HDV2) return 291; // same 1280x720 output as HD, so the same cliff
       if (fs == FS_1280X960) return 383;
       // INHERITED, not measured: the cliff follows the OUTPUT size (HD dies at ~295KB where
       // 1280X960 survives 383KB on identical sensor timing), and these emit the same
@@ -827,8 +828,82 @@ static inline uint8_t desiredFPS(framesize_t forFS) {
 //    column-striped, 96 pure noise, all with an exact VSYNC rate), 42.343 fps counted three
 //    times with min = max. Every other size stays byte-identical to the register tier
 //    reference until it has had its own walk through still_color.py and an eyeball
-static int htsFloorFor(framesize_t fs) { return (fs == FS_1280X960) ? 2156 : HTS_FLOOR; }
-static float routeBMHz(framesize_t fs) { return (fs == FS_1280X960) ? 88.0f : 0.0f; }
+// HD JOINS 1280X960 ON ROUTE B, AND BOTH DROP TO A 2112 LINE (7 Sep 2026, BOARD_TESTING 38.41-43).
+// Two of the three numbers above are now wrong and the measurements that replaced them are:
+//
+//  - "92 column-striped, 96 pure noise" STANDS. 96 is corrupt at every row time from 22.00 to
+//    23.38 us, and 92 is MARGINAL rather than clean - identical registers gave clean twice in one
+//    run and magenta in the next ten minutes later. 88 is the ceiling and 93.33 already destroys
+//    the bottom half of the frame while the whole-frame gates call it clean.
+//  - 2156 RATHER THAN 2112 WAS BOUGHT AGAINST AN EFFECT THAT DOES NOT EXIST. The 24.5 us row was
+//    margin against a "bistable magenta latch" below a ~24 us row floor. That floor is dead: a
+//    30.83 us row at HTS 1850 / 60 MHz is CORRUPT while a 23.41 us row at HTS 2060 / 88 MHz is
+//    CLEAN, so the clean point has a 26% shorter row than the corrupt one and no row-time law can
+//    separate them. What every corrupt sample shares is HTS below 2060, at clocks 28 MHz apart.
+//    2112 itself is soaked: 9/9 clean at 1280X960 and 9/9 at HD, plus 18/18 at a SHORTER line.
+//
+// So the two real constraints are HTS >= 2060 and PIXCLK <= 88, and 2112 satisfies both with the
+// margin put where the measurements say it belongs. 2112 rather than 2060 for a second and
+// independent reason: a 1280-wide output stretches occasional frames at 2060 (section 37, and
+// reproduced twice on 7 Sep - HD at 88 MHz counted 53.885 against 57.42 predicted, an effective
+// line of 2195), while 2112 has min = max across three counts. Both arguments land on 2112.
+//
+// Route B still engages ONLY where the 80 MHz tree runs out at the VTS floor, so every rate below
+// that keeps route A - what changes there is the line, 2060 to 2112 at HD and 2156 to 2112 at
+// 1280X960, which moves every sweep.csv reference row for both sizes.
+static bool isRouteBSize(framesize_t fs) {
+  return fs == FS_1280X960 || fs == FRAMESIZE_HD || fs == FS_HDV2;
+}
+static int htsFloorFor(framesize_t fs) { return isRouteBSize(fs) ? 2112 : HTS_FLOOR; }
+static float routeBMHz(framesize_t fs) { return isRouteBSize(fs) ? 88.0f : 0.0f; }
+
+// HDV2 reads only the rows it emits, so its frame is 8 binned lines shorter than HD's and VTS can
+// follow it down. The derived binned floor (rows/2 + 8 = 728) is MEASURED WRONG here - see
+// HDV2_VTS_FLOOR - so the floor is overridden rather than computed
+static int vtsFloorFor(framesize_t fs, int derived) {
+  if (fs == FS_HDV2 && derived < HDV2_VTS_FLOOR) return HDV2_VTS_FLOOR;
+  return derived;
+}
+
+// HDV2's readout: cut the window to exactly the rows the size emits and take the ISP offset to
+// zero, which is what the datasheet's own 720p mode does ("1296x728 with dummy" is 1280+16 by
+// 720+8, output plus dummy, not array pixels).
+//
+// THE ORDER IS THE WHOLE DIFFICULTY and every step of it was bisected on hardware (BOARD_TESTING
+// 38.41). With the scaler off, pre-scale must EQUAL the output, and pre-scale is the ISP input
+// less twice the offset - so the offset and the window cannot move independently. Zeroing the
+// offset first, with the window still 1472 rows, leaves a 736-row pre-scale against a 720 output
+// and the sensor delivers NOTHING. Turning the scaler on first makes that intermediate legal,
+// because it can genuinely downscale 736 to 720, and turning it off again at the end restores a
+// true 1:1 pass. VTS is not touched here: applyTunedTiming runs afterwards and lowers it against
+// vtsFloorFor(), which is the only safe moment - VTS below the rows being read is the measured
+// split-frame trap
+// both are defined further down, next to the other register helpers - same pattern as
+// senLineFactor(), which is forward declared for the same reason
+static int senReg16(sensor_t* s, int reg);
+static bool senWrite16(sensor_t* s, int reg, int val);
+
+static void applyTightRows(sensor_t* s, framesize_t fs) {
+  if (fs != FS_HDV2 || s == NULL || s->set_reg == NULL || s->get_reg == NULL) return;
+  int ySt = senReg16(s, 0x3802), yEnd = senReg16(s, 0x3806);
+  int yOff = senReg16(s, 0x3812);
+  if (ySt < 0 || yEnd <= ySt || yOff < 0) return;
+  int wantEnd = HDV2_Y_START + HDV2_ROWS - 1;
+  if (ySt == HDV2_Y_START && yEnd == wantEnd && yOff == 0) return; // already there
+  int isp = s->get_reg(s, 0x5001, 0xFF);
+  if (isp < 0) return;
+  s->set_reg(s, 0x5001, 0xFF, isp | 0x20);   // scaler ON, still a 1:1 pass at this instant
+  senWrite16(s, 0x3812, 0);                  // offset to zero: the scaler now downscales 736->720
+  senWrite16(s, 0x3802, HDV2_Y_START);       // and the window follows, back to 1:1
+  senWrite16(s, 0x3806, wantEnd);
+  s->set_reg(s, 0x5001, 0xFF, isp & ~0x20);  // scaler OFF again
+  int gotSt = senReg16(s, 0x3802), gotEnd = senReg16(s, 0x3806), gotOff = senReg16(s, 0x3812);
+  if (gotSt != HDV2_Y_START || gotEnd != wantEnd || gotOff != 0)
+    LOG_WRN("HDV2 rows: wanted y %d..%d offset 0, read %d..%d offset %d",
+      HDV2_Y_START, wantEnd, gotSt, gotEnd, gotOff);
+  else LOG_INF("HDV2 rows: window y %d..%d = %d array rows -> %d binned, ISP offset 0",
+    gotSt, gotEnd, gotEnd - gotSt + 1, (gotEnd - gotSt + 1) / 2);
+}
 
 static void applyHtsFloor(sensor_t* s, framesize_t fs) {
   // Worth 19.2 -> 24.5fps at 1280x960 and 25.3 -> 31.9 at HD, for one register pair.
@@ -1341,6 +1416,7 @@ static void applyTunedTiming(sensor_t* s, framesize_t fs) {
   if (ySt >= 0 && yEnd > ySt) {
     int rows = yEnd - ySt + 1;
     vtsFloor = (lf == 2) ? rows + 16 : rows / 2 + 8;
+    vtsFloor = vtsFloorFor(fs, vtsFloor); // HDV2's 1440-row readout needs 18 lines, not 8
   }
 // VTS-4 == the 1964-row AEC engine cap (applyAecLimits): rows above this are blanking
 // the AEC can never convert to exposure
@@ -1601,6 +1677,7 @@ static void applySensorTuning(sensor_t* s, framesize_t fs) {
   // mutually exclusive by design - the crop handles full resolution sizes and the HTS floor
   // the binned ones, each returning immediately when handed the other's case
   applyCropWindow(s, fs);
+  applyTightRows(s, fs); // HDV2 only: cut the readout to the rows it emits
   applyHtsFloor(s, fs);
   // the retiming must precede applyAecLimits(), which derives banding and the exposure
   // ceiling from whatever clock and VTS are in force by the time it reads them back - a
@@ -1629,6 +1706,7 @@ static framesize_t hwFrameSize(framesize_t fs) {
   if (fs == FS_FHDMID || fs == FS_FHDFULL) return FS_FHD_BASE;
   if (fs == FS_VGANARROW) return FS_VGANARROW_BASE;
   if (fs == FS_QVGANARROW) return FS_QVGANARROW_BASE;
+  if (fs == FS_HDV2) return FS_HDV2_BASE;
   return fs;
 }
 

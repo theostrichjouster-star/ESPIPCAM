@@ -71,7 +71,17 @@
            longest label the row ever carries ("Start Recording") at --inputSize, so the row stays
            a toolbar rather than text of assorted lengths. The phone card block overrides both */
         --topBtnW: calc(var(--buttonSize) * 9);
-        --topBtnH: calc(var(--buttonSize) * 2.25);
+        /* The top row is exactly as tall as a .quick-nav sidebar button, derived from the same
+           tokens rather than guessed, so the two can never drift apart: .quick-nav is content-box
+           at --buttonDbl square, plus --buttonQuart of padding each side, plus a 1px border each
+           side. 32 + 8 + 2 = 42. The camera tab uses this for its WIDTH too (it is the only square
+           button in the row), which makes it the same 42px square as the column beneath it. */
+        --topBtnH: calc(var(--buttonDbl) + var(--buttonQuart) * 2 + 2px);
+        /* What it takes to put the top row's left edge over the sidebar buttons' left edge. Both
+           start from the same ancestor, so this is the sum of everything between that ancestor and
+           a .quick-nav: #menu-container's own left inset (--buttonQuart), #menu-selector's 1px
+           left border, and the button's own --buttonHalf margin. 4 + 1 + 8 = 13. */
+        --topRowIndent: calc(var(--buttonQuart) + 1px + var(--buttonHalf));
         --smallThumbSize: 1rem; /* must be specific value, not calc */
         --bigThumbSize: 2rem; /* must be specific value, not calc */
         --markerSize: 1rem; /* must be specific value, not calc */
@@ -159,14 +169,19 @@
 
       /* The top row holds two lists - the page tabs and the transport controls - and they used to
          be floated text buttons of whatever width their label happened to need. They are one flex
-         row now, wrapping rather than clipping when the window is too narrow for all eight, with
-         the transport group pushed to the right edge by section#main's auto margin. */
+         row now, wrapping rather than clipping when the window is too narrow for all eight. Both
+         groups sit together on the left; see section#main for why the transport group is no
+         longer pushed to the right edge. */
       .tab {
         display: flex;
         flex-wrap: wrap;
         align-items: flex-start;
         gap: var(--buttonHalf);
         background: var(--menuBackground);
+        /* indents the whole row so the camera tab sits directly above the sidebar column rather
+           than 13px to its left - see --topRowIndent. The phone block resets it, where .tab is a
+           four-column grid of cards and an indent would just push every card off-centre. */
+        padding-left: var(--topRowIndent);
       }
 
       /* Every button in the top row, both groups, one shape: a fixed-width rectangle with its
@@ -712,11 +727,14 @@
       }
 
       /* overflow:auto here put a scrollbar under the transport buttons the moment the row was a
-         few pixels too wide. The row wraps instead */
+         few pixels too wide. The row wraps instead.
+         flex-start, not flex-end: with section#main's auto margin gone the group sits beside the
+         tabs, so a wrapped second line has to start on the left too or it would jump to the right
+         edge and reopen the same gap one line down */
       nav#maintoolbar {
         display: flex;
         flex-wrap: wrap;
-        justify-content: flex-end;
+        justify-content: flex-start;
       }
 
       .nav-toggle {
@@ -728,12 +746,13 @@
         border-bottom: 1px solid var(--itemBorder);
       }
 
-      /* the auto margin is what puts the transport group against the right edge of the window;
-         when the row wraps, that group drops to its own line and stays right-aligned */
+      /* NO auto margin here. It used to be margin-left: auto, which pushed the transport group to
+         the right edge of the window and left a gap between OTA Upload and Start Recording that
+         grew with the window - most of the row on a wide screen. The two groups now sit next to
+         each other, separated by .tab's own gap like every other pair of buttons in the row. */
       section#main {
         display: flex;
         flex-direction: column;
-        margin-left: auto;
       }
       section#header {
         min-width: calc(var(--buttonSize) * 20);
@@ -1483,6 +1502,18 @@
         display: none;
       }
 
+      /* display: contents, so the wrapper is not a flex item. #recording-indicator is hidden most
+         of the time, but its li still WAS one - and a zero-width flex item collects the row's gap
+         on BOTH sides, which put 8px of dead space in front of Start Recording where every other
+         pair of buttons in the row sits 8px apart in total. Measured at 1400px: the seam read 16px
+         against 8px everywhere else. Taking the li out of the flex box makes the span itself the
+         flex item, so it costs nothing while hidden and gets its own gap when it appears. The span
+         has to stay in the DOM either way - isHidden() reads its class as the recording state -
+         which is why this is display: contents and not display: none. */
+      .navtop li.ind-item {
+        display: contents;
+      }
+
       /*************** phone card layout (<48rem, 768px) ***************
          One scrolling column of cards. Every selector here matches or beats the specificity of the
          desktop rule it replaces (several of those are id+class, e.g. #menu-top.menu-pinned), which
@@ -1644,6 +1675,8 @@
           grid-template-columns: repeat(4, 1fr);
           gap: var(--buttonHalf);
           overflow: visible;
+          /* the desktop row's indent aligns it with a sidebar column that does not exist here */
+          padding-left: 0;
         }
         .tab > .card-head {
           grid-column: 1 / -1;
@@ -2558,6 +2591,10 @@
                              matchers accept -->
                         <option class="OV5640 hidden" value="25">1280X960(1280x960)</option>
                         <option class="AllOV PY260 hidden" value="13">HD(1280x720)</option>
+                        <!-- HDV2: the same 1280x720 out, read the datasheet's way - 1440 array rows
+                             rather than 1472, ISP offset zero. Identical framing, and worth 56.46
+                             fps against HD's 56.00 at three requests only. See FS_HDV2 -->
+                        <option class="OV5640 hidden" value="30">HDV2(1280x720)</option>
                         <option class="hidden" value="12">XGA(1024x768)</option>
                         <option class="hidden" value="11">SVGA(800x600)</option>
                         <option class="AllOV PY260 hidden" value="10" selected="selected">VGA(640x480)</option>

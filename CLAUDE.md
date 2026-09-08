@@ -206,9 +206,31 @@ board addresses. Keep this file free of IPs and MACs too: the repo is public.
 - Never trust a still on byte count, dimensions or the AEC's health: the HTS floor campaign
   passed magenta, green-blown and confetti frames on all three. Channel ratio plus adjacent
   pixel noise (`still_color.py`) plus the user's eyeball.
-- The binned row-time floor is ~24us and the magenta readout latch is bistable near it: never
-  seen at 24.5us, sometimes at 23.75. 1280X960 runs HTS 2156 (24.5us at 88 MHz) for that
-  margin; a shorter line needs a soak, not a dozen clean stills.
+- **RETRACTED 7 Sep 2026: there is no ~24us binned row-time floor, and no bistable magenta latch
+  near one.** This said the floor was ~24us, that the cast was never seen at 24.5 and sometimes at
+  23.75, and that 1280X960 therefore ran HTS 2156 for the margin. The killing comparison
+  (§38.43, `hts_floor_hypothesis.sh`): a **30.83us row at HTS 1850 / 60 MHz is CORRUPT** while a
+  **23.41us row at HTS 2060 / 88 MHz is CLEAN** - the clean point has a 26% SHORTER row than the
+  corrupt one, so no row-time law separates them. 54 samples at 88 MHz across 24.50 / 24.00 /
+  23.41us were all clean, including 18 below the stated threshold. **The two real constraints are:**
+  - **HTS >= 2060.** Below the register floor the output is corrupt at ANY clock, in a mode that
+    varies run to run - no still, green blow-out, magenta, column stripes - which is the undefined
+    behaviour that made it look bistable. Every §37 magenta sample had HTS below 2060.
+  - **PIXCLK <= 88 MHz.** 92 is MARGINAL (identical registers: clean twice in one run, magenta in
+    the next), 93.33 destroys the bottom half of the frame, 96 is corrupt at every row time from
+    22.00 to 23.38us. §37's verdict on 96 stands exactly as written.
+  1280X960 and HD both run **HTS 2112** now. 2112 rather than 2060 for an unrelated reason: a
+  1280-wide output stretches occasional frames at 2060, measured twice.
+- **A whole-frame gate is not enough - use `still_bands.py` too.** At 93.33 MHz a frame whose top
+  half was a perfect chart and whose bottom half was blue and yellow garbage scored ratio 0.850 and
+  hdiff 3.1, inside every clean threshold, because the good half averaged the bad half back into
+  range. `still_bands.py` compares quarters: ratio spread and the max/min of band SATURATION. Not
+  hdiff across bands - that measures scene detail and flags clean frames.
+- **The failure mode below a VTS floor is a SILENT HALVING, not a corrupt picture.** Frames stay
+  complete, correctly coloured and perfectly legible and simply arrive at half rate (measured
+  27.88 against 55.76). Every image gate passes it. **Any geometry or timing walk needs a RATE
+  gate**, and a VSYNC count that can report NOFRAMES - grepping the ring for "VSYNC counted" alone
+  returns the PREVIOUS rung's number when the board logs "VSYNC count failed" instead.
 - The banding filter is off by config (`banding=0`) so the AEC spends the whole frame on
   exposure before gain; `applyAecLimits` re-asserts it after every retime.
 - Never program VTS past ~1984 and expect the AEC to use the frame: its range is 1964 x tROW
@@ -457,7 +479,18 @@ elsewhere in this file are the same items seen from their own subject.
      their sensor ceilings because `fpsPriority` now trades quality to hold the rate, and the other
      seven were already exact. It did NOT pull against the clock work: nothing here changed a clock
    - Scale: 448 rungs for all 11 sizes at every integer fps. Narrow first, do not sweep first
-1b. **Retune the mainstays against the 88 MHz PIXCLK ceiling**
+1b. **PARTLY CLOSED 7-8 Sep 2026: HD and 1280X960 are on route B at HTS 2112** (§38.41-46).
+   HD 52 -> **56** (88e6 / (2112 x 744), counted 56.006, a clip delivered 54.3) and 1280X960
+   41 -> **42** (counted 42.343, delivered 41.4). Route B engages at a request of 49 for HD and
+   38 for 1280X960; below that both keep route A and differ from the old tier only in the line.
+   The 2156 line went back to 2112 because the row-time floor it protected against does not exist
+   (see the retraction above). **New size HDV2** (index 30) reads the datasheet's own 720p geometry
+   - 1440 array rows, ISP offset 0, VTS floor 738 - and is worth 0.46 fps at three requests and
+   nothing anywhere else; soaked 25/25. sweep.csv regenerated for all three, 154/154 gates.
+   **What is left of this item**: QVGA, VGA, FHDMID and FHDFULL, the four with real time headroom.
+   Note the constraint below is now measured rather than assumed - the clock ceiling is 88, and the
+   line floor is 2060, with row time playing no part.
+   (§38.35 carries the full brief and the fresh per-size baseline). §37 established the in-spec 88 MHz
    (§38.35 carries the full brief and the fresh per-size baseline). §37 established the in-spec 88 MHz
    route (0x3108 = 0x11, VCO 440, mul 66) and it was applied to **1280X960 alone**; every other
    mainstay still runs 80.00 MHz, so +10% clock is +10% fps at unchanged HTS x VTS on arithmetic.
@@ -1022,6 +1055,30 @@ Destructive or dangerous:
 - `fps_priority_ab.sh` - the `fpsPriority` A/B. **Alternates the toggle rather than running it in
   blocks**, because the scene drifts: an hour of failing light moved 1280X960's delivered rate by
   3fps on its own, and blocks would confound the room with the setting
+- `hts_floor_hypothesis.sh` - **the rig that killed the row-time floor.** Walks HTS below 2060 at
+  TWO clocks: 88 MHz (where both models predict failure, so it can only falsify) and 60 MHz,
+  where every row is 30-34us and the models predict OPPOSITE outcomes. That second arm is the
+  whole experiment. Every HTS change goes through the 0x3212 group write without exception
+- `hd_clock_96.sh` / `hd_row_time.sh` - the clock cliff, walked properly. The first moves the PLL
+  multiplier at fixed geometry, the second PINS the clock and moves HTS, which is what separates
+  a clock limit from a row-time one. Neither stops at the first bad rung: a cliff should be shown
+- `magenta_reverify.sh` - the cast, re-tested with a POSITIVE CONTROL (a row SHORTER than the one
+  said to fail). Single-byte atomic HTS writes throughout, analog registers read at both ends
+- `hd_window_bisect.sh` / `hd_vts_floor.sh` / `hd_vts_isp.sh` - which write stops frame delivery,
+  where the VTS floor really is, and whether an ISP block owns the blanking (LENC does not; the
+  defect-pixel cancellers own 2 lines). All three carry a RATE gate, without which the half-rate
+  mode reads as a pass
+- `hdv2_soak.sh` - HDV2's soak, and it COUNTS rather than looks: the risk is a silent halving, not
+  a bad picture. 25 state entries, temperature logged, recordings interleaved
+- `tuner_table.sh` - the whole fps/PIXCLK/HTS/VTS table for a size, read off the board from the
+  `Tuned timing` line in the RTC ring. Far cheaper than a VSYNC count per rung; registers only,
+  so the ceiling still gets a count and a gated still
+- `hd88_probe.sh` / `hd_hts_count.sh` / `ceiling_delivery.sh` / `hd_vs_hdv2.sh` - the 88 MHz probe
+  with its quality ladder, the honoured-line check, delivered rate at a ceiling, and the HD/HDV2
+  A/B. The last ALTERNATES and gates its verdict on the within-size spread: means alone called a
+  1.40 fps gap a win when the spread inside one size was 4.70
+- `still_bands.py` / `contact_sheet.py` - the per-band gate that catches damage confined to part of
+  a frame, and a labelled grid of every still in a run so the eyeball gate costs one look
 - `ui_regress.sh` - the web UI's camera controls, every `/control` key the page can send, one at
   a time at the three mainstays (HD 30, 1280X960 41, FHDNARROW 1): min / max / the live default,
   each with a register snapshot diffed against the size's baseline (`regsnap.py`: the tuner
