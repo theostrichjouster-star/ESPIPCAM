@@ -69,7 +69,7 @@
 #define DOT_MAX 50
 #define HOSTNAME_GRP 99
  
-#define APP_VER "1.0.0"
+#define APP_VER "1.0.1"
 // to determine if newer data files need to be loaded. Bump whenever a config row is
 // added, removed or moved group, so an existing configs.txt is regenerated rather than
 // leaving stale keys behind.
