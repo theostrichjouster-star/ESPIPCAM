@@ -100,68 +100,130 @@ bool checkForUpdate() {
   return res;
 }
 
+// Split an absolute https URL into host and path+query. Refuses anything that is not
+// https - a plain http hop would drop TLS without saying so - and refuses a URL that will
+// not fit, because a TRUNCATED signed URL comes back 403 rather than failing cleanly, and
+// that is a far harder thing to read in a log than a refusal here.
+static bool otaSplitUrl(const char* url, char* host, size_t hostLen, char* path, size_t pathLen) {
+  if (strncasecmp(url, "https://", 8)) return false;
+  const char* h = url + 8;
+  const char* slash = strchr(h, '/');
+  if (slash == NULL) return false;
+  size_t hl = slash - h;
+  if (hl == 0 || hl >= hostLen || strlen(slash) >= pathLen) return false;
+  memcpy(host, h, hl);
+  host[hl] = 0;
+  strcpy(path, slash);
+  return true;
+}
+
 static void otaTask(void* parameter) {
   // Download the release asset and write it straight into the OTA partition.
   // Runs as its own task so the web server is not blocked for the duration.
-  char dlPath[192];
-  snprintf(dlPath, sizeof(dlPath), "/%s/%s/releases/download/%s/%s",
+  //
+  // THE REDIRECT IS FOLLOWED BY HAND. A release asset 302s to a signed, single-use URL on
+  // a different host - release-assets.githubusercontent.com - carrying ~900 characters of
+  // query string. HTTPClient's own following cannot re-target another host when begin() is
+  // handed host/port/path instead of a whole URL, so it returns the 302 to the caller.
+  // Measured on COM4, 8 Sep 2026: the update stopped with "Download failed (HTTP 302)".
+  //
+  // The buffers are static rather than automatic because this task's stack is internal RAM
+  // (see startOtaUpdate) and a kilobyte of it is not going spare.
+  static char dlHost[OTA_HOST_LEN];
+  static char dlPath[OTA_URL_LEN];
+  const char* hdrKeys[] = {"Location"};
+  strncpy(dlHost, GITHUB_DL_HOST, OTA_HOST_LEN - 1);
+  dlHost[OTA_HOST_LEN - 1] = 0;
+  snprintf(dlPath, OTA_URL_LEN, "/%s/%s/releases/download/%s/%s",
     OTA_REPO_OWNER, OTA_REPO_NAME, otaLatestTag, OTA_ASSET_NAME);
 
   NetworkClientSecure wclient;
   HTTPClient https;
   bool started = false; // whether Update.begin() succeeded, so cleanup knows to abort
+  bool ready = false;   // a 200 with a plausible content length is in hand
+  int contentLen = 0;
+  int hops = 0;
 
-  if (!remoteServerConnect(wclient, GITHUB_DL_HOST, HTTPS_PORT, git_rootCACertificate, OTAGITHUB)) {
-    snprintf(otaStatus, OTA_STATUS_LEN, "Could not reach GitHub");
-  } else if (!https.begin(wclient, GITHUB_DL_HOST, HTTPS_PORT, dlPath)) {
-    snprintf(otaStatus, OTA_STATUS_LEN, "Could not start download");
-  } else {
+  while (!ready) {
+    if (hops > OTA_MAX_REDIRECTS) {
+      snprintf(otaStatus, OTA_STATUS_LEN, "Too many redirects");
+      LOG_WRN("Gave up following redirects after %d hops", hops);
+      break;
+    }
+    if (!remoteServerConnect(wclient, dlHost, HTTPS_PORT, git_rootCACertificate, OTAGITHUB)) {
+      snprintf(otaStatus, OTA_STATUS_LEN, "Could not reach %s", dlHost);
+      break;
+    }
+    if (!https.begin(wclient, dlHost, HTTPS_PORT, dlPath)) {
+      snprintf(otaStatus, OTA_STATUS_LEN, "Could not start download");
+      break;
+    }
     https.setUserAgent(APP_NAME);
-    // release assets 302 to objects.githubusercontent.com
-    https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    LOG_INF("Downloading %s from %s", OTA_ASSET_NAME, dlPath);
+    https.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS); // followed below instead
+    https.collectHeaders(hdrKeys, 1);
+    LOG_INF("Downloading %s from %s (hop %d)", OTA_ASSET_NAME, dlHost, hops);
     int httpCode = https.GET();
-    int contentLen = https.getSize();
 
+    if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND
+      || httpCode == HTTP_CODE_SEE_OTHER || httpCode == HTTP_CODE_TEMPORARY_REDIRECT
+      || httpCode == HTTP_CODE_PERMANENT_REDIRECT) {
+      String loc = https.header("Location");
+      https.end();
+      remoteServerClose(wclient);
+      if (!otaSplitUrl(loc.c_str(), dlHost, OTA_HOST_LEN, dlPath, OTA_URL_LEN)) {
+        snprintf(otaStatus, OTA_STATUS_LEN, "Bad redirect (HTTP %d)", httpCode);
+        LOG_WRN("Could not use the redirect target, %u chars", loc.length());
+        break;
+      }
+      hops++;
+      continue;
+    }
     if (httpCode != HTTP_CODE_OK) {
       snprintf(otaStatus, OTA_STATUS_LEN, "Download failed (HTTP %d)", httpCode);
       LOG_WRN("Asset download failed, HTTP %d - is the release asset named %s?", httpCode, OTA_ASSET_NAME);
-    } else if (contentLen < (int)MIN_OTA_IMAGE_SIZE) {
+      break;
+    }
+    contentLen = https.getSize();
+    if (contentLen < (int)MIN_OTA_IMAGE_SIZE) {
       // same guard as the manual upload path, so a truncated or error body
       // is never handed to Update.begin()
       snprintf(otaStatus, OTA_STATUS_LEN, "Image too small (%d bytes)", contentLen);
       LOG_WRN("Rejected OTA asset, implausibly small (%d bytes)", contentLen);
+      break;
+    }
+    ready = true;
+  }
+
+  if (ready) {
+    OTAprereq(); // shut down camera / streaming tasks before flashing
+    if (!Update.begin(contentLen, U_FLASH)) {
+      snprintf(otaStatus, OTA_STATUS_LEN, "Cannot start update: %s", Update.errorString());
+      LOG_WRN("Update.begin failed: %s", Update.errorString());
     } else {
-      OTAprereq(); // shut down camera / streaming tasks before flashing
-      if (!Update.begin(contentLen, U_FLASH)) {
-        snprintf(otaStatus, OTA_STATUS_LEN, "Cannot start update: %s", Update.errorString());
-        LOG_WRN("Update.begin failed: %s", Update.errorString());
+      started = true;
+      size_t written = Update.writeStream(https.getStream());
+      if (written != (size_t)contentLen) {
+        snprintf(otaStatus, OTA_STATUS_LEN, "Download truncated");
+        LOG_WRN("OTA wrote %u of %d bytes", written, contentLen);
+      } else if (!Update.end(true)) {
+        snprintf(otaStatus, OTA_STATUS_LEN, "Update failed: %s", Update.errorString());
+        LOG_WRN("Update.end failed: %s", Update.errorString());
       } else {
-        started = true;
-        size_t written = Update.writeStream(https.getStream());
-        if (written != (size_t)contentLen) {
-          snprintf(otaStatus, OTA_STATUS_LEN, "Download truncated");
-          LOG_WRN("OTA wrote %u of %d bytes", written, contentLen);
-        } else if (!Update.end(true)) {
-          snprintf(otaStatus, OTA_STATUS_LEN, "Update failed: %s", Update.errorString());
-          LOG_WRN("Update.end failed: %s", Update.errorString());
-        } else {
-          started = false; // completed, nothing to abort
-          snprintf(otaStatus, OTA_STATUS_LEN, "Updated to %s, restarting", otaLatestTag);
-          LOG_INF("OTA update to %s complete", otaLatestTag);
-          https.end();
-          remoteServerClose(wclient);
-          otaInProgress = false;
-          otaHandle = NULL;
-          doRestart("Restart after GitHub OTA update");
-          vTaskDelete(NULL);
-          return;
-        }
+        started = false; // completed, nothing to abort
+        snprintf(otaStatus, OTA_STATUS_LEN, "Updated to %s, restarting", otaLatestTag);
+        LOG_INF("OTA update to %s complete", otaLatestTag);
+        https.end();
+        remoteServerClose(wclient);
+        otaInProgress = false;
+        otaHandle = NULL;
+        doRestart("Restart after GitHub OTA update");
+        vTaskDelete(NULL);
+        return;
       }
     }
-    if (started) Update.abort(); // leave the running partition intact on any partial write
-    https.end();
   }
+  if (started) Update.abort(); // leave the running partition intact on any partial write
+  https.end();
   remoteServerClose(wclient);
   LOG_WRN("OTA update did not complete: %s", otaStatus);
   otaInProgress = false;

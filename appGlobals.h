@@ -69,7 +69,7 @@
 #define DOT_MAX 50
 #define HOSTNAME_GRP 99
  
-#define APP_VER "1.0.2"
+#define APP_VER "1.0.3"
 // to determine if newer data files need to be loaded. Bump whenever a config row is
 // added, removed or moved group, so an existing configs.txt is regenerated rather than
 // leaving stale keys behind.
@@ -110,6 +110,11 @@
 #define OTA_ASSET_NAME "ESPIPCAM.bin"
 #define GITHUB_PATH "/" OTA_REPO_OWNER "/" OTA_REPO_NAME "/main"
 #define OTA_TAG_LEN 16 // longest release tag handled, eg "v10.20.30"
+#define OTA_HOST_LEN 128 // longest redirect host handled
+// GitHub 302s a release asset to a signed, single-use URL whose query string alone runs
+// ~900 characters, so this is sized for that and not for the tidy URL we ask for
+#define OTA_URL_LEN 1024
+#define OTA_MAX_REDIRECTS 4
 #define OTA_STATUS_LEN 64 // update status message shown in the web UI
 // smallest plausible firmware image - guards against a garbage or truncated
 // image being handed to Update.begin(), which would brick the running partition
