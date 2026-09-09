@@ -506,6 +506,8 @@ extern bool hInaPresent;
 extern bool hTcPresent;
 void prepHarness();
 void setHarnessLamp(uint8_t level);
+uint32_t harnessLampHz();
+uint8_t harnessLampBits();
 void setBattPower(bool on);
 void setUsbData(bool on);
 void harnessPowerCycle(int val);

@@ -349,24 +349,68 @@ static void prepMcp9601() {
 
 /************************ scene light ************************/
 
+// FREQUENCY AND RESOLUTION ARE LIVE, not boot-only. They used to latch on the first call, so
+// setting hLampFreq changed the config row, changed the /status readout, and changed nothing
+// on the pin until a reboot - which on a bench rig is the worst kind of knob, one that lies
+// about having worked.
+//
+// The frequency is NOT peripherals.cpp's PWM_FREQ of 50 Hz, which is shared with the servo
+// code. A lamp at 50 Hz strobes every frame the sensor takes and fights the AEC, which is the
+// opposite of what a reference light is for. The default runs far above the line rate so a
+// single row's exposure spans many PWM periods.
+//
+// THE CEILING IS THE 40 MHz XTAL, NOT THE 80 MHz APB. esp32-hal-ledc.c sets LEDC_DEFAULT_CLK
+// to LEDC_USE_XTAL_CLK wherever the SoC supports it, commented "to avoid timer frequency error
+// when setting APB clock < 80 Mhz", and the S3 does support it. So the counter must fit
+// freq x 2^bits inside 40 MHz: 39 kHz at 10 bits, 78 at 9, 156 at 8. Measured rather than
+// assumed - 40 kHz at 10 bits is refused, 20 kHz is not, and an earlier version of this
+// comment said 80 MHz and was wrong.
+//
+// Rather than refuse, the resolution is dropped until the pair fits and the cost is logged.
+// A bench knob that quietly does nothing is worse than one that does slightly less than asked
+static const uint32_t LEDC_SRC_HZ = 40000000UL;
+static uint32_t lampFreqUsed = 0;
+static uint8_t lampBitsUsed = 0;
+
 void setHarnessLamp(uint8_t level) {
   if (hLampPin <= 0) return;
-  if (!lampInit) {
-    // NOT peripherals.cpp's PWM_FREQ, which is 50 Hz because it is shared with the servo
-    // code. A lamp at 50 Hz strobes every frame the sensor takes and fights the AEC, which
-    // is the opposite of what a reference light is for. This runs far above the line rate
-    // so a single row's exposure spans many PWM periods
-    if (!ledcAttach(hLampPin, hLampFreq, hLampBits)) {
-      LOG_WRN("harness: lamp PWM would not attach to GPIO %d", hLampPin);
+  // widest resolution the requested frequency can carry on a 40 MHz counter
+  uint8_t bits = (uint8_t)(hLampBits < 1 ? 1 : (hLampBits > 14 ? 14 : hLampBits));
+  while (bits > 1 && (uint64_t)hLampFreq * (1ULL << bits) > LEDC_SRC_HZ) bits--;
+  if (bits != (uint8_t)hLampBits)
+    LOG_WRN("harness: %d Hz will not fit %d-bit on a %lu Hz LEDC clock - using %u-bit, duty steps of 1/%lu",
+      hLampFreq, hLampBits, (unsigned long)LEDC_SRC_HZ, bits, (unsigned long)(1UL << bits));
+
+  bool retune = lampInit && ((uint32_t)hLampFreq != lampFreqUsed || bits != lampBitsUsed);
+  if (!lampInit || retune) {
+    if (retune) ledcDetach(hLampPin);
+    if (!ledcAttach(hLampPin, hLampFreq, bits)) {
+      LOG_WRN("harness: lamp PWM would not attach to GPIO %d at %d Hz, %u-bit", hLampPin, hLampFreq, bits);
+      if (retune) {
+        // put back what was working rather than leaving the lamp detached
+        ledcAttach(hLampPin, lampFreqUsed, lampBitsUsed);
+        LOG_WRN("harness: lamp still on %lu Hz, %u-bit", (unsigned long)lampFreqUsed, lampBitsUsed);
+      } else lampInit = false;
       return;
     }
     lampInit = true;
-    LOG_INF("harness: lamp on GPIO %d at %d Hz", hLampPin, hLampFreq);
+    lampFreqUsed = (uint32_t)hLampFreq;
+    lampBitsUsed = bits;
+    LOG_INF("harness: lamp on GPIO %d at %lu Hz, %u-bit", hLampPin, (unsigned long)lampFreqUsed, lampBitsUsed);
   }
   hLampLevel = level > 100 ? 100 : level;
-  uint32_t full = (1UL << hLampBits) - 1;
-  ledcWrite(hLampPin, (full * hLampLevel) / 100);
+  // 100% writes 2^bits, not 2^bits - 1. The difference is one count, but at the top of the
+  // range that one count is the difference between a pin held statically high and a pin with
+  // a notch in it every period - 49 ns at 20 kHz and 10 bits. Nothing driving an LED cares;
+  // someone reading the pin with a meter or a scope very much does, and this is a bench rig
+  ledcWrite(hLampPin, ((1UL << lampBitsUsed) * hLampLevel) / 100);
 }
+
+// What the hardware is actually doing, which is not always what was asked for - the
+// resolution drops to fit the clock. Reported separately so the divergence is visible rather
+// than the config row quietly disagreeing with the pin
+uint32_t harnessLampHz() { return lampInit ? lampFreqUsed : 0; }
+uint8_t harnessLampBits() { return lampInit ? lampBitsUsed : 0; }
 
 /************************ power and data switching ************************/
 

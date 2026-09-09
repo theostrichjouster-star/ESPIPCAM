@@ -771,6 +771,10 @@ char* buildAppJsonString(bool filter) {
   p += sprintf(p, "\"hBattPower\":\"%d\",", hBattPowerOn ? 1 : 0);
   p += sprintf(p, "\"hUsbData\":\"%d\",", hUsbDataOn ? 1 : 0);
   p += sprintf(p, "\"hLampLevel\":\"%u\",", hLampLevel);
+  // live, not requested: the resolution drops to fit the LEDC clock, so hLampBits and
+  // hLampRes can legitimately differ and the difference is worth seeing
+  p += sprintf(p, "\"hLampHz\":\"%lu\",", (unsigned long)harnessLampHz());
+  p += sprintf(p, "\"hLampRes\":\"%u\",", harnessLampBits());
 #endif
   p += sprintf(p, "\"sagParked\":\"%u\",", supplyParked ? 1 : 0);
   p += sprintf(p, "\"bodLevel\":\"%u\",", brownoutArmedLevel());
