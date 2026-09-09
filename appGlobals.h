@@ -31,6 +31,7 @@
 #define INCLUDE_CERTS false   // certificates.cpp (https and server certificate checking)
 #define INCLUDE_WEBDAV false  // webDav.cpp (WebDAV protocol)
 #define INCLUDE_DS18B20 false // if true, requires INCLUDE_PERIPH and additional libraries: OneWire and DallasTemperature
+#define INCLUDE_HARNESS true  // harness.cpp (bench rig: INA3221, relays, USB mux, thermocouple, scene light)
 #define INCLUDE_AF true       // for auto focused equipped OV5640. Requires additional library: OV5640_Auto_Focus_for_ESP32_Camera - XIAO Sense ships with an OV5640
 // Stays false, and this is now a measured decision rather than a convenience one.
 // It was originally wanted for scaleFactor 4, which the built in decoder rejects - but
@@ -78,7 +79,7 @@
 // its web files from GITHUB_PATH on the next boot. Recordings and the WiFi credentials are
 // untouched - the credentials live in NVS, not on the card - but the download means the repo
 // must already hold the files you expect the board to come back with
-#define CFG_VER 52
+#define CFG_VER 53
 
 #define APP_NAME "ESP-CAM_MJPEG" // max 15 chars
 #define INDEX_PAGE_PATH DATA_DIR "/MJPEG2SD" HTML_EXT
@@ -190,6 +191,7 @@
 #define EMAIL_STACK_SIZE (1024 * 6)
 #define FS_STACK_SIZE (1024 * 4)
 #define OTA_STACK_SIZE (1024 * 6)
+#define HARNESS_STACK_SIZE (1024 * 4)
 #define LOG_STACK_SIZE (1024 * 3)
 #define AUDIO_STACK_SIZE (1024 * 4)
 #define MICREM_STACK_SIZE (1024 * 2)
@@ -469,6 +471,43 @@ extern int servoPanPin;
 extern int servoTiltPin;
 // ambient / module temperature reading 
 extern int ds18b20Pin; // if INCLUDE_DS18B20 true
+
+#if INCLUDE_HARNESS
+// bench test harness - harness.cpp. Pin defaults are the COM3 map; a pin of 0 disables that
+// device, which is how one image stays inert on a board with none of the hardware fitted
+extern bool harnessUse;
+extern int hLampPin;
+extern int hLampFreq;
+extern int hLampBits;
+extern int hRelayUsbPin;
+extern int hRelayBattPin;
+extern int hUsbMuxPin;
+extern int hUsbMuxInvert;
+extern int hTcPin;
+extern int hSdaPin;
+extern int hSclPin;
+extern int hInaAddr;
+extern int hShuntMilliOhm;
+extern int hCycleMs;
+extern int hPollMs;
+extern int hUsbStaggerMs;
+extern float hChVolts[3];
+extern float hChMilliAmps[3];
+extern float hTcCelsius;
+extern uint8_t hLampLevel;
+extern bool hUsbPowerOn;
+extern bool hBattPowerOn;
+extern bool hUsbDataOn;
+extern bool hInaPresent;
+extern bool hTcPresent;
+void prepHarness();
+void setHarnessLamp(uint8_t level);
+void setBattPower(bool on);
+void setUsbData(bool on);
+void harnessPowerCycle(int val);
+void harnessUsbPower(int val);
+void harnessReport();
+#endif
 // batt monitoring 
 extern int voltPin; 
 

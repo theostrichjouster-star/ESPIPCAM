@@ -303,6 +303,33 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   // config load, which runs after the SD is mounted. Default 4 = the stock 40MHz - safe for
   // fresh installs; 3 = 53.33MHz, out of SD HS spec and only for individually qualified cards
   else if (!strcmp(variable, "sdBusDiv")) sdBusClk(value);
+#if INCLUDE_HARNESS
+  // bench harness - harness.cpp. The pin rows are wiring, set once; the rest are actions.
+  // Every switch is named for what it CONNECTS, so 0 always means the far board loses
+  // something and 1 always means it gets it back
+  else if (!strcmp(variable, "harnessUse")) harnessUse = (bool)intVal;
+  else if (!strcmp(variable, "hLampPin")) hLampPin = intVal;
+  else if (!strcmp(variable, "hLampFreq")) hLampFreq = intVal;
+  else if (!strcmp(variable, "hLampBits")) hLampBits = intVal;
+  else if (!strcmp(variable, "hRelayUsbPin")) hRelayUsbPin = intVal;
+  else if (!strcmp(variable, "hRelayBattPin")) hRelayBattPin = intVal;
+  else if (!strcmp(variable, "hUsbMuxPin")) hUsbMuxPin = intVal;
+  else if (!strcmp(variable, "hUsbMuxInvert")) hUsbMuxInvert = intVal;
+  else if (!strcmp(variable, "hTcPin")) hTcPin = intVal;
+  else if (!strcmp(variable, "hSdaPin")) hSdaPin = intVal;
+  else if (!strcmp(variable, "hSclPin")) hSclPin = intVal;
+  else if (!strcmp(variable, "hInaAddr")) hInaAddr = intVal;
+  else if (!strcmp(variable, "hShuntMilliOhm")) hShuntMilliOhm = intVal;
+  else if (!strcmp(variable, "hCycleMs")) hCycleMs = intVal;
+  else if (!strcmp(variable, "hPollMs")) hPollMs = intVal;
+  else if (!strcmp(variable, "hUsbStaggerMs")) hUsbStaggerMs = intVal;
+  else if (!strcmp(variable, "hLampLevel")) setHarnessLamp((uint8_t)intVal);
+  else if (!strcmp(variable, "hUsbPower")) harnessUsbPower(intVal);
+  else if (!strcmp(variable, "hBattPower")) setBattPower((bool)intVal);
+  else if (!strcmp(variable, "hUsbData")) setUsbData((bool)intVal);
+  else if (!strcmp(variable, "hPowerCycle")) harnessPowerCycle(intVal);
+  else if (!strcmp(variable, "hStat")) harnessReport();
+#endif
   else if (!strcmp(variable, "avgZones")) avgZones(value); // dump the AEC 4x4 zone grid + gates
   else if (!strcmp(variable, "xclkStat")) xclkStat(value); // measure XCLK and VSYNC off the pins
   else if (!strcmp(variable, "lencFhd")) lencFhd(value); // A/B the LENC 4/3 rescale for the FHD crop
@@ -718,6 +745,23 @@ char* buildAppJsonString(bool filter) {
   p += sprintf(p, "\"txPwrNow\":\"%d.%d\",", WiFi.getTxPower() / 4, (WiFi.getTxPower() % 4) * 25 / 10);
   p += sprintf(p, "\"sagBand\":\"%u\",", brownoutProbeBand());
   p += sprintf(p, "\"sagTrips\":\"%lu\",", sagTripCount);
+#if INCLUDE_HARNESS
+  // Harness readings. Present flags go out too, so the page can tell "0.000 V because
+  // the rail is dead" from "0.000 V because nothing is answering on the bus"
+  p += sprintf(p, "\"hOn\":\"%d\",", harnessUse ? 1 : 0);
+  p += sprintf(p, "\"hIna\":\"%d\",", hInaPresent ? 1 : 0);
+  p += sprintf(p, "\"hTc\":\"%d\",", hTcPresent ? 1 : 0);
+  for (int ch = 0; ch < 3; ch++) {
+    p += sprintf(p, "\"hV%d\":\"%.3f\",", ch + 1, hChVolts[ch]);
+    p += sprintf(p, "\"hI%d\":\"%.1f\",", ch + 1, hChMilliAmps[ch]);
+  }
+  if (hTcPresent) p += sprintf(p, "\"hTcC\":\"%.2f\",", hTcCelsius);
+  else p += sprintf(p, "\"hTcC\":\"n/a\",");
+  p += sprintf(p, "\"hUsbPower\":\"%d\",", hUsbPowerOn ? 1 : 0);
+  p += sprintf(p, "\"hBattPower\":\"%d\",", hBattPowerOn ? 1 : 0);
+  p += sprintf(p, "\"hUsbData\":\"%d\",", hUsbDataOn ? 1 : 0);
+  p += sprintf(p, "\"hLampLevel\":\"%u\",", hLampLevel);
+#endif
   p += sprintf(p, "\"sagParked\":\"%u\",", supplyParked ? 1 : 0);
   p += sprintf(p, "\"bodLevel\":\"%u\",", brownoutArmedLevel());
   // Extend info
@@ -1082,6 +1126,22 @@ aec~1~98~~na
 tunedFps~0~98~~na
 fpsPriority~1~98~~na
 sdBusDiv~4~98~~na
+harnessUse~0~98~~na
+hLampPin~1~98~~na
+hLampFreq~20000~98~~na
+hLampBits~10~98~~na
+hRelayUsbPin~3~98~~na
+hRelayBattPin~43~98~~na
+hUsbMuxPin~44~98~~na
+hUsbMuxInvert~0~98~~na
+hTcPin~4~98~~na
+hSdaPin~5~98~~na
+hSclPin~6~98~~na
+hInaAddr~64~98~~na
+hShuntMilliOhm~50~98~~na
+hCycleMs~4000~98~~na
+hPollMs~2000~98~~na
+hUsbStaggerMs~50~98~~na
 zoneMask~65535~98~~na
 aec2~0~98~~na
 aec_value~204~98~~na

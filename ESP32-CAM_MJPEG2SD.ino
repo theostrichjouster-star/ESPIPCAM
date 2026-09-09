@@ -38,6 +38,9 @@ void setup() {
 #if INCLUDE_PERIPH
     prepPeripherals();
 #endif
+#if INCLUDE_HARNESS
+    prepHarness();
+#endif
 #if INCLUDE_AUDIO
     prepAudio(); 
 #endif
