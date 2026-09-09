@@ -315,7 +315,9 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "hRelayBattPin")) hRelayBattPin = intVal;
   else if (!strcmp(variable, "hUsbMuxPin")) hUsbMuxPin = intVal;
   else if (!strcmp(variable, "hUsbMuxInvert")) hUsbMuxInvert = intVal;
-  else if (!strcmp(variable, "hTcPin")) hTcPin = intVal;
+  else if (!strcmp(variable, "hTcAddr")) hTcAddr = intVal;
+  else if (!strcmp(variable, "hTcType")) hTcType = intVal;
+  else if (!strcmp(variable, "hTcFilter")) hTcFilter = intVal;
   else if (!strcmp(variable, "hSdaPin")) hSdaPin = intVal;
   else if (!strcmp(variable, "hSclPin")) hSclPin = intVal;
   else if (!strcmp(variable, "hInaAddr")) hInaAddr = intVal;
@@ -755,8 +757,15 @@ char* buildAppJsonString(bool filter) {
     p += sprintf(p, "\"hV%d\":\"%.3f\",", ch + 1, hChVolts[ch]);
     p += sprintf(p, "\"hI%d\":\"%.1f\",", ch + 1, hChMilliAmps[ch]);
   }
-  if (hTcPresent) p += sprintf(p, "\"hTcC\":\"%.2f\",", hTcCelsius);
-  else p += sprintf(p, "\"hTcC\":\"n/a\",");
+  // The cold junction goes out beside the hot one: an unbonded probe still reads a
+  // plausible temperature on this breakout, and the two sitting together is the tell
+  if (hTcPresent) {
+    p += sprintf(p, "\"hTcC\":\"%.2f\",", hTcCelsius);
+    p += sprintf(p, "\"hTcCold\":\"%.2f\",", hTcColdC);
+  } else {
+    p += sprintf(p, "\"hTcC\":\"n/a\",");
+    p += sprintf(p, "\"hTcCold\":\"n/a\",");
+  }
   p += sprintf(p, "\"hUsbPower\":\"%d\",", hUsbPowerOn ? 1 : 0);
   p += sprintf(p, "\"hBattPower\":\"%d\",", hBattPowerOn ? 1 : 0);
   p += sprintf(p, "\"hUsbData\":\"%d\",", hUsbDataOn ? 1 : 0);
@@ -1127,14 +1136,16 @@ tunedFps~0~98~~na
 fpsPriority~1~98~~na
 sdBusDiv~4~98~~na
 harnessUse~0~98~~na
-hLampPin~1~98~~na
+hLampPin~43~98~~na
 hLampFreq~20000~98~~na
 hLampBits~10~98~~na
 hRelayUsbPin~3~98~~na
-hRelayBattPin~43~98~~na
+hRelayBattPin~1~98~~na
 hUsbMuxPin~44~98~~na
 hUsbMuxInvert~0~98~~na
-hTcPin~4~98~~na
+hTcAddr~103~98~~na
+hTcType~0~98~~na
+hTcFilter~4~98~~na
 hSdaPin~5~98~~na
 hSclPin~6~98~~na
 hInaAddr~64~98~~na
