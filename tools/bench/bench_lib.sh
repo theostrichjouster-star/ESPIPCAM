@@ -284,3 +284,39 @@ af_resume() {  # hand the lens back to continuous AF, and CHECK it actually took
     log "AF resumed: lens 0x$v0 (code $(af_code "$v0")) -> 0x$v1 (code $(af_code "$v1")), status 0x$(regrd 0x3029)"
   fi
 }
+
+# assert_board: refuse to go on unless $BOARD really is the board you meant. Two independent
+# sources have to agree with EXPECT_MAC, which comes from the environment and is never written
+# into this repo: the host's own ARP entry for the address, which costs the board no request at
+# all, and the board's own macAddressWiFi. A missing ARP entry or an unreadable /status is a
+# failure, not a pass.
+#
+# This exists because every way of naming a board is a lease rather than an identity. An IP is
+# DHCP's to move, a hostname is the router's answer about that lease, and a COM number is a
+# Windows registry entry. Addressing a flash by any of them and being wrong writes an image to
+# the wrong board and, when the config version has moved, deletes its settings on the way past.
+# The MAC is the one name the board issues about itself.
+assert_board() {
+  local want ip mac_arp mac_http
+  : "${EXPECT_MAC:?set EXPECT_MAC=<the MAC of the board you mean> - it is not in this repo}"
+  want=$(printf '%s' "$EXPECT_MAC" | tr 'a-f-' 'A-F:')
+  ip=$(python -c "import socket,sys
+try: print(socket.gethostbyname(sys.argv[1]))
+except Exception: pass" "$BOARD" 2>/dev/null)
+  [ -n "$ip" ] || { log "assert_board: REFUSING - $BOARD does not resolve"; return 1; }
+  # One ping so an ARP entry exists even if nothing has spoken to the board recently. Windows
+  # ping counts a router's "destination host unreachable" as a reply, so its exit code is not
+  # evidence of anything - the ARP table read below is
+  ping -n 1 -w 1000 "$ip" > /dev/null 2>&1
+  mac_arp=$(arp -a "$ip" 2>/dev/null | grep -oiE '([0-9a-f]{2}-){5}[0-9a-f]{2}' | head -1 | tr 'a-f-' 'A-F:')
+  [ -n "$mac_arp" ] || { log "assert_board: REFUSING - no ARP entry for $ip, so the board is not on the network"; return 1; }
+  http_gap
+  mac_http=$(curl -s -m 20 "http://$ip/status" | python "$HERE/jfield.py" macAddressWiFi | tr 'a-f-' 'A-F:')
+  [ -n "$mac_http" ] || { log "assert_board: REFUSING - $ip returned no readable /status"; return 1; }
+  if [ "$mac_arp" != "$want" ] || [ "$mac_http" != "$want" ]; then
+    log "assert_board: REFUSING - $BOARD is $ip, ARP says $mac_arp and /status says $mac_http, wanted $want"
+    return 1
+  fi
+  log "assert_board: $BOARD is $ip, MAC $want, agreed by ARP and /status"
+  return 0
+}
