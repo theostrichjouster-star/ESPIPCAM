@@ -23,10 +23,11 @@
 //
 // THREE TRAPS FOUND BEFORE THIS WAS TRUSTED, all worth keeping in view:
 //
-//  1. I2C PORT 0 IS TAKEN. mjpeg2sd.cpp sets config.sccb_i2c_port = 0, so the camera's SCCB
-//     owns port 0, which is what Arduino calls Wire. This module uses Wire1. Putting either
-//     device on Wire would fight the sensor bus, and since otaConfirm() gates on the camera
-//     being present, that failure would also stop every future OTA confirming.
+//  1. THE CAMERA OWNS I2C PORT 1, WHICH IS Wire1 - and the line in mjpeg2sd.cpp that appears
+//     to say otherwise does nothing. config.sccb_i2c_port = 0 is only read "if pin_sccb_sda
+//     is -1" (esp_camera.h), and a real SDA pin is passed, so the port comes from the core's
+//     sdkconfig instead: CONFIG_SCCB_HARDWARE_I2C_PORT1. Measured the hard way on 8 Sep 2026 -
+//     see prepI2c() for what pointing this module at Wire1 actually did.
 //  2. THE MCP9601 NAKs A ZERO-LENGTH WRITE, which is exactly what an I2C bus scan sends, so
 //     a scan reports it missing however well it is wired. Adafruit's guide says so outright.
 //     Presence here is a real register read of the device ID, never an address probe.
@@ -49,6 +50,23 @@
 
 #include <Wire.h>
 
+// WHICH I2C PORT THE HARNESS MAY USE IS A COMPILE TIME FACT, and it has to be, because getting
+// it wrong is destructive rather than merely useless - see prepI2c(). The camera's SCCB takes
+// one of the two ports; this module takes the other. Which one the camera has does NOT come
+// from mjpeg2sd.cpp's config.sccb_i2c_port, which esp_camera.h honours only "if pin_sccb_sda
+// is -1" and is therefore dead code with a real pin passed. It comes from the core's sdkconfig.
+// Derive it rather than restate it, so a core built the other way moves this module with it -
+// or refuses to build, which is the next best thing
+#if defined(CONFIG_SCCB_HARDWARE_I2C_PORT1)
+  #define HARNESS_WIRE Wire    // port 0, because the camera has port 1
+  #define HARNESS_WIRE_NAME "Wire (port 0)"
+#elif defined(CONFIG_SCCB_HARDWARE_I2C_PORT0)
+  #define HARNESS_WIRE Wire1   // port 1, because the camera has port 0
+  #define HARNESS_WIRE_NAME "Wire1 (port 1)"
+#else
+  #error "Cannot tell which I2C port the camera's SCCB uses - check CONFIG_SCCB_HARDWARE_I2C_PORTn in the core sdkconfig"
+#endif
+
 // config, all persisted through appConfig rows. Pin defaults are the COM3 map; a pin of 0
 // disables that device, which is how this module stays inert on a board without the hardware
 bool harnessUse = false;
@@ -65,7 +83,7 @@ int hUsbMuxPin = 44;
 // 0 is the confirmed wiring above, where low means COM4 is selected. Kept as a row rather
 // than assumed in code so a rewire, or a swap of ports 1 and 2, is a setting and not a build
 int hUsbMuxInvert = 0;
-// MCP9601 thermocouple amplifier, on the same Wire1 chain as the INA3221 - it needs no pin
+// MCP9601 thermocouple amplifier, on the same I2C chain as the INA3221 - it needs no pin
 // of its own, which is what freed D3. 0x67 is the breakout with its ADDR pin unconnected;
 // the part answers anywhere in 0x60-0x67 depending on how ADDR is strapped
 int hTcAddr = 0x67;
@@ -123,34 +141,48 @@ static TaskHandle_t harnessHandle = NULL;
 
 /************************ shared I2C ************************/
 
-// Both devices sit on Wire1. A register read is the pointer byte written with a repeated
-// start - endTransmission(false) is what holds the bus - then the read
+// Both devices sit on HARNESS_WIRE, the port the camera does not have. A register read is the
+// pointer byte written with a repeated start - endTransmission(false) is what holds the bus -
+// then the read
 static bool hI2cRead(uint8_t addr, uint8_t reg, uint8_t* buf, size_t len) {
-  Wire1.beginTransmission(addr);
-  Wire1.write(reg);
-  if (Wire1.endTransmission(false) != 0) return false;
-  if (Wire1.requestFrom((int)addr, (int)len) != len) return false;
-  for (size_t i = 0; i < len; i++) buf[i] = Wire1.read();
+  HARNESS_WIRE.beginTransmission(addr);
+  HARNESS_WIRE.write(reg);
+  if (HARNESS_WIRE.endTransmission(false) != 0) return false;
+  if (HARNESS_WIRE.requestFrom((int)addr, (int)len) != len) return false;
+  for (size_t i = 0; i < len; i++) buf[i] = HARNESS_WIRE.read();
   return true;
 }
 
 static bool hI2cWrite8(uint8_t addr, uint8_t reg, uint8_t val) {
-  Wire1.beginTransmission(addr);
-  Wire1.write(reg);
-  Wire1.write(val);
-  return Wire1.endTransmission() == 0;
+  HARNESS_WIRE.beginTransmission(addr);
+  HARNESS_WIRE.write(reg);
+  HARNESS_WIRE.write(val);
+  return HARNESS_WIRE.endTransmission() == 0;
 }
 
-// One bus, started once, before either device is asked anything. Wire1, never Wire - trap 1
+// One bus, started once, before either device is asked anything.
+//
+// A FAILED begin() IS NOT HARMLESS, which is why the port above is decided at compile time
+// rather than tried and recovered from. Measured on COM3, 8 Sep 2026, when this module still
+// pointed at Wire1: the camera had already installed the IDF driver on port 1 directly rather
+// than through Arduino's Wire, so i2cIsInit() read false and begin() went on to call
+// i2c_param_config() - which SUCCEEDED and reprogrammed port 1 onto this module's SDA and SCL,
+// taking SCCB off the sensor's own pins. Only the i2c_driver_install() after it failed, so
+// begin() returned false having already broken the camera. The tell was every SCCB read coming
+// back 0xFF: camLive reported 65535 lines, gain 63.94x, sensor q63 and AWB 4095/4095/4095, all
+// of them the maximum. A reboot cured it, but harnessUse is persisted, so the next boot would
+// have done it again - it needed harnessUse=0 saved BEFORE the reset to break out.
 static bool prepI2c() {
   if (hSdaPin <= 0 || hSclPin <= 0) {
     LOG_WRN("harness: I2C pins are not set - no current readings and no temperature");
     return false;
   }
-  if (!Wire1.begin(hSdaPin, hSclPin)) {
-    LOG_WRN("harness: I2C would not start on SDA %d SCL %d", hSdaPin, hSclPin);
+  if (!HARNESS_WIRE.begin(hSdaPin, hSclPin)) {
+    LOG_WRN("harness: %s would not start on SDA %d SCL %d - check nothing else claimed them",
+      HARNESS_WIRE_NAME, hSdaPin, hSclPin);
     return false;
   }
+  LOG_INF("harness: I2C up on %s, SDA %d SCL %d", HARNESS_WIRE_NAME, hSdaPin, hSclPin);
   return true;
 }
 

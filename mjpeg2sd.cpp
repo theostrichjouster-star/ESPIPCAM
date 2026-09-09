@@ -4920,7 +4920,12 @@ bool prepCam() {
   config.frame_size = maxFS;
   config.jpeg_quality = 10;
   config.fb_count = FB_CNT;
-  config.sccb_i2c_port = 0;// using I2C 0. to be sure what port we are using.
+  // THIS HAS NO EFFECT and is kept only so nobody re-adds it believing it does. esp_camera.h
+  // documents sccb_i2c_port as "If pin_sccb_sda is -1, use the already configured I2C bus by
+  // number", and pin_sccb_sda is set to a real pin above. The port is the core's compile time
+  // CONFIG_SCCB_HARDWARE_I2C_PORTn, which is PORT1 on the core this project builds against.
+  // harness.cpp derives its own bus from that macro rather than trusting this line
+  config.sccb_i2c_port = 0;
 
   // camera init
   esp_err_t err = ESP_FAIL;
