@@ -490,6 +490,7 @@ extern int hSdaPin;
 extern int hSclPin;
 extern int hInaAddr;
 extern int hShuntMilliOhm;
+extern int hInaAvg;
 extern int hCycleMs;
 extern int hPollMs;
 extern int hUsbStaggerMs;

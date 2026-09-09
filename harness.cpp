@@ -98,6 +98,10 @@ int hInaAddr = 0x40;       // INA3221 base address
 // scale. Both ends suit this job: a XIAO draws hundreds of mA, and an idle-current change
 // of a few mA is still several counts rather than noise
 int hShuntMilliOhm = 50;
+// INA3221 averaging, the raw AVG2-0 code from TI SBOS576C table 7-6: 0=1 sample, 1=4, 2=16,
+// 3=64, 4=128, 5=256, 6=512, 7=1024. Default 4 - see prepIna3221() for why one sample is not
+// good enough and why 128 is the most that fits under hPollMs
+int hInaAvg = 4;
 int hCycleMs = 4000;       // default dead time for a power cycle
 int hPollMs = 2000;        // how often the harness task refreshes its readings
 int hUsbStaggerMs = 50;    // gap between the data pair and VBUS, imitating the connector's pin lengths
@@ -122,7 +126,14 @@ static TaskHandle_t harnessHandle = NULL;
 
 #define INA_REG_SHUNT(ch) (0x01 + ((ch) * 2))
 #define INA_REG_BUS(ch)   (0x02 + ((ch) * 2))
+#define INA_REG_CONFIG    0x00
 #define INA_REG_MANUF     0xFE
+// The config register's power-on value, TI SBOS576C table 7-5: all three channels enabled,
+// AVG 000, 1.1 ms conversion for both bus and shunt, mode 111 continuous shunt and bus. The
+// AVG field is the only part this module changes, so start from the reset value rather than
+// composing one and risking a channel or a mode landing somewhere unintended
+#define INA_CFG_POR       0x7127
+#define INA_CFG_AVG_SHIFT 9
 #define INA_MANUF_TI      0x5449  // "TI" - warned about, not enforced, so a relabelled part still reads
 
 // MCP9601 registers, Microchip DS20005426F table 5-1
@@ -157,6 +168,14 @@ static bool hI2cWrite8(uint8_t addr, uint8_t reg, uint8_t val) {
   HARNESS_WIRE.beginTransmission(addr);
   HARNESS_WIRE.write(reg);
   HARNESS_WIRE.write(val);
+  return HARNESS_WIRE.endTransmission() == 0;
+}
+
+static bool hI2cWrite16(uint8_t addr, uint8_t reg, uint16_t val) {
+  HARNESS_WIRE.beginTransmission(addr);
+  HARNESS_WIRE.write(reg);
+  HARNESS_WIRE.write((uint8_t)(val >> 8));
+  HARNESS_WIRE.write((uint8_t)(val & 0xFF));
   return HARNESS_WIRE.endTransmission() == 0;
 }
 
@@ -235,9 +254,29 @@ static void prepIna3221() {
     return;
   }
   hInaPresent = true;
-  // The config register is left at its power-on default, which already runs all three
-  // channels continuously. Averaging is worth adding once someone has the datasheet open;
-  // guessing at the encoding here would be the kind of assumption this project bans
+  // AVERAGING, and it is not optional on a board with a radio. At the power-on default of AVG
+  // 000 every reading is ONE 1.1 ms conversion, so a sample catches whichever instant it lands
+  // in - measured 8 Sep 2026, COM3's own draw read 206 mA and 273 mA on consecutive polls with
+  // nothing changed, because wifi transmits in bursts. Averaging is what makes a current figure
+  // mean anything.
+  //
+  // A full cycle is 6 conversions (bus and shunt on three channels) at 1.1 ms, so 128 samples
+  // is 128 x 6 x 1.1 ms = 845 ms per updated average. That is the most that fits comfortably
+  // inside hPollMs of 2000 - 256 would take 1.69 s and leave almost no margin - and it is long
+  // enough to cover a transmit burst. Encoding from TI SBOS576C table 7-6.
+  uint16_t cfg = INA_CFG_POR | ((uint16_t)(hInaAvg & 0x07) << INA_CFG_AVG_SHIFT);
+  static const uint16_t avgSamples[8] = {1, 4, 16, 64, 128, 256, 512, 1024};
+  if (!hI2cWrite16((uint8_t)hInaAddr, INA_REG_CONFIG, cfg))
+    LOG_WRN("harness: INA3221 config write failed - readings are single samples and will be noisy");
+  else {
+    // Read back rather than assume: a write that lands in the wrong register would otherwise
+    // look identical to one that worked, and the symptom would be noise nobody could explain
+    uint16_t back = 0;
+    if (!inaRead16(INA_REG_CONFIG, back) || back != cfg)
+      LOG_WRN("harness: INA3221 config read back 0x%04X, expected 0x%04X", back, cfg);
+    else LOG_INF("harness: INA3221 averaging %u samples per reading (config 0x%04X)",
+      avgSamples[hInaAvg & 0x07], cfg);
+  }
   if (manuf == INA_MANUF_TI) LOG_INF("harness: INA3221 found at 0x%02X", hInaAddr);
   else LOG_WRN("harness: device at 0x%02X answered with maker ID 0x%04X, expected 0x%04X - reading it anyway", hInaAddr, manuf, INA_MANUF_TI);
 }

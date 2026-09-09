@@ -322,6 +322,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "hSclPin")) hSclPin = intVal;
   else if (!strcmp(variable, "hInaAddr")) hInaAddr = intVal;
   else if (!strcmp(variable, "hShuntMilliOhm")) hShuntMilliOhm = intVal;
+  else if (!strcmp(variable, "hInaAvg")) hInaAvg = intVal;
   else if (!strcmp(variable, "hCycleMs")) hCycleMs = intVal;
   else if (!strcmp(variable, "hPollMs")) hPollMs = intVal;
   else if (!strcmp(variable, "hUsbStaggerMs")) hUsbStaggerMs = intVal;
@@ -1150,6 +1151,7 @@ hSdaPin~5~98~~na
 hSclPin~6~98~~na
 hInaAddr~64~98~~na
 hShuntMilliOhm~50~98~~na
+hInaAvg~4~98~~na
 hCycleMs~4000~98~~na
 hPollMs~2000~98~~na
 hUsbStaggerMs~50~98~~na
