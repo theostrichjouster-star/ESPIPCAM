@@ -318,6 +318,7 @@ bool updateAppStatus(const char* variable, const char* value, bool fromUser) {
   else if (!strcmp(variable, "hTcAddr")) hTcAddr = intVal;
   else if (!strcmp(variable, "hTcType")) hTcType = intVal;
   else if (!strcmp(variable, "hTcFilter")) hTcFilter = intVal;
+  else if (!strcmp(variable, "hTcFaultMask")) hTcFaultMask = intVal;
   else if (!strcmp(variable, "hSdaPin")) hSdaPin = intVal;
   else if (!strcmp(variable, "hSclPin")) hSclPin = intVal;
   else if (!strcmp(variable, "hInaAddr")) hInaAddr = intVal;
@@ -1151,6 +1152,7 @@ hUsbMuxInvert~0~98~~na
 hTcAddr~103~98~~na
 hTcType~0~98~~na
 hTcFilter~4~98~~na
+hTcFaultMask~0~98~~na
 hSdaPin~5~98~~na
 hSclPin~6~98~~na
 hInaAddr~64~98~~na

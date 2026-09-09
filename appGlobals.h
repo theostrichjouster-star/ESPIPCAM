@@ -486,6 +486,7 @@ extern int hUsbMuxInvert;
 extern int hTcAddr;
 extern int hTcType;
 extern int hTcFilter;
+extern int hTcFaultMask;
 extern int hSdaPin;
 extern int hSclPin;
 extern int hInaAddr;

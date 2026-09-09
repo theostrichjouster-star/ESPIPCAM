@@ -89,6 +89,10 @@ int hUsbMuxInvert = 0;
 int hTcAddr = 0x67;
 int hTcType = 0;           // 0 = type K, the thermocouple Adafruit ships. Datasheet order: K J T N S E B R
 int hTcFilter = 4;         // 0 = off, 7 = heaviest. Sensor config bits 2:0
+// Which STATUS fault bits are allowed to VOID a reading. Default 0: none of them, because on
+// this breakout they cannot mean anything - see readThermocouple(). 0x30 arms both, 0x10 the
+// open-circuit half and 0x20 the short, for a board that does wire VSENSE
+int hTcFaultMask = 0;
 int hSdaPin = 5;           // D4
 int hSclPin = 6;           // D5
 int hInaAddr = 0x40;       // INA3221 base address
@@ -305,17 +309,30 @@ static void readThermocouple() {
     LOG_WRN("harness: MCP9601 stopped answering at 0x%02X", hTcAddr);
     return;
   }
-  // Reported, never relied on - trap 3. On this breakout neither bit can assert, so silence
-  // here is not evidence that the probe is still attached. Logged on the EDGE and not on
-  // every pass: a standing fault would otherwise put a line in the log every hPollMs, and
-  // the RTC ring holds only a couple of minutes of chatter as it is
-  static uint8_t lastFault = 0;
-  uint8_t fault = status & (MCP_STATUS_OPEN | MCP_STATUS_SHORT);
-  if (fault != lastFault) {
-    if (fault & MCP_STATUS_SHORT) LOG_WRN("harness: thermocouple shorted to VDD or ground");
-    if (fault & MCP_STATUS_OPEN) LOG_WRN("harness: thermocouple open circuit, or out of range for the configured type");
-    if (!fault) LOG_INF("harness: thermocouple fault cleared");
-    lastFault = fault;
+  // THE FAULT BITS TRIP AT RANDOM ON THIS BREAKOUT AND MUST NOT VOID A READING. Both of them
+  // need the VSENSE pin wired through the RA/RB divider of datasheet figure 1-1, and this
+  // board fits neither, so VSENSE floats and the comparator input is undefined. Measured
+  // 9 Sep 2026: four assertions across one session, each lasting exactly ONE 2 s poll, with
+  // the temperature either side of every one of them continuous - 63.31 C, then the fault,
+  // then 64.25 C on an unbroken thermal ramp. Believing them threw away good samples in the
+  // middle of the first OV5640 temperature run this project has ever had.
+  //
+  // An earlier comment here claimed neither bit COULD assert without VSENSE. They assert
+  // perfectly well; they are just meaningless. So they are still read and still logged - the
+  // information is not thrown away - but only hTcFaultMask decides whether they void the
+  // sample, and it defaults to none of them.
+  //
+  // Logged on the EDGE and not on every pass: a standing fault would otherwise put a line in
+  // the log every hPollMs, and the RTC ring holds only a couple of minutes of chatter as it is
+  static uint8_t lastRaw = 0;
+  uint8_t raw = status & (MCP_STATUS_OPEN | MCP_STATUS_SHORT);
+  uint8_t fault = raw & (uint8_t)hTcFaultMask;
+  if (raw != lastRaw) {
+    const char* acted = fault ? "voiding the reading" : "ignored, VSENSE is not wired";
+    if (raw & MCP_STATUS_SHORT) LOG_WRN("harness: thermocouple STATUS short-circuit bit set - %s", acted);
+    if (raw & MCP_STATUS_OPEN) LOG_WRN("harness: thermocouple STATUS open-circuit/range bit set - %s", acted);
+    if (!raw) LOG_INF("harness: thermocouple STATUS clear again");
+    lastRaw = raw;
   }
   // The cold junction is the part's own on-die sensor and stays valid through a thermocouple
   // fault, so it is published either way. The hot junction is not, and must not be handed out
