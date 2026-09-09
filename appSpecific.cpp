@@ -1136,7 +1136,7 @@ tunedFps~0~98~~na
 fpsPriority~1~98~~na
 sdBusDiv~4~98~~na
 harnessUse~0~98~~na
-hLampPin~43~98~~na
+hLampPin~4~98~~na
 hLampFreq~20000~98~~na
 hLampBits~10~98~~na
 hRelayUsbPin~3~98~~na

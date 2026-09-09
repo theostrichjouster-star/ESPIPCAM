@@ -52,10 +52,7 @@
 // config, all persisted through appConfig rows. Pin defaults are the COM3 map; a pin of 0
 // disables that device, which is how this module stays inert on a board without the hardware
 bool harnessUse = false;
-// D6, and it must not be a cleaner pad than this one - see driveSwitch() below for why the
-// lamp is the only thing that can live on UART0's transmit pin. COM3's panic console is the
-// price, which serial flashing does not need since that runs over native USB
-int hLampPin = 43;
+int hLampPin = 4;          // D3, freed by the thermocouple moving to I2C
 int hLampFreq = 20000;     // Hz - see setHarnessLamp() for why this is not 50
 int hLampBits = 10;        // ledc duty resolution
 int hRelayUsbPin = 3;      // D2, USB power. Strapping pin, needs an external pull-down
@@ -281,11 +278,6 @@ static void prepMcp9601() {
 
 /************************ scene light ************************/
 
-// On D6 / GPIO 43 deliberately, and that pad is UART0 TX - see driveSwitch(). Two things
-// follow that are expected rather than faults: the console drives the pin high through every
-// boot, so the lamp flashes on for a few hundred milliseconds before this claims the pad, and
-// it stays lit for as long as COM3 is parked in download mode. Read that second one as a free
-// indicator that the board is parked, not as a stuck output
 void setHarnessLamp(uint8_t level) {
   if (hLampPin <= 0) return;
   if (!lampInit) {
@@ -314,16 +306,17 @@ void setHarnessLamp(uint8_t level) {
 // crash and the whole window before prepHarness() runs all leave the far board powered and
 // still enumerated.
 //
-// NO SWITCH MAY LIVE ON GPIO 43, which is why the lamp is there and the battery relay is not.
-// That pad is UART0 TX, and this core builds with CONFIG_ESP_CONSOLE_UART_DEFAULT and
+// NOTHING MAY LIVE ON D6 / GPIO 43, and it is deliberately left unconnected. That pad is
+// UART0 TX, and this core builds with CONFIG_ESP_CONSOLE_UART_DEFAULT and
 // CONFIG_ESP_CONSOLE_UART_NUM 0, so the ROM, the bootloader and the app all drive it and it
-// idles HIGH - which on a line meaning "connected when low" is a rail held open. A pull-down
-// cannot win that: it only decides what a high-impedance pin floats to, and the datasheet's
-// I_OH is 40 mA typical against the 0.33 mA a 10k draws. Claiming the pad earlier does not fix
-// it either, because prepHarness() returns without touching a pin while harnessUse is 0, and
-// even with it set the console owns the pad from reset until setup() - the ROM banner, the
-// bootloader, PSRAM, the SD mount and the camera probe, which is long enough for a mechanical
-// relay to follow. The lamp is the only load whose worst case on that pad costs nothing
+// idles HIGH - which on a line meaning "connected when low" would be a rail held open. A
+// pull-down cannot win that: it only decides what a high-impedance pin floats to, and the
+// datasheet's I_OH is 40 mA typical against the 0.33 mA a 10k draws. Claiming the pad earlier
+// does not fix it either, because prepHarness() returns without touching a pin while
+// harnessUse is 0, and even with it set the console owns the pad from reset until setup() -
+// the ROM banner, the bootloader, PSRAM, the SD mount and the camera probe, which is long
+// enough for a mechanical relay to follow. Leaving it empty also keeps COM3's UART0 panic
+// console, which matters on the one board that has no remote reset of its own
 static void driveSwitch(int pin, bool connected, bool invert) {
   if (pin <= 0) return;
   pinMode(pin, OUTPUT);
@@ -468,11 +461,35 @@ void harnessReport() {
   LOG_INF("  supply: %s. USB data %s, lamp %u%%", supply, hUsbDataOn ? "connected" : "isolated", hLampLevel);
 }
 
+// Seven of the eight usable pads are spoken for and two of them moved this week, so a pin
+// collision is a live risk rather than a theoretical one - and every form of it fails quietly.
+// Two harness pins on one net just fight each other. battPin is worse: battMonitor() analogReads
+// it and publishes the answer as a battery voltage, so a divider left on a pin the harness now
+// drives reports a plausible number that means nothing. PEER_RESET_PIN is worse still, because
+// losing it costs the only remote lever this board has over the other one
+static void checkHarnessPins() {
+  const int pins[] = {hLampPin, hRelayUsbPin, hRelayBattPin, hUsbMuxPin, hSdaPin, hSclPin};
+  const char* names[] = {"lamp", "USB relay", "battery relay", "USB mux", "SDA", "SCL"};
+  const int count = sizeof(pins) / sizeof(pins[0]);
+  for (int i = 0; i < count; i++) {
+    if (pins[i] <= 0) continue;
+    for (int j = i + 1; j < count; j++)
+      if (pins[i] == pins[j]) LOG_WRN("harness: %s and %s are both on GPIO %d", names[i], names[j], pins[i]);
+    if (pins[i] == PEER_RESET_PIN)
+      LOG_WRN("harness: %s is on GPIO %d, the peer reset line - COM4 loses its only remote reset", names[i], pins[i]);
+    if (battUse && pins[i] == battPin)
+      LOG_WRN("harness: %s is on GPIO %d, which battUse is also reading as the battery divider", names[i], pins[i]);
+    if (pins[i] == 43)
+      LOG_WRN("harness: %s is on GPIO 43, which the console drives - see driveSwitch()", names[i]);
+  }
+}
+
 void prepHarness() {
   if (!harnessUse) {
     LOG_INF("harness: not enabled");
     return;
   }
+  checkHarnessPins();
   // Switches first and before anything can fail, so the far board is powered from the
   // earliest possible moment in this module's life
   setUsbRail(true);
