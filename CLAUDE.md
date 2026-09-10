@@ -842,6 +842,17 @@ elsewhere in this file are the same items seen from their own subject.
   method, §31-34 the recent dead ends and campaigns
 - `THERMAL_SOAK.md`, `FPS_RECAL.md` - local bench campaigns (untracked)
 - `OV5640_*_post.md` - writeups of the DVDD and overheating work (untracked)
+- **"CAMERA TEMP" (`atemp`) IS THE ESP32-S3 DIE AND IS NOT THE SENSOR.** Measured 9 Sep 2026 with a
+  thermocouple bonded to the OV5640 package (BOARD_TESTING §39.17-23). At idle with no lamp the
+  sensor is **57-60 C while `atemp` reads 37 C**; at 1280X960's ceiling it plateaus at **78.56 C
+  while `atemp` reads 38**. The two are DECOUPLED - sensor temperature follows sensor clocking,
+  die temperature follows SoC work - so `atemp` runs 20 C low at idle, 34 C low under sensor load,
+  and is only roughly right when the SoC happens to be busy too.
+  **The datasheet's stable-image range is 0-50 C JUNCTION and the operating range is -30 to +70 C**
+  (table 8-2), so this sensor is outside its image-stability spec ALWAYS, and outside its operating
+  spec at 1280X960 ceiling - and a package reading is a lower bound on the junction. Any colour or
+  quality work that held temperature constant by watching `atemp` was not holding it constant
+
 
 ## Datasheets - READ THEM, they are in the repo
 
@@ -944,6 +955,16 @@ State and budgets:
 - `banding=0|50|60` - the mains banding filter, persisted with `save=1`. 0 (the default) is
   off: the AEC then spends the whole frame on exposure before gain. 50/60 select the manual
   band; `dumpCam` reports the live state on its Exposure line
+
+- **COM3 IS A TEST HARNESS FOR COM4 SINCE 8 SEP 2026** (`harness.cpp`, `INCLUDE_HARNESS`,
+  BOARD_TESTING §39). It measures COM4's USB and battery rails and the OV5640's own temperature,
+  and it can cut either supply or the USB data pair independently. `hStat=1` reports everything;
+  `hUsbPower` / `hBattPower` / `hUsbData` are the switches, `hPowerCycle=<ms>` drops both rails
+  for a real power-on reset (proven: COM4 logs "Power on reset", which an EN pulse never gives),
+  `hLampLevel=0..100` is the scene light. All of it is inert on COM4 - `harnessUse` defaults 0.
+  Every switch means CONNECTED when the pin is low, so a crashed or unprogrammed COM3 leaves COM4
+  powered. **COM3 cannot hold the battery off while COM3 itself is unpowered** - the pull-down
+  closes the relay - so unplug the cell to work on COM4's wiring
 
 Destructive or dangerous:
 - `/sustain?download=0` - **DO NOT USE, it wedges the web server** (§38.21, open). Not a control,
